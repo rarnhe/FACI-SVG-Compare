@@ -112,7 +112,7 @@ window.addEventListener('message', event => {
 });
 function sendSelection(elementId) {
   pendingId = elementId;
-  document.getElementById('picked').textContent = \`当前：\${elementId}\`;
+  document.getElementById('picked').textContent = `当前：${elementId}`;
   if (!bokehReady) return;
   iframe.contentWindow.postMessage({type:'SELECT_ELEMENT', elementId}, location.origin);
 }
