@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Fab / Subfab · Three.js + Bokeh</title>
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; width:100%; height:100%; font-family:Arial,"Microsoft YaHei",sans-serif; }
+  #layout { display:grid; grid-template-columns:minmax(0, 2fr) minmax(330px, 1fr); width:100%; height:100%; }
+  #scene { position:relative; overflow:hidden; background:#17202b; }
+  #scene canvas { display:block; width:100%; height:100%; }
+  #legend { position:absolute; left:16px; top:16px; color:#f2f6fb; background:#1c2a3ec7; padding:10px 13px; border-radius:8px; pointer-events:none; }
+  #legend small { color:#bed0dd; }
+  #panel { display:flex; flex-direction:column; min-width:0; background:white; }
+  #panel header { padding:15px 18px; border-bottom:1px solid #dfe6ed; }
+  #panel header p { margin:7px 0 0; color:#63707e; font-size:12px; }
+  iframe { border:0; flex:1; width:100%; }
+  @media(max-width:760px) { #layout { grid-template-columns:1fr; grid-template-rows:52% 48%; } }
+</style>
+<script type="importmap">
+{"imports":{
+  "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<div id="layout">
+  <div id="scene">
+    <div id="legend"><b>Fab / Subfab 3D</b><br/><small>点击柱体查询对应 Bokeh 数据<br/>拖动旋转 · 滚轮缩放 · 右键平移</small><br/><span id="picked">当前：C001</span></div>
+  </div>
+  <aside id="panel">
+    <header><strong>Python / Bokeh 数据分析</strong><p>图表实时响应三维选中结果，且无需刷新 Bokeh 页面</p></header>
+    <iframe id="analysisFrame" src="/analysis" title="Bokeh 数据面板"></iframe>
+  </aside>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x17202b);
+const stage = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+stage.insertBefore(renderer.domElement, stage.firstChild);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
+camera.position.set(220, 125, 250);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(78, 10, 90); // Y-up: floor height is Y
+controls.enableDamping = true;
+controls.update();
+scene.add(new THREE.AmbientLight(0xffffff, 2));
+const light = new THREE.DirectionalLight(0xffffff, 2);
+light.position.set(130, 200, 90);
+scene.add(light);
+
+// Demonstration floors; replace/augment with your existing SVG planes.
+const floorGeometry = new THREE.PlaneGeometry(180, 220);
+floorGeometry.rotateX(-Math.PI/2);
+for (const [y, color, opacity] of [[0, 0x468acc, 0.18], [20, 0x54c9b5, 0.22]]) {
+  const floor = new THREE.Mesh(floorGeometry,
+    new THREE.MeshBasicMaterial({color, transparent:true, opacity, side:THREE.DoubleSide, depthWrite:false}));
+  floor.position.set(78,y,90);
+  scene.add(floor);
+}
+
+const pickable = [];
+const demoColumns = new THREE.Group();
+const demo = [
+  ['C001', 30, 30],
+  ['C002', 80, 88],
+  ['C003', 137, 155],
+];
+for (const [elementId,x,z] of demo) {
+  const geometry = new THREE.BoxGeometry(8, 45, 8);
+  const material = new THREE.MeshStandardMaterial({color:0x9cb5c9,metalness:0.2,roughness:0.5});
+  const mesh = new THREE.Mesh(geometry,material);
+  mesh.position.set(x,17,z);
+  mesh.name = elementId;
+  mesh.userData.elementId = elementId;
+  demoColumns.add(mesh);
+  pickable.push(mesh);
+}
+scene.add(demoColumns);
+
+// If you provide your real GLB, load it too.
+// Each separately clickable GLB mesh must have an ID linked to your Python data.
+new GLTFLoader().load('./assets/柱子.glb', gltf => {
+  gltf.scene.traverse(child => {
+    if (child.isMesh) {
+      child.userData.elementId ??= child.name;
+      pickable.push(child);
+    }
+  });
+  scene.add(gltf.scene);
+}, undefined, () => {
+  console.info('No GLB asset found: using demo columns.');
+});
+
+const iframe = document.getElementById('analysisFrame');
+let bokehReady = false;
+let pendingId = 'C001';
+window.addEventListener('message', event => {
+  if (event.origin !== location.origin || event.source !== iframe.contentWindow) return;
+  if (event.data?.type === 'BOKEH_READY') {
+    bokehReady = true;
+    sendSelection(pendingId);
+  }
+});
+function sendSelection(elementId) {
+  pendingId = elementId;
+  document.getElementById('picked').textContent = \`当前：\${elementId}\`;
+  if (!bokehReady) return;
+  iframe.contentWindow.postMessage({type:'SELECT_ELEMENT', elementId}, location.origin);
+}
+
+const picker = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let pointerStart;
+renderer.domElement.addEventListener('pointerdown', event => {
+  pointerStart = {x:event.clientX,y:event.clientY};
+});
+renderer.domElement.addEventListener('pointerup', event => {
+  if (event.button !== 0 || !pointerStart) return;
+  const delta = Math.hypot(event.clientX-pointerStart.x,event.clientY-pointerStart.y);
+  pointerStart = undefined;
+  if (delta > 5) return; // Don't treat camera dragging as a click.
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = 2*(event.clientX-rect.left)/rect.width-1;
+  mouse.y = 1-2*(event.clientY-rect.top)/rect.height;
+  picker.setFromCamera(mouse,camera);
+  const hit = picker.intersectObjects(pickable,true)[0];
+  if (!hit) return;
+  const id = hit.object.userData.elementId || hit.object.name;
+  if (id) sendSelection(id);
+});
+
+function resize() {
+  const width=stage.clientWidth, height=stage.clientHeight;
+  camera.aspect=width/height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(width,height,false);
+}
+new ResizeObserver(resize).observe(stage);
+resize();
+function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); }
+animate();
+</script>
+</body>
+</html>
