@@ -147,7 +147,7 @@ def main():
             allow_websocket_origin=[f"{HOST}:{PORT}"],
             extra_patterns=[
                 (r"/__onethree_identity__", ApplicationIdentityHandler),
-                (r"/viewer/(index\\.html)", StaticFileHandler, {"path": str(STATIC_DIR)}),
+                (r"/viewer/(index\.html)", StaticFileHandler, {"path": str(STATIC_DIR)}),
                 (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),
             ],
         )
