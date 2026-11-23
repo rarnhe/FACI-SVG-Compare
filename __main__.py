@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from html import escape
 from math import sin
 import os
+import sys
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -56,6 +57,16 @@ def existing_server_is_ours() -> bool:
 def open_viewer(url: str) -> None:
     if os.environ.get("NO_BROWSER") != "1":
         webbrowser.open(url)
+
+
+def console_message(localized: str, fallback: str, stream) -> str:
+    """Preserve Chinese in supported consoles, use ASCII on CP1252 Windows pipes."""
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    try:
+        localized.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return fallback
+    return localized
 
 # Replace with your own database-backed mapping / query results.
 SENSORS = {
@@ -155,13 +166,20 @@ def main():
         if not is_port_conflict(error):
             raise
         if existing_server_is_ours():
-            print(f"程序已在运行，重新打开浏览器页面：{url}", flush=True)
+            print(console_message(
+                f"程序已在运行 (Already running)，重新打开浏览器页面：{url}",
+                f"Already running. Opening existing viewer: {url}",
+                sys.stdout,
+            ), flush=True)
             open_viewer(url)
             return
-        raise SystemExit(
-            f"无法启动：{HOST}:{PORT} 已被其他服务占用，或旧实例尚未关闭。"
-            f"请先结束占用该端口的进程，或设置 PORT 为其他端口（如 8081）。"
-        ) from None
+        raise SystemExit(console_message(
+            f"端口已被占用 (Port already in use)：{HOST}:{PORT}。"
+            "请结束占用该端口的其他进程或旧实例，或设置 PORT=8081。",
+            f"Port already in use: {HOST}:{PORT}. Close the other service "
+            "or the older app instance, or set PORT=8081.",
+            sys.stderr,
+        )) from None
     server.start()
     print("Three.js + Bokeh viewer:", url, flush=True)
     open_viewer(url)

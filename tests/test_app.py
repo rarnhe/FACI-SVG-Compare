@@ -156,7 +156,7 @@ class TestHttpIntegration(unittest.TestCase):
             capture_output=True, text=True, timeout=15,
         )
         self.assertEqual(duplicate.returncode, 0, duplicate.stderr)
-        self.assertIn("程序已在运行", duplicate.stdout)
+        self.assertIn("Already running", duplicate.stdout)
         self.assertIn(f":{self.port}/viewer/index.html", duplicate.stdout)
         self.assertIsNone(self.process.poll(), "Existing Bokeh server must survive duplicate launch")
 
@@ -193,6 +193,19 @@ class TestHttpIntegration(unittest.TestCase):
 
 
 class TestPortConflict(unittest.TestCase):
+    def test_cp1252_console_encoding_falls_back_to_english(self):
+        class Cp1252Stream:
+            encoding = "cp1252"
+
+        self.assertEqual(
+            app.console_message("端口已被占用", "Port already in use", Cp1252Stream()),
+            "Port already in use",
+        )
+
+    def test_windows_10048_is_recognized(self):
+        self.assertTrue(app.is_port_conflict(OSError(10048, "Windows port busy")))
+        self.assertFalse(app.is_port_conflict(OSError(13, "Permission denied")))
+
     def run_with_busy_port(self, port):
         return subprocess.run(
             [sys.executable, "-u", "-m", ROOT.name], cwd=ROOT.parent,
@@ -216,7 +229,7 @@ class TestPortConflict(unittest.TestCase):
         try:
             duplicate = self.run_with_busy_port(server.server_port)
             self.assertNotEqual(duplicate.returncode, 0)
-            self.assertIn("已被其他服务占用", duplicate.stderr)
+            self.assertIn("Port already in use", duplicate.stderr)
             self.assertNotIn("Traceback", duplicate.stderr)
         finally:
             server.shutdown()
@@ -229,5 +242,5 @@ class TestPortConflict(unittest.TestCase):
             blocker.listen()
             duplicate = self.run_with_busy_port(blocker.getsockname()[1])
         self.assertNotEqual(duplicate.returncode, 0)
-        self.assertIn("已被其他服务占用", duplicate.stderr)
+        self.assertIn("Port already in use", duplicate.stderr)
         self.assertNotIn("Traceback", duplicate.stderr)
