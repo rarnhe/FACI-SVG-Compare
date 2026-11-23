@@ -1,6 +1,6 @@
 """One-process Bokeh Server + Three.js viewer integration demo.
 
-Run: python main.py
+Run from the repository parent: python -m OneThreeOctave-SVG-Compare
 Requires: pip install 'bokeh>=3.8,<4'
 """
 
@@ -22,7 +22,7 @@ from tornado.web import StaticFileHandler
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8080"))
-STATIC_DIR = Path(__file__).resolve().parent / "frontend"
+STATIC_DIR = Path(__file__).resolve().parent
 
 # Replace with your own database-backed mapping / query results.
 SENSORS = {
@@ -111,15 +111,13 @@ def main():
         port=PORT,
         allow_websocket_origin=[f"{HOST}:{PORT}"],
         extra_patterns=[
-            (r"/viewer/(.*)", StaticFileHandler, {
-                "path": str(STATIC_DIR),
-                "default_filename": "index.html",
-            }),
+            (r"/viewer/(index\.html)", StaticFileHandler, {"path": str(STATIC_DIR)}),
+            (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),
         ],
     )
     server.start()
     url = f"http://{HOST}:{PORT}/viewer/index.html"
-    print("Three.js + Bokeh viewer:", url)
+    print("Three.js + Bokeh viewer:", url, flush=True)
     # Headless CI / deployment: do not launch a browser when explicitly disabled.
     if os.environ.get("NO_BROWSER") != "1":
         webbrowser.open(url)

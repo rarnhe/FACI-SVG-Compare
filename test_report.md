@@ -1,16 +1,15 @@
 # Test Report
 
-- UTC: 2026-11-23 10:05:15
+- UTC: 2026-11-23 10:26:41
 - Result: **PASS**
-- Tests: 11
-- Passed: 11
+- Tests: 16
+- Passed: 16
 - Failures: 0
 - Errors: 0
 - Skipped: 0
-- Duration: 1.61s
+- Duration: 2.36s
 
 ## Scope
 
-Sensor data, Bokeh selection callbacks, frontend bridge contract, and real HTTP serving.
+Package startup via python -m, static resources, Bokeh callbacks, frontend bridge, and HTTP serving.
 Browser/WebGL visual behavior requires manual verification.
-

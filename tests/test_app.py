@@ -1,5 +1,6 @@
-"""Real Bokeh document tests and a local HTTP smoke test (stdlib unittest)."""
+"""Bokeh document tests, relocated static resources, and real ``python -m`` startup."""
 
+from importlib import import_module
 import os
 from pathlib import Path
 import socket
@@ -15,8 +16,27 @@ from bokeh.document import Document
 from bokeh.models import ColumnDataSource, CustomJS, Div
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from main import SENSORS, STATIC_DIR, make_bokeh_document, query_sensor_history  # noqa: E402
+# python -m resolves the package from its parent; importlib accepts hyphenated names.
+sys.path.insert(0, str(ROOT.parent))
+app = import_module(f"{ROOT.name}.__main__")
+SENSORS = app.SENSORS
+STATIC_DIR = app.STATIC_DIR
+make_bokeh_document = app.make_bokeh_document
+query_sensor_history = app.query_sensor_history
+
+
+
+class TestPackageLayout(unittest.TestCase):
+    def test_root_is_importable_package_with_main_entry(self):
+        self.assertTrue((ROOT / "__init__.py").is_file())
+        self.assertTrue((ROOT / "__main__.py").is_file())
+        self.assertFalse((ROOT / "main.py").exists())
+        self.assertEqual(STATIC_DIR, ROOT)
+
+    def test_frontend_assets_reside_at_root(self):
+        self.assertTrue((ROOT / "index.html").is_file())
+        self.assertTrue((ROOT / "assets").is_dir())
+        self.assertFalse((ROOT / "frontend").exists())
 
 
 class TestSensorHistory(unittest.TestCase):
@@ -89,33 +109,41 @@ class TestHttpIntegration(unittest.TestCase):
             cls.port = sock.getsockname()[1]
         env = dict(os.environ, PORT=str(cls.port), NO_BROWSER="1")
         cls.process = subprocess.Popen(
-            [sys.executable, "-u", "main.py"], cwd=ROOT, env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            [sys.executable, "-u", "-m", ROOT.name],
+            cwd=ROOT.parent, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         cls.base = f"http://127.0.0.1:{cls.port}"
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             if cls.process.poll() is not None:
-                raise RuntimeError(f"Bokeh server exited with {cls.process.returncode}")
+                _, stderr = cls.process.communicate(timeout=2)
+                raise RuntimeError(f"python -m {ROOT.name} failed: {stderr}")
             try:
                 with urlopen(cls.base + "/viewer/index.html", timeout=1) as response:
                     if response.status == 200:
+                        cls.startup_log = cls.process.stdout.readline()
                         return
             except (OSError, URLError):
                 time.sleep(0.1)
         cls.process.terminate()
-        cls.process.wait(timeout=5)
-        raise TimeoutError("Bokeh server did not become ready within 15 seconds")
+        cls.process.communicate(timeout=5)
+        raise TimeoutError("python -m app did not start the server within 15 seconds")
 
     @classmethod
     def tearDownClass(cls):
-        if getattr(cls, "process", None) is not None and cls.process.poll() is None:
-            cls.process.terminate()
+        if getattr(cls, "process", None) is not None:
+            if cls.process.poll() is None:
+                cls.process.terminate()
             try:
-                cls.process.wait(timeout=5)
+                cls.process.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 cls.process.kill()
-                cls.process.wait(timeout=5)
+                cls.process.communicate(timeout=5)
+
+    def test_module_entry_prints_url(self):
+        self.assertIn("Three.js + Bokeh viewer:", self.startup_log)
+        self.assertIn(f":{self.port}/viewer/index.html", self.startup_log)
 
     def test_viewer_is_served(self):
         with urlopen(self.base + "/viewer/index.html", timeout=5) as response:
@@ -128,6 +156,16 @@ class TestHttpIntegration(unittest.TestCase):
             body = response.read().decode("utf-8")
             self.assertEqual(response.status, 200)
             self.assertIn("Bokeh", body)
+
+    def test_root_asset_file_is_served(self):
+        with urlopen(self.base + "/viewer/assets/README.md", timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("GLB", response.read().decode("utf-8"))
+
+    def test_python_source_is_not_exposed_by_static_server(self):
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(self.base + "/viewer/__main__.py", timeout=5)
+        self.assertEqual(caught.exception.code, 404)
 
     def test_missing_optional_glb_returns_404(self):
         with self.assertRaises(HTTPError) as caught:

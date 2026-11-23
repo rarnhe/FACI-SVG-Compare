@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Sensor data, Bokeh selection callbacks, frontend bridge contract, and real HTTP serving.",
+        "Package startup via python -m, static resources, Bokeh callbacks, frontend bridge, and HTTP serving.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]
