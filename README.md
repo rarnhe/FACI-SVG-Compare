@@ -27,6 +27,16 @@ python __main__.py
 
 启动后终端打印 `Three.js + Bokeh viewer: http://127.0.0.1:8080/viewer/index.html`，并自动打开浏览器。设置 `PORT=8081` 可改端口，`NO_BROWSER=1` 可禁用自动打开。
 
+### 重复启动与 Windows WinError 10048
+
+程序监听 `127.0.0.1:8080`，如果该端口已经在使用：
+
+- **本程序已在运行：** 自动识别本程序专属的 `/__onethree_identity__` 路由，打开现有页面，新进程正常退出（不重新启动 Bokeh Server，不会影响已有会话）。
+- **端口被其他应用占用或旧版程序未提供识别路由：** 输出简明的端口冲突提示，退出码非零，不出现长篇 Traceback，更不会打开其他应用的网页。
+- **需要同时开两个独立服务：** 在第二个终端设置不同的端口，例如 Windows PowerShell 执行 `$env:PORT=8081; python -m OneThreeOctave-SVG-Compare`（在仓库父目录）；CMD 执行 `set PORT=8081 && python -m OneThreeOctave-SVG-Compare`。
+
+默认启动会自动打开浏览器；在 CI/headless 环境设置 `NO_BROWSER=1` 时重复启动也不会打开浏览器。
+
 ## 目录结构
 
 ```text
@@ -64,6 +74,6 @@ OneThreeOctave-SVG-Compare/
 python tests/run_tests.py
 ```
 
-测试包括 **Python -m 启动**、启动提示、静态路由、Bokeh 回调、HTTP 页面、数据联动约定和源码不可公开访问。根目录的 `test_report.md` 总会在执行后生成（失败也会记录），GitHub Actions 会上传测试报告；在推送 `main` 时还会回写报告，报告-only 提交不会引起 CI 循环。
+测试包括 **Python -m 启动**、重复启动检测、外部服务占用端口、启动提示、静态路由、Bokeh 回调、HTTP 页面、数据联动约定和源码不可公开访问。根目录的 `test_report.md` 总会在执行后生成（失败也会记录），GitHub Actions 会上传测试报告；在推送 `main` 时还会回写报告，报告-only 提交不会引起 CI 循环。
 
 浏览器 WebGL 视觉效果仍需要人工验证。

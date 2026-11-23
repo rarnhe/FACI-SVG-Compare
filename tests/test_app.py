@@ -3,7 +3,9 @@
 from importlib import import_module
 import os
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import socket
+import threading
 import subprocess
 import sys
 import time
@@ -141,6 +143,23 @@ class TestHttpIntegration(unittest.TestCase):
                 cls.process.kill()
                 cls.process.communicate(timeout=5)
 
+    def test_identity_route(self):
+        with urlopen(self.base + app.IDENTITY_PATH, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read().decode("utf-8"), app.APP_ID)
+
+    def test_second_launch_reuses_running_instance(self):
+        duplicate = subprocess.run(
+            [sys.executable, "-u", "-m", ROOT.name],
+            cwd=ROOT.parent,
+            env=dict(os.environ, PORT=str(self.port), NO_BROWSER="1"),
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(duplicate.returncode, 0, duplicate.stderr)
+        self.assertIn("程序已在运行", duplicate.stdout)
+        self.assertIn(f":{self.port}/viewer/index.html", duplicate.stdout)
+        self.assertIsNone(self.process.poll(), "Existing Bokeh server must survive duplicate launch")
+
     def test_module_entry_prints_url(self):
         self.assertIn("Three.js + Bokeh viewer:", self.startup_log)
         self.assertIn(f":{self.port}/viewer/index.html", self.startup_log)
@@ -171,3 +190,44 @@ class TestHttpIntegration(unittest.TestCase):
         with self.assertRaises(HTTPError) as caught:
             urlopen(self.base + "/viewer/assets/" + quote("柱子.glb"), timeout=5)
         self.assertEqual(caught.exception.code, 404)
+
+
+class TestPortConflict(unittest.TestCase):
+    def run_with_busy_port(self, port):
+        return subprocess.run(
+            [sys.executable, "-u", "-m", ROOT.name], cwd=ROOT.parent,
+            env=dict(os.environ, PORT=str(port), NO_BROWSER="1"),
+            capture_output=True, text=True, timeout=15,
+        )
+
+    def test_other_http_service_is_not_mistaken_for_ours(self):
+        class ForeignHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"Not the application")
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ForeignHandler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            duplicate = self.run_with_busy_port(server.server_port)
+            self.assertNotEqual(duplicate.returncode, 0)
+            self.assertIn("已被其他服务占用", duplicate.stderr)
+            self.assertNotIn("Traceback", duplicate.stderr)
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
+
+    def test_occupied_non_http_port_does_not_raise_traceback(self):
+        with socket.socket() as blocker:
+            blocker.bind(("127.0.0.1", 0))
+            blocker.listen()
+            duplicate = self.run_with_busy_port(blocker.getsockname()[1])
+        self.assertNotEqual(duplicate.returncode, 0)
+        self.assertIn("已被其他服务占用", duplicate.stderr)
+        self.assertNotIn("Traceback", duplicate.stderr)
