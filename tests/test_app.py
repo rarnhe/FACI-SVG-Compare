@@ -1,8 +1,11 @@
-"""Real Bokeh document tests and a local HTTP smoke test (stdlib unittest)."""
+"""Bokeh document tests, relocated static resources, and real ``python -m`` startup."""
 
+from importlib import import_module
 import os
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import socket
+import threading
 import subprocess
 import sys
 import time
@@ -15,8 +18,27 @@ from bokeh.document import Document
 from bokeh.models import ColumnDataSource, CustomJS, Div
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from main import SENSORS, STATIC_DIR, make_bokeh_document, query_sensor_history  # noqa: E402
+# python -m resolves the package from its parent; importlib accepts hyphenated names.
+sys.path.insert(0, str(ROOT.parent))
+app = import_module(f"{ROOT.name}.__main__")
+SENSORS = app.SENSORS
+STATIC_DIR = app.STATIC_DIR
+make_bokeh_document = app.make_bokeh_document
+query_sensor_history = app.query_sensor_history
+
+
+
+class TestPackageLayout(unittest.TestCase):
+    def test_root_is_importable_package_with_main_entry(self):
+        self.assertTrue((ROOT / "__init__.py").is_file())
+        self.assertTrue((ROOT / "__main__.py").is_file())
+        self.assertFalse((ROOT / "main.py").exists())
+        self.assertEqual(STATIC_DIR, ROOT)
+
+    def test_frontend_assets_reside_at_root(self):
+        self.assertTrue((ROOT / "index.html").is_file())
+        self.assertTrue((ROOT / "assets").is_dir())
+        self.assertFalse((ROOT / "frontend").exists())
 
 
 class TestSensorHistory(unittest.TestCase):
@@ -89,33 +111,58 @@ class TestHttpIntegration(unittest.TestCase):
             cls.port = sock.getsockname()[1]
         env = dict(os.environ, PORT=str(cls.port), NO_BROWSER="1")
         cls.process = subprocess.Popen(
-            [sys.executable, "-u", "main.py"], cwd=ROOT, env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            [sys.executable, "-u", "-m", ROOT.name],
+            cwd=ROOT.parent, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         cls.base = f"http://127.0.0.1:{cls.port}"
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             if cls.process.poll() is not None:
-                raise RuntimeError(f"Bokeh server exited with {cls.process.returncode}")
+                _, stderr = cls.process.communicate(timeout=2)
+                raise RuntimeError(f"python -m {ROOT.name} failed: {stderr}")
             try:
                 with urlopen(cls.base + "/viewer/index.html", timeout=1) as response:
                     if response.status == 200:
+                        cls.startup_log = cls.process.stdout.readline()
                         return
             except (OSError, URLError):
                 time.sleep(0.1)
         cls.process.terminate()
-        cls.process.wait(timeout=5)
-        raise TimeoutError("Bokeh server did not become ready within 15 seconds")
+        cls.process.communicate(timeout=5)
+        raise TimeoutError("python -m app did not start the server within 15 seconds")
 
     @classmethod
     def tearDownClass(cls):
-        if getattr(cls, "process", None) is not None and cls.process.poll() is None:
-            cls.process.terminate()
+        if getattr(cls, "process", None) is not None:
+            if cls.process.poll() is None:
+                cls.process.terminate()
             try:
-                cls.process.wait(timeout=5)
+                cls.process.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 cls.process.kill()
-                cls.process.wait(timeout=5)
+                cls.process.communicate(timeout=5)
+
+    def test_identity_route(self):
+        with urlopen(self.base + app.IDENTITY_PATH, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read().decode("utf-8"), app.APP_ID)
+
+    def test_second_launch_reuses_running_instance(self):
+        duplicate = subprocess.run(
+            [sys.executable, "-u", "-m", ROOT.name],
+            cwd=ROOT.parent,
+            env=dict(os.environ, PORT=str(self.port), NO_BROWSER="1"),
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(duplicate.returncode, 0, duplicate.stderr)
+        self.assertIn("Already running", duplicate.stdout)
+        self.assertIn(f":{self.port}/viewer/index.html", duplicate.stdout)
+        self.assertIsNone(self.process.poll(), "Existing Bokeh server must survive duplicate launch")
+
+    def test_module_entry_prints_url(self):
+        self.assertIn("Three.js + Bokeh viewer:", self.startup_log)
+        self.assertIn(f":{self.port}/viewer/index.html", self.startup_log)
 
     def test_viewer_is_served(self):
         with urlopen(self.base + "/viewer/index.html", timeout=5) as response:
@@ -129,7 +176,71 @@ class TestHttpIntegration(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertIn("Bokeh", body)
 
+    def test_root_asset_file_is_served(self):
+        with urlopen(self.base + "/viewer/assets/README.md", timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("GLB", response.read().decode("utf-8"))
+
+    def test_python_source_is_not_exposed_by_static_server(self):
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(self.base + "/viewer/__main__.py", timeout=5)
+        self.assertEqual(caught.exception.code, 404)
+
     def test_missing_optional_glb_returns_404(self):
         with self.assertRaises(HTTPError) as caught:
             urlopen(self.base + "/viewer/assets/" + quote("柱子.glb"), timeout=5)
         self.assertEqual(caught.exception.code, 404)
+
+
+class TestPortConflict(unittest.TestCase):
+    def test_cp1252_console_encoding_falls_back_to_english(self):
+        class Cp1252Stream:
+            encoding = "cp1252"
+
+        self.assertEqual(
+            app.console_message("端口已被占用", "Port already in use", Cp1252Stream()),
+            "Port already in use",
+        )
+
+    def test_windows_10048_is_recognized(self):
+        self.assertTrue(app.is_port_conflict(OSError(10048, "Windows port busy")))
+        self.assertFalse(app.is_port_conflict(OSError(13, "Permission denied")))
+
+    def run_with_busy_port(self, port):
+        return subprocess.run(
+            [sys.executable, "-u", "-m", ROOT.name], cwd=ROOT.parent,
+            env=dict(os.environ, PORT=str(port), NO_BROWSER="1"),
+            capture_output=True, text=True, timeout=15,
+        )
+
+    def test_other_http_service_is_not_mistaken_for_ours(self):
+        class ForeignHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"Not the application")
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ForeignHandler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            duplicate = self.run_with_busy_port(server.server_port)
+            self.assertNotEqual(duplicate.returncode, 0)
+            self.assertIn("Port already in use", duplicate.stderr)
+            self.assertNotIn("Traceback", duplicate.stderr)
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
+
+    def test_occupied_non_http_port_does_not_raise_traceback(self):
+        with socket.socket() as blocker:
+            blocker.bind(("127.0.0.1", 0))
+            blocker.listen()
+            duplicate = self.run_with_busy_port(blocker.getsockname()[1])
+        self.assertNotEqual(duplicate.returncode, 0)
+        self.assertIn("Port already in use", duplicate.stderr)
+        self.assertNotIn("Traceback", duplicate.stderr)

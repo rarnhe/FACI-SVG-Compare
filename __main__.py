@@ -1,14 +1,18 @@
 """One-process Bokeh Server + Three.js viewer integration demo.
 
-Run: python main.py
+Run from the repository parent: python -m OneThreeOctave-SVG-Compare
 Requires: pip install 'bokeh>=3.8,<4'
 """
 
+import errno
 from datetime import datetime, timedelta
 from html import escape
 from math import sin
 import os
+import sys
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 import webbrowser
 
 from bokeh.application import Application
@@ -18,11 +22,51 @@ from bokeh.layouts import column
 from bokeh.models import ColumnDataSource, CustomJS, Div
 from bokeh.plotting import figure
 from bokeh.server.server import Server
-from tornado.web import StaticFileHandler
+from tornado.web import RequestHandler, StaticFileHandler
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8080"))
-STATIC_DIR = Path(__file__).resolve().parent / "frontend"
+STATIC_DIR = Path(__file__).resolve().parent
+APP_ID = "OneThreeOctave-SVG-Compare:Bokeh-Three.js:v1"
+IDENTITY_PATH = "/__onethree_identity__"
+
+
+class ApplicationIdentityHandler(RequestHandler):
+    """Identify this local server before a later invocation reuses its URL."""
+
+    def get(self):
+        self.set_header("Content-Type", "text/plain; charset=utf-8")
+        self.set_header("Cache-Control", "no-store")
+        self.write(APP_ID)
+
+
+def is_port_conflict(error: OSError) -> bool:
+    """Handle Linux EADDRINUSE and Windows WSAEADDRINUSE (WinError 10048)."""
+    return error.errno in (errno.EADDRINUSE, 10048) or getattr(error, "winerror", None) == 10048
+
+
+def existing_server_is_ours() -> bool:
+    """Do not open an unrelated application's URL simply because 8080 is busy."""
+    try:
+        with urlopen(f"http://{HOST}:{PORT}{IDENTITY_PATH}", timeout=1) as response:
+            return response.status == 200 and response.read(256).decode("utf-8") == APP_ID
+    except (OSError, URLError, UnicodeError):
+        return False
+
+
+def open_viewer(url: str) -> None:
+    if os.environ.get("NO_BROWSER") != "1":
+        webbrowser.open(url)
+
+
+def console_message(localized: str, fallback: str, stream) -> str:
+    """Preserve Chinese in supported consoles, use ASCII on CP1252 Windows pipes."""
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    try:
+        localized.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return fallback
+    return localized
 
 # Replace with your own database-backed mapping / query results.
 SENSORS = {
@@ -105,24 +149,40 @@ def make_bokeh_document(doc):
 
 
 def main():
-    server = Server(
-        {"/analysis": Application(FunctionHandler(make_bokeh_document))},
-        address=HOST,
-        port=PORT,
-        allow_websocket_origin=[f"{HOST}:{PORT}"],
-        extra_patterns=[
-            (r"/viewer/(.*)", StaticFileHandler, {
-                "path": str(STATIC_DIR),
-                "default_filename": "index.html",
-            }),
-        ],
-    )
-    server.start()
     url = f"http://{HOST}:{PORT}/viewer/index.html"
-    print("Three.js + Bokeh viewer:", url)
-    # Headless CI / deployment: do not launch a browser when explicitly disabled.
-    if os.environ.get("NO_BROWSER") != "1":
-        webbrowser.open(url)
+    try:
+        server = Server(
+            {"/analysis": Application(FunctionHandler(make_bokeh_document))},
+            address=HOST,
+            port=PORT,
+            allow_websocket_origin=[f"{HOST}:{PORT}"],
+            extra_patterns=[
+                (r"/__onethree_identity__", ApplicationIdentityHandler),
+                (r"/viewer/(index\.html)", StaticFileHandler, {"path": str(STATIC_DIR)}),
+                (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),
+            ],
+        )
+    except OSError as error:
+        if not is_port_conflict(error):
+            raise
+        if existing_server_is_ours():
+            print(console_message(
+                f"程序已在运行 (Already running)，重新打开浏览器页面：{url}",
+                f"Already running. Opening existing viewer: {url}",
+                sys.stdout,
+            ), flush=True)
+            open_viewer(url)
+            return
+        raise SystemExit(console_message(
+            f"端口已被占用 (Port already in use)：{HOST}:{PORT}。"
+            "请结束占用该端口的其他进程或旧实例，或设置 PORT=8081。",
+            f"Port already in use: {HOST}:{PORT}. Close the other service "
+            "or the older app instance, or set PORT=8081.",
+            sys.stderr,
+        )) from None
+    server.start()
+    print("Three.js + Bokeh viewer:", url, flush=True)
+    open_viewer(url)
     try:
         server.io_loop.start()
     except KeyboardInterrupt:

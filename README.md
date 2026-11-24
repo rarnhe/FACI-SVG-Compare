@@ -1,35 +1,79 @@
 # OneThreeOctave-SVG-Compare
 
-1/3 倍频程对比（项目名称）。当前初始版本为 **Three.js + Python Bokeh** 的三维选点联动数据分析 Demo。
+1/3 倍频程对比（项目名称）。目前为 **Three.js + Python Bokeh** 三维选点、数据分析联动 Demo。
 
 ## 快速运行
 
+安装依赖（在仓库目录运行）：
+
 ```bash
 python -m pip install -r requirements.txt
-python main.py
 ```
 
-浏览器打开 `http://127.0.0.1:8080/viewer/index.html`。服务只监听 `127.0.0.1`。设置 `PORT=8081` 可修改端口；设置 `NO_BROWSER=1` 可跳过自动打开浏览器。
+**以仓库目录的父目录为当前工作目录**，通过 Python 模块启动：
 
-- 左侧 Three.js 显示可拾取的演示柱体 `C001` / `C002` / `C003`，支持轨道旋转、缩放、平移。
-- 点击柱体后，通过 `postMessage` 通知右侧 Bokeh iframe；`ColumnDataSource` 将选择同步给 Python 后端，更新温度历史曲线，不会刷新页面。
-- 演示数据定义于 `main.py` 的 `SENSORS` 和 `query_sensor_history`；替换为真实数据查询即可。
-- 可将你的 GLB 放在 `frontend/assets/柱子.glb`；需保证不同 Mesh 对应可识别的 `elementId` 或名称。
-- 目前图纸平面是示例几何体。精确 Fab / Subfab SVG 绘制还需集成原有的 SVG 纹理函数；该 Demo **不包含**原始图纸和 GLB。
-- Three.js 仍通过 unpkg CDN 加载，浏览器第一次加载需要网络连接。
+```bash
+cd ..
+python -m OneThreeOctave-SVG-Compare
+```
+
+或者，在仓库根目录下直接运行：
+
+```bash
+python __main__.py
+```
+
+注意：`python -m OneThreeOctave-SVG-Compare` 依赖 Python 能从 `sys.path` 找到包含 `__init__.py` 和 `__main__.py` 的同名目录；**如果当前目录正是仓库根目录，应先 `cd ..`**。虽然包名带连字符，不适用于普通 `import` 语句，但 `python -m` 使用的模块查找机制能够加载它。Windows/macOS/Linux 都适用此目录规则。
+
+启动后终端打印 `Three.js + Bokeh viewer: http://127.0.0.1:8080/viewer/index.html`，并自动打开浏览器。设置 `PORT=8081` 可改端口，`NO_BROWSER=1` 可禁用自动打开。
+
+### 重复启动与 Windows WinError 10048
+
+程序监听 `127.0.0.1:8080`，如果该端口已经在使用：
+
+- **本程序已在运行：** 自动识别本程序专属的 `/__onethree_identity__` 路由，打开现有页面，新进程正常退出（不重新启动 Bokeh Server，不会影响已有会话）。
+- **端口被其他应用占用或旧版程序未提供识别路由：** 输出简明的端口冲突提示，退出码非零，不出现长篇 Traceback，更不会打开其他应用的网页。
+- **需要同时开两个独立服务：** 在第二个终端设置不同的端口，例如 Windows PowerShell 执行 `$env:PORT=8081; python -m OneThreeOctave-SVG-Compare`（在仓库父目录）；CMD 执行 `set PORT=8081 && python -m OneThreeOctave-SVG-Compare`。
+
+默认启动会自动打开浏览器；在 CI/headless 环境设置 `NO_BROWSER=1` 时重复启动也不会打开浏览器。Windows 控制台能编码中文时显示中文提示；遇到 CP1252 等编码不支持中文的情况自动退回英文提示，避免 `UnicodeEncodeError`。
+
+## 目录结构
+
+```text
+OneThreeOctave-SVG-Compare/
+├── __init__.py
+├── __main__.py
+├── index.html
+├── assets/
+│   └── README.md
+├── tests/
+│   ├── __init__.py
+│   ├── run_tests.py
+│   └── test_app.py
+├── .github/workflows/test.yml
+├── requirements.txt
+├── test_report.md
+└── README.md
+```
+
+之前的 `frontend/index.html` 与 `frontend/assets/` 已移到项目根目录。浏览器访问地址保持不变；静态服务器**只暴露** `index.html` 和 `assets/`，不会公开 Python 源码。
+
+## 功能
+
+- Three.js 展示可选演示柱体 C001 / C002 / C003，可旋转、缩放、平移。
+- 点击构件后通过 `postMessage` 通知 Bokeh iframe，`ColumnDataSource` 更新 Python 后端图表，不需要刷新页面。
+- 在 `__main__.py` 的 `SENSORS` / `query_sensor_history` 中用真实数据替换演示数据。
+- 可将自己的 `柱子.glb` 放入根目录 `assets/`；模型 Mesh 需包含与数据库一致的名称或 `elementId`。
+- 目前提供的是演示地板几何体，未包含原始 Fab / Subfab SVG 图纸。Three.js 目前通过 CDN 加载，初次使用仍需网络。
 
 ## 双轨测试
 
-本地与 GitHub Actions 都使用 **同一组 unittest**：
+本地与 GitHub Actions 使用同一组标准库 `unittest`：
 
 ```bash
 python tests/run_tests.py
 ```
 
-运行后生成或更新根目录的 `test_report.md`，即使测试失败也记录 FAIL 和错误详情。`.github/workflows/test.yml` 在 `main` 推送、PR 和手动触发时运行测试，始终上传报告产物，并在 main 推送事件下将报告写回仓库。仅修改 `test_report.md` 的推送不会引发 CI 循环。
+测试包括 **Python -m 启动**、重复启动检测、外部服务占用端口、启动提示、静态路由、Bokeh 回调、HTTP 页面、数据联动约定和源码不可公开访问。根目录的 `test_report.md` 总会在执行后生成（失败也会记录），GitHub Actions 会上传测试报告；在推送 `main` 时还会回写报告，报告-only 提交不会引起 CI 循环。
 
-测试包括 Bokeh 选择回调、传感器数据、前端通信约定以及真实 Bokeh HTTP 服务。**WebGL 画面仍需人工视觉测试**，不属于单元测试通过的结论。
-
-## 安全边界
-
-这是仅供本地使用的 Demo。正式向外提供服务前需增加身份验证、授权、请求校验与访问控制。
+浏览器 WebGL 视觉效果仍需要人工验证。
