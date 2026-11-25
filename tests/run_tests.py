@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Package startup via python -m, build-aware instance detection, no-cache viewer, optional Column.glb, legacy-path compatibility, Service Worker fallback, Bokeh callbacks, and HTTP serving.",
+        "Package startup via python -m, XLSX A1-origin drawing geometry and unique-file discovery, image/shape color and rotation, Bokeh/Three.js integration, and HTTP serving.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

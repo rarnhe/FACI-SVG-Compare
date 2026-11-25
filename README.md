@@ -59,6 +59,94 @@ OneThreeOctave-SVG-Compare/
 
 之前的 `frontend/index.html` 与 `frontend/assets/` 已移到项目根目录。浏览器访问地址保持不变；静态服务器**只暴露** `index.html` 和 `assets/`，不会公开 Python 源码。
 
+## XLSX 作为二维空间输入（A1 原点）
+
+可在 `assets/` 中放入 **一个** `.xlsx` 文件，例如 `assets/luoD.xlsx`。运行 `python -m OneThreeOctave-SVG-Compare` 时，除正常打开 Bokeh/Three.js 页面外，终端会**同步打印**每个 Sheet 的图片与形状的空间坐标。
+
+- `assets/` 中没有 XLSX：提示跳过，正常启动网页。
+- 恰好一个 XLSX：按 Sheet 解析 DrawingML 并输出每个对象的 4 个角、相对宽高及形状颜色，之后自动打开网页。
+- 多个 XLSX：明确报错并停止启动，绝不擅自选择其中一个。自动忽略 Excel 产生的 `~# OneThreeOctave-SVG-Compare
+
+1/3 倍频程对比（项目名称）。目前为 **Three.js + Python Bokeh** 三维选点、数据分析联动 Demo。
+
+## 快速运行
+
+安装依赖（在仓库目录运行）：
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+**以仓库目录的父目录为当前工作目录**，通过 Python 模块启动：
+
+```bash
+cd ..
+python -m OneThreeOctave-SVG-Compare
+```
+
+或者，在仓库根目录下直接运行：
+
+```bash
+python __main__.py
+```
+
+注意：`python -m OneThreeOctave-SVG-Compare` 依赖 Python 能从 `sys.path` 找到包含 `__init__.py` 和 `__main__.py` 的同名目录；**如果当前目录正是仓库根目录，应先 `cd ..`**。虽然包名带连字符，不适用于普通 `import` 语句，但 `python -m` 使用的模块查找机制能够加载它。Windows/macOS/Linux 都适用此目录规则。
+
+启动后终端打印 `Three.js + Bokeh viewer: http://127.0.0.1:8080/viewer/index.html`，并自动打开浏览器。设置 `PORT=8081` 可改端口，`NO_BROWSER=1` 可禁用自动打开。
+
+### 重复启动与 Windows WinError 10048
+
+程序监听 `127.0.0.1:8080`，如果该端口已经在使用：
+
+- **同版本程序已在运行：** 通过 `/__onethree_identity__` 核对当前源文件指纹，自动打开现有页面，新进程正常退出。
+- **旧版本程序仍在运行：** 指纹不一致时不再误用旧实例；提示关闭旧终端服务后重新启动。
+- **端口被其他应用占用或旧版程序未提供识别路由：** 输出简明的端口冲突提示，退出码非零，不出现长篇 Traceback，更不会打开其他应用的网页。
+- **需要同时开两个独立服务：** 在第二个终端设置不同的端口，例如 Windows PowerShell 执行 `$env:PORT=8081; python -m OneThreeOctave-SVG-Compare`（在仓库父目录）；CMD 执行 `set PORT=8081 && python -m OneThreeOctave-SVG-Compare`。
+
+默认启动会自动打开浏览器；在 CI/headless 环境设置 `NO_BROWSER=1` 时重复启动也不会打开浏览器。Windows 控制台能编码中文时显示中文提示；遇到 CP1252 等编码不支持中文的情况自动退回英文提示，避免 `UnicodeEncodeError`。
+
+## 目录结构
+
+```text
+OneThreeOctave-SVG-Compare/
+├── __init__.py
+├── __main__.py
+├── index.html
+├── assets/
+│   └── README.md
+├── tests/
+│   ├── __init__.py
+│   ├── run_tests.py
+│   └── test_app.py
+├── .github/workflows/test.yml
+├── requirements.txt
+├── test_report.md
+└── README.md
+```
+
+之前的 `frontend/index.html` 与 `frontend/assets/` 已移到项目根目录。浏览器访问地址保持不变；静态服务器**只暴露** `index.html` 和 `assets/`，不会公开 Python 源码。
+
+ 临时文件、点号隐藏文件。
+- 图片、矩形、文本框、连接线及分组外框支持 `twoCellAnchor`、`oneCellAnchor`、`absoluteAnchor`。已计算锚点自身的行列偏移、逐列宽、逐行高；存在旋转时将旋转应用到四角。
+- 输出原点是 **A1 左上角**：`X` 向右增加，`Y` 向下增加；坐标单位为 **96 DPI 参考 px**，并在 `xlsx_spatial.parse_xlsx(...)` 结果中保留精确的 `bounds_emu` 供后续工程空间映射（1px=9525 EMU、1mm=360000 EMU）。
+- 注意：**Excel 列宽是字体相关的字符宽度**，解析器以常见 Calibri 11（MDW=7px）换算参考像素，若文件采用不同默认字体，X 方向像素仍需相应校准。曲线/任意多边形的真实轮廓顶点并不等于其绘图对象的四角；此处的“四角”指绘图对象外框（含旋转），不对任意自由曲线进行离散化。
+- 不依赖 openpyxl 去读取图形（避免它丢弃 DrawingML 形状），而是直接使用 Python 标准库读取 XLSX/ZIP/XML。
+
+示例输出（数值为测试数据，不是 `luoD.xlsx` 的实际坐标）：
+
+```text
+Three.js + Bokeh viewer: http://127.0.0.1:8080/viewer/index.html?rev=...
+[XLSX] 读取: .../assets/luoD.xlsx
+[Sheet: Sheet1] 图片 1，形状 2
+  IMAGE: 图片12  宽=140.000px 高=28.000px
+    左上: (85.000, 42.000) px
+    右上: (225.000, 42.000) px
+    右下: (225.000, 70.000) px
+    左下: (85.000, 70.000) px
+```
+
+目前这些数据在 Python 中解析并显示在终端，**并未改变现有 Three.js 三维模型的绘制**；后续可将 `parse_xlsx()` 输出用作模型对象映射或 SVG 平面坐标输入。
+
 ## 功能
 
 - Three.js 展示可选演示柱体 C001 / C002 / C003，可旋转、缩放、平移。
@@ -77,6 +165,6 @@ OneThreeOctave-SVG-Compare/
 python tests/run_tests.py
 ```
 
-测试包括 **Python -m 启动**、不同源码版本的实例识别、HTML 缓存禁止、旧 GLB 路径兼容、重复启动检测、端口占用、可选 Column.glb 文件检测、无效 SW 请求处理、静态路由、Bokeh 回调、HTTP 页面、数据联动约定和源码不可公开访问。根目录的 `test_report.md` 总会在执行后生成（失败也会记录），GitHub Actions 会上传测试报告；在推送 `main` 时还会回写报告，报告-only 提交不会引起 CI 循环。
+测试包括 **XLSX 图形顶点、颜色、行列尺寸、多个 XLSX 报错与启动同步输出**、**Python -m 启动**、不同源码版本的实例识别、HTML 缓存禁止、旧 GLB 路径兼容、重复启动检测、端口占用、可选 Column.glb 文件检测、无效 SW 请求处理、静态路由、Bokeh 回调、HTTP 页面、数据联动约定和源码不可公开访问。根目录的 `test_report.md` 总会在执行后生成（失败也会记录），GitHub Actions 会上传测试报告；在推送 `main` 时还会回写报告，报告-only 提交不会引起 CI 循环。
 
 浏览器 WebGL 视觉效果仍需要人工验证。

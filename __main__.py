@@ -25,6 +25,16 @@ from bokeh.plotting import figure
 from bokeh.server.server import Server
 from tornado.web import RequestHandler, StaticFileHandler
 
+# Both the -m package entry and direct "python __main__.py" remain supported.
+if __package__:
+    from .xlsx_spatial import (
+        SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
+    )
+else:
+    from xlsx_spatial import (
+        SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
+    )
+
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8080"))
 STATIC_DIR = Path(__file__).resolve().parent
@@ -35,6 +45,7 @@ COLUMN_MODEL_NAME = "Column.glb"
 BUILD_REVISION = sha256(
     (STATIC_DIR / "__main__.py").read_bytes()
     + (STATIC_DIR / "index.html").read_bytes()
+    + (STATIC_DIR / "xlsx_spatial.py").read_bytes()
 ).hexdigest()[:12]
 APP_ID = f"OneThreeOctave-SVG-Compare:Bokeh-Three.js:{BUILD_REVISION}"
 
@@ -132,6 +143,17 @@ def console_message(localized: str, fallback: str, stream) -> str:
         return fallback
     return localized
 
+def print_spatial_report(workbook, sheets):
+    """Print all XLSX objects; protect output in non-Unicode Windows consoles."""
+    rendered = format_spatial_report(workbook, sheets)
+    encoding = sys.stdout.encoding or "utf-8"
+    try:
+        rendered.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        rendered = rendered.encode(encoding, errors="backslashreplace").decode(encoding)
+    print(rendered, flush=True)
+
+
 # Replace with your own database-backed mapping / query results.
 SENSORS = {
     "C001": {"label": "Subfab 柱 C001", "base": 21.4, "amplitude": 0.7},
@@ -213,6 +235,13 @@ def make_bokeh_document(doc):
 
 
 def main():
+    # Exactly one .xlsx is allowed in assets/. Compute geometry before opening
+    # the browser; malformed/ambiguous input cannot silently choose a workbook.
+    try:
+        workbook, spatial_sheets = load_assets_spatial_report(STATIC_DIR / "assets")
+    except (SpatialXlsxError, OSError) as error:
+        raise SystemExit(f"[XLSX ERROR] {error}") from None
+
     # An explicit revision in the URL defeats old HTML caches on first launch.
     url = f"http://{HOST}:{PORT}/viewer/index.html?rev={BUILD_REVISION}"
     try:
@@ -240,6 +269,7 @@ def main():
                 f"Already running. Opening existing viewer: {url}",
                 sys.stdout,
             ), flush=True)
+            print_spatial_report(workbook, spatial_sheets)
             open_viewer(url)
             return
         raise SystemExit(console_message(
@@ -252,6 +282,7 @@ def main():
         )) from None
     server.start()
     print("Three.js + Bokeh viewer:", url, flush=True)
+    print_spatial_report(workbook, spatial_sheets)
     open_viewer(url)
     try:
         server.io_loop.start()
