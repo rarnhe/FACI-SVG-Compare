@@ -29,6 +29,36 @@ PORT = int(os.environ.get("PORT", "8080"))
 STATIC_DIR = Path(__file__).resolve().parent
 APP_ID = "OneThreeOctave-SVG-Compare:Bokeh-Three.js:v1"
 IDENTITY_PATH = "/__onethree_identity__"
+COLUMN_MODEL_NAME = "Column.glb"
+
+
+def column_model_available(asset_dir: Path | None = None) -> bool:
+    """Check the real local asset directory without downloading a missing GLB."""
+    directory = asset_dir if asset_dir is not None else STATIC_DIR / "assets"
+    return (directory / COLUMN_MODEL_NAME).is_file()
+
+
+class OptionalModelManifestHandler(RequestHandler):
+    """Tell the viewer which optional models exist; refreshes after assets change."""
+
+    def get(self):
+        self.set_header("Cache-Control", "no-store")
+        self.write({
+            "column": {
+                "available": column_model_available(),
+                "url": "./assets/Column.glb",
+            }
+        })
+
+
+class NoServiceWorkerHandler(RequestHandler):
+    """Return no content for legacy/browser /sw.js probes; register no worker."""
+
+    def get(self):
+        self.set_header("Cache-Control", "no-store")
+        self.set_status(204)
+        self.finish()
+
 
 
 class ApplicationIdentityHandler(RequestHandler):
@@ -158,6 +188,9 @@ def main():
             allow_websocket_origin=[f"{HOST}:{PORT}"],
             extra_patterns=[
                 (r"/__onethree_identity__", ApplicationIdentityHandler),
+                (r"/sw\.js", NoServiceWorkerHandler),
+                (r"/viewer/sw\.js", NoServiceWorkerHandler),
+                (r"/viewer/model-manifest\.json", OptionalModelManifestHandler),
                 (r"/viewer/(index\.html)", StaticFileHandler, {"path": str(STATIC_DIR)}),
                 (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),
             ],

@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Package startup via python -m, static resources, Bokeh callbacks, frontend bridge, and HTTP serving.",
+        "Package startup via python -m, optional Column.glb manifest, Service Worker 204 fallback, static resources, Bokeh callbacks, frontend bridge, and HTTP serving.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

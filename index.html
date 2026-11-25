@@ -86,19 +86,48 @@ for (const [elementId,x,z] of demo) {
 }
 scene.add(demoColumns);
 
-// If you provide your real GLB, load it too.
-// Each separately clickable GLB mesh must have an ID linked to your Python data.
-new GLTFLoader().load('./assets/柱子.glb', gltf => {
-  gltf.scene.traverse(child => {
-    if (child.isMesh) {
-      child.userData.elementId ??= child.name;
-      pickable.push(child);
+// Ask Python which optional models are present before loading bytes.
+// No request to a missing GLB; drop Column.glb into assets/ and refresh to enable it.
+async function loadOptionalColumn() {
+  try {
+    const response = await fetch('./model-manifest.json', {cache: 'no-store'});
+    if (!response.ok) throw new Error(`Model manifest returned HTTP ${response.status}`);
+    const {column} = await response.json();
+    if (!column?.available) {
+      console.info('Column.glb is not present; demo columns remain available.');
+      return;
     }
-  });
-  scene.add(gltf.scene);
-}, undefined, () => {
-  console.info('No GLB asset found: using demo columns.');
-});
+    new GLTFLoader().load(column.url, gltf => {
+      gltf.scene.traverse(child => {
+        if (child.isMesh) {
+          child.userData.elementId ??= child.name;
+          pickable.push(child);
+        }
+      });
+      scene.add(gltf.scene);
+    }, undefined, error => {
+      console.error('Column.glb exists but could not be loaded:', error);
+    });
+  } catch (error) {
+    console.warn('Optional model availability could not be checked:', error);
+  }
+}
+loadOptionalColumn();
+
+// This app never registers a Service Worker. Remove only stale registrations
+// of the old root /sw.js script (if one was left by a previous local app).
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(registrations =>
+    Promise.all(registrations.filter(registration => {
+      const workers = [registration.active, registration.waiting, registration.installing];
+      return workers.some(worker => {
+        if (!worker) return false;
+        try { return new URL(worker.scriptURL).pathname === '/sw.js'; }
+        catch { return false; }
+      });
+    }).map(registration => registration.unregister()))
+  ).catch(() => {});
+}
 
 const iframe = document.getElementById('analysisFrame');
 let bokehReady = false;

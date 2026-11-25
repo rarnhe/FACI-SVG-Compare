@@ -63,8 +63,9 @@ OneThreeOctave-SVG-Compare/
 - Three.js 展示可选演示柱体 C001 / C002 / C003，可旋转、缩放、平移。
 - 点击构件后通过 `postMessage` 通知 Bokeh iframe，`ColumnDataSource` 更新 Python 后端图表，不需要刷新页面。
 - 在 `__main__.py` 的 `SENSORS` / `query_sensor_history` 中用真实数据替换演示数据。
-- 可将自己的 `柱子.glb` 放入根目录 `assets/`；模型 Mesh 需包含与数据库一致的名称或 `elementId`。
+- 可将真实模型 `Column.glb` 放入根目录 `assets/`；前端先请求 `/viewer/model-manifest.json` 查询是否存在，存在才调用 GLTFLoader，缺失时仅显示演示柱体，不产生 GLB 404。模型 Mesh 仍需包含与数据库一致的名称或 `elementId`。
 - 目前提供的是演示地板几何体，未包含原始 Fab / Subfab SVG 图纸。Three.js 目前通过 CDN 加载，初次使用仍需网络。
+- 不使用也不注册 Service Worker。服务器对旧页面或浏览器发出的 `/sw.js`（以及 `/viewer/sw.js`）请求返回 `204 No Content`，避免无用的 404 日志；页面只清理已存在的根路径 `/sw.js` 旧注册，不影响其他 Service Worker。若浏览器扩展仍主动注册 Service Worker，须在开发者工具 Network 的 Initiator 中排查。
 
 ## 双轨测试
 
@@ -74,6 +75,6 @@ OneThreeOctave-SVG-Compare/
 python tests/run_tests.py
 ```
 
-测试包括 **Python -m 启动**、重复启动检测、外部服务占用端口、启动提示、静态路由、Bokeh 回调、HTTP 页面、数据联动约定和源码不可公开访问。根目录的 `test_report.md` 总会在执行后生成（失败也会记录），GitHub Actions 会上传测试报告；在推送 `main` 时还会回写报告，报告-only 提交不会引起 CI 循环。
+测试包括 **Python -m 启动**、重复启动检测、外部服务占用端口、启动提示、可选 Column.glb 文件检测、无效 SW 请求处理、静态路由、Bokeh 回调、HTTP 页面、数据联动约定和源码不可公开访问。根目录的 `test_report.md` 总会在执行后生成（失败也会记录），GitHub Actions 会上传测试报告；在推送 `main` 时还会回写报告，报告-only 提交不会引起 CI 循环。
 
 浏览器 WebGL 视觉效果仍需要人工验证。

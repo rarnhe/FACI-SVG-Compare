@@ -1,8 +1,10 @@
 """Bokeh document tests, relocated static resources, and real ``python -m`` startup."""
 
 from importlib import import_module
+import json
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import socket
 import threading
@@ -39,6 +41,19 @@ class TestPackageLayout(unittest.TestCase):
         self.assertTrue((ROOT / "index.html").is_file())
         self.assertTrue((ROOT / "assets").is_dir())
         self.assertFalse((ROOT / "frontend").exists())
+
+
+class TestOptionalAssets(unittest.TestCase):
+    def test_column_glb_is_optional_and_detected_when_present(self):
+        with TemporaryDirectory() as location:
+            asset_dir = Path(location)
+            self.assertFalse(app.column_model_available(asset_dir))
+            (asset_dir / "Other.glb").write_bytes(b"sample")
+            self.assertFalse(app.column_model_available(asset_dir))
+            (asset_dir / "Column.glb").write_bytes(b"glTF")
+            self.assertTrue(app.column_model_available(asset_dir))
+            (asset_dir / "Column.glb").unlink()
+            self.assertFalse(app.column_model_available(asset_dir))
 
 
 class TestSensorHistory(unittest.TestCase):
@@ -100,6 +115,18 @@ class TestStaticFrontend(unittest.TestCase):
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())
+
+    def test_glb_is_loaded_only_after_optional_manifest(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertIn("fetch('./model-manifest.json'", html)
+        self.assertIn("if (!column?.available)", html)
+        self.assertIn("new GLTFLoader().load(column.url", html)
+        self.assertNotIn("柱子.glb", html)
+
+    def test_no_service_worker_registration_in_html(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("serviceWorker.register(", html)
+        self.assertIn("registration.unregister()", html)
 
 
 class TestHttpIntegration(unittest.TestCase):
@@ -175,6 +202,25 @@ class TestHttpIntegration(unittest.TestCase):
             body = response.read().decode("utf-8")
             self.assertEqual(response.status, 200)
             self.assertIn("Bokeh", body)
+
+    def test_model_manifest_matches_local_assets(self):
+        with urlopen(self.base + "/viewer/model-manifest.json", timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("no-store", response.headers["Cache-Control"])
+            manifest = json.load(response)
+        self.assertEqual(
+            manifest["column"]["available"],
+            (STATIC_DIR / "assets" / "Column.glb").is_file(),
+        )
+        self.assertEqual(manifest["column"]["url"], "./assets/Column.glb")
+
+    def test_sw_js_requests_return_204_without_registering(self):
+        for path in ("/sw.js", "/viewer/sw.js"):
+            with self.subTest(path=path):
+                with urlopen(self.base + path, timeout=5) as response:
+                    self.assertEqual(response.status, 204)
+                    self.assertEqual(response.read(), b"")
+                    self.assertIn("no-store", response.headers["Cache-Control"])
 
     def test_root_asset_file_is_served(self):
         with urlopen(self.base + "/viewer/assets/README.md", timeout=5) as response:
