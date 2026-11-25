@@ -1,38 +1,39 @@
 # Test Report
 
-- UTC: 2026-11-25 07:46:57
+- UTC: 2026-11-25 10:06:00
 - Result: **PASS**
-- Tests: **52 per platform**
-- Passed: 52
+- Tests: **60 per environment**
+- Passed: 60
 - Failures: 0
 - Errors: 0
 - Skipped: 0
 
-## Dual-track verification
+## Dual-track GitHub Actions
 
 | Environment | Result | Tests | Duration |
 | --- | --- | --- | --- |
-| GitHub Actions Ubuntu / Python 3.12 | PASS | 52/52 | 3.848s |
-| GitHub Actions Windows / Python 3.14 | PASS | 52/52 | 4.068s |
+| Ubuntu / Python 3.12 | PASS | 60/60 | 3.290s |
+| Windows / Python 3.14 | PASS | 60/60 | 5.343s |
 
-- Workflow: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45570741557
-- JavaScript syntax: `node --input-type=module --check < cad_viewer.js` passed on both runners.
-- Both environments use `python tests/run_tests.py`, which generates this report even when Python tests fail.
+- Successful workflow: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45591589948
+- Both platforms run `python tests/run_tests.py` and independently validate the CAD JavaScript module syntax.
+- The runner regenerates `test_report.md` even if tests fail and the CI uploads its report artifact.
 
-## Coverage
+## Regression coverage
 
-- Existing Python/Bokeh entry, separate `/analysis` route and port behavior
-- XLSX selection, A1-relative bounds, DrawingML shape text, color, rotation
-- XLSX drawing-image relationship resolution, on-demand media extraction, size/type checks
-- Fab and Subfab ordered layer manifest; missing assets and SVG fallbacks
-- Two-layer Three.js pointer/sync/reset UI contracts and valid JavaScript module syntax
-- No GLB loading, no Service Worker registration, no public XLSX downloads
-- HTTP cache, static assets, CAD JSON and invalid image route
+- Exactly one workbook, exactly two sheets, exactly one image per sheet
+- Start-up errors before browser/server launch when constraints are violated
+- Excel DrawingML shape detection: textbox, ellipse, rectangle
+- Image origin (per sheet) normalization for Fab/Subfab
+- Original A1-relative source coordinates retained in Python
+- CAD UI splitters, mouse controls, reset without changing zoom, top-left aspect-correct text
+- Right-side SVG name `1-3-Octave_base.svg` and shared display width
+- Existing Bokeh server, resource security, and HTTP startup
 
-## Important boundaries
+## Verification boundaries
 
-The actual local `luoD.xlsx`, `PSD_base.svg` and `OneThreeOctave_base.svg`
-were not available to CI; synthetic XLSX fixtures validate extraction.
-Browser/WebGL appearance, precision against real CAD coordinates, and source
-SVG display require the user's local visual verification. The two SVG files
-should be present in `assets/` to render on the right.
+The actual `luoD.xlsx`, `PSD_base.svg`, and `1-3-Octave_base.svg`
+are only available on the user's local machine. CI tests synthetic XLSX
+fixtures, Python / HTTP behavior, and JavaScript syntax/contract checks.
+The real Excel drawing placement, in-browser Three.js 3D interaction,
+and final SVG appearance still require manual visual verification.
