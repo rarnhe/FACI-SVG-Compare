@@ -38,15 +38,15 @@ test('rotated footprint point test respects angle and boundaries',()=>{
 });
 test('ellipse center over a rectangle gets its top height, otherwise zero',()=>{
   const specs=rectangleSpecs([item('rectangle',rect(0,0,100,40),'a_x0.2')],identity);
-  assert.equal(ellipseElevation(item('ellipse',rect(10,10,8,8)),identity,specs),20);
-  assert.equal(ellipseElevation(item('ellipse',rect(110,10,8,8)),identity,specs),0);
+  assert.equal(ellipseElevation(item('ellipse',rect(10,-10,8,8)),identity,specs),20);
+  assert.equal(ellipseElevation(item('ellipse',rect(110,-10,8,8)),identity,specs),0);
 });
 test('overlapping rectangles use the highest roof, including flat zero-height cases',()=>{
   const specs=rectangleSpecs([
     item('rectangle',rect(0,0,100,100),'floor_x0.1'),
-    item('rectangle',rect(20,20,50,50),'tower_y0.4'),
-    item('rectangle',rect(20,20,50,50),'none_wrong'),
+    item('rectangle',rect(20,-20,50,50),'tower_y0.4'),
+    item('rectangle',rect(20,-20,50,50),'none_wrong'),
   ],identity);
-  assert.equal(ellipseElevation(item('ellipse',rect(30,30,10,10)),identity,specs),20);
-  assert.equal(ellipseElevation(item('ellipse',rect(2,2,5,5)),identity,specs),10);
+  assert.equal(ellipseElevation(item('ellipse',rect(30,-30,10,10)),identity,specs),20);
+  assert.equal(ellipseElevation(item('ellipse',rect(2,-2,5,5)),identity,specs),10);
 });

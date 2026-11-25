@@ -4,7 +4,10 @@ const HEIGHT_SUFFIX = /^([xy])(\d+(?:\.\d+)?|\.\d+)$/;
 
 export function rectangleHeight(text, width, height) {
   // Only the substring after the FINAL underscore is a height directive.
-  const suffix = String(text ?? '').trim().split('_').at(-1);
+  const value = String(text ?? '').trim();
+  const underscore = value.lastIndexOf('_');
+  if (underscore < 0) return 0;
+  const suffix = value.slice(underscore + 1);
   const match = HEIGHT_SUFFIX.exec(suffix);
   if (!match) return 0;
   const ratio = Number(match[2]);
