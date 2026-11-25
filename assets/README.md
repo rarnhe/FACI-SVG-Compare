@@ -1,9 +1,9 @@
-Put exactly one .xlsx workbook in this directory (for example luoD.xlsx).
-Its first sheet defines Fab, and its second sheet defines Subfab.
-Embedded drawing images and shapes are read dynamically; no pre-export required.
+Place an optional XLSX workbook with exactly 2 sheets here.
+Each sheet must contain exactly 1 embedded picture. Multiple XLSX
+files are an error; temporary Excel ~$ files are ignored.
 
-Optional right-hand SVG reference images:
+The right pane uses exactly these optional SVG filenames:
 - PSD_base.svg
-- OneThreeOctave_base.svg
+- 1-3-Octave_base.svg
 
-No GLB or Service Worker is needed. The XLSX source is never served publicly.
+Original XLSX is never served by HTTP. No GLB or Service Worker is required.

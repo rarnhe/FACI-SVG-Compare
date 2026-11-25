@@ -32,7 +32,7 @@ class TestStartupWithXlsx(TestCase):
         with TemporaryDirectory() as tmp:
             assets = Path(tmp) / "assets"
             assets.mkdir()
-            fixture(assets / "luoD.xlsx")
+            fixture(assets / "luoD.xlsx",sheet_count=2)
             report = self.run_entrypoint(assets)
         self.assertIn("Three.js + Bokeh viewer:", report)
         self.assertIn("[Sheet: Sheet1] 图片 1，形状 2", report)
@@ -57,5 +57,35 @@ class TestStartupWithXlsx(TestCase):
                 with self.assertRaises(SystemExit) as error:
                     app.main()
                 self.assertIn("multiple XLSX", str(error.exception))
+                server.assert_not_called()
+                browser.assert_not_called()
+
+    def test_one_sheet_rejected_before_server(self):
+        with TemporaryDirectory() as tmp:
+            assets=Path(tmp)/"assets"
+            assets.mkdir()
+            fixture(assets/"book.xlsx",sheet_count=1)
+            with (patch.object(app,"STATIC_DIR",Path(tmp)),
+                  patch.object(app,"Server") as server,
+                  patch.object(app,"open_viewer") as browser):
+                with self.assertRaisesRegex(SystemExit,"exactly 2 sheets"):
+                    app.main()
+                server.assert_not_called()
+                browser.assert_not_called()
+
+    def test_two_images_in_sheet_rejected_before_server(self):
+        shapes=__import__("importlib").import_module(
+            f"{ROOT.name}.tests.test_xlsx_spatial"
+        )
+        with TemporaryDirectory() as tmp:
+            assets=Path(tmp)/"assets"
+            assets.mkdir()
+            fixture(assets/"book.xlsx",sheet_count=2,
+                    anchors=shapes.two_cell()+shapes.one_cell(shapes.image("extra")))
+            with (patch.object(app,"STATIC_DIR",Path(tmp)),
+                  patch.object(app,"Server") as server,
+                  patch.object(app,"open_viewer") as browser):
+                with self.assertRaisesRegex(SystemExit,"exactly 1 image"):
+                    app.main()
                 server.assert_not_called()
                 browser.assert_not_called()

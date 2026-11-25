@@ -64,46 +64,66 @@ def absolute(child=None):
 
 
 def fixture(path: Path, anchors: str | None = None, worksheet_xml: str | None = None,
-            draw: bool = True, media: bool = False) -> Path:
+            draw: bool = True, media: bool = False, sheet_count: int = 1,
+            second_anchors: str | None = None) -> Path:
     if anchors is None:
         anchors = two_cell() + one_cell() + absolute()
-    if media:
-        anchors = anchors.replace(
-            "<xdr:blipFill/>",
-            '<xdr:blipFill><a:blip r:embed="rId3"/></xdr:blipFill>',
-        )
+    if second_anchors is None:
+        second_anchors = (f'<xdr:oneCellAnchor>{marker("from", 4, 5, 238125, 47625)}'
+                          f'<xdr:ext cx="952500" cy="476250"/>{image("Subfab底图")}'
+                          '</xdr:oneCellAnchor>')
     if worksheet_xml is None:
         worksheet_xml = ('<sheetFormatPr defaultRowHeight="15" defaultColWidth="8.43"/>'
                          '<cols><col min="1" max="1" width="10"/>'
                          '<col min="2" max="2" width="20"/></cols>'
                          '<sheetData><row r="1" ht="30"/></sheetData>')
-    worksheet_xml += ('<drawing r:id="rId2"/>' if draw else '')
+    parts = [(i, anchors if i == 1 else second_anchors if i == 2
+              else two_cell(image("Extra"))) for i in range(1, sheet_count + 1)]
     with ZipFile(path, "w") as z:
+        sheets_text = "".join(
+            f'<sheet name="Sheet{i}" sheetId="{i}" r:id="rId{i}"/>'
+            for i, _ in parts
+        )
         z.writestr("xl/workbook.xml",
                    f'<workbook xmlns="{W}" xmlns:r="{R}"><sheets>'
-                   '<sheet name="Sheet1" sheetId="1" r:id="rId1"/>'
-                   '</sheets></workbook>')
+                   f'{sheets_text}</sheets></workbook>')
+        workbook_links = "".join(
+            f'<Relationship Id="rId{i}" Type="{REL}/worksheet" '
+            f'Target="worksheets/sheet{i}.xml"/>'
+            for i, _ in parts
+        )
         z.writestr("xl/_rels/workbook.xml.rels",
-                   f'<Relationships xmlns="{P}"><Relationship Id="rId1" '
-                   f'Type="{REL}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
-        z.writestr("xl/worksheets/sheet1.xml",
-                   f'<worksheet xmlns="{W}" xmlns:r="{R}">{worksheet_xml}</worksheet>')
-        if draw:
-            z.writestr("xl/worksheets/_rels/sheet1.xml.rels",
+                   f'<Relationships xmlns="{P}">{workbook_links}</Relationships>')
+        for i, drawing_objects in parts:
+            sheet_xml = worksheet_xml + ('<drawing r:id="rId2"/>' if draw else '')
+            z.writestr(f"xl/worksheets/sheet{i}.xml",
+                       f'<worksheet xmlns="{W}" xmlns:r="{R}">{sheet_xml}</worksheet>')
+            if not draw:
+                continue
+            z.writestr(f"xl/worksheets/_rels/sheet{i}.xml.rels",
                        f'<Relationships xmlns="{P}"><Relationship Id="rId2" '
-                       f'Type="{REL}/drawing" Target="../drawings/drawing1.xml"/></Relationships>')
-            z.writestr("xl/drawings/drawing1.xml",
+                       f'Type="{REL}/drawing" Target="../drawings/drawing{i}.xml"/>'
+                       '</Relationships>')
+            if media:
+                drawing_objects = drawing_objects.replace(
+                    "<xdr:blipFill/>",
+                    '<xdr:blipFill><a:blip r:embed="rId3"/></xdr:blipFill>',
+                )
+            z.writestr(f"xl/drawings/drawing{i}.xml",
                        f'<xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{R}">'
-                       f'{anchors}</xdr:wsDr>')
+                       f'{drawing_objects}</xdr:wsDr>')
+            if media:
+                z.writestr(f"xl/drawings/_rels/drawing{i}.xml.rels",
+                           f'<Relationships xmlns="{P}"><Relationship Id="rId3" '
+                           f'Type="{REL}/image" Target="../media/image1.png"/>'
+                           '</Relationships>')
         if media:
-            z.writestr("xl/drawings/_rels/drawing1.xml.rels",
-                       f'<Relationships xmlns="{P}"><Relationship Id="rId3" '
-                       f'Type="{REL}/image" Target="../media/image1.png"/></Relationships>')
             z.writestr("xl/media/image1.png", b"\x89PNG\r\n\x1a\nfixture")
         z.writestr("xl/theme/theme1.xml",
                    f'<a:theme xmlns:a="{A}"><a:themeElements><a:clrScheme name="Office">'
                    '<a:accent1><a:srgbClr val="5B9BD5"/></a:accent1>'
                    '</a:clrScheme></a:themeElements></a:theme>')
+
     return path
 
 
@@ -127,6 +147,44 @@ class TestWorkbookDiscovery(unittest.TestCase):
                 (Path(tmp) / name).write_bytes(b"dummy")
             with self.assertRaisesRegex(spatial.SpatialXlsxError, "multiple XLSX"):
                 spatial.select_assets_xlsx(tmp)
+
+    def test_two_sheet_single_picture_workbook_is_valid(self):
+        with TemporaryDirectory() as tmp:
+            path=fixture(Path(tmp) / "valid.xlsx",sheet_count=2)
+            book,sheets=spatial.load_assets_spatial_report(tmp)
+        self.assertEqual(book,path)
+        self.assertEqual(len(sheets),2)
+        self.assertEqual([sum(obj["type"]=="image" for obj in x["objects"])
+                          for x in sheets],[1,1])
+
+    def test_sheet_count_rejects_one_and_three(self):
+        for count in (1,3):
+            with self.subTest(count=count),TemporaryDirectory() as tmp:
+                fixture(Path(tmp) / "book.xlsx",sheet_count=count)
+                with self.assertRaisesRegex(spatial.SpatialXlsxError,"exactly 2 sheets"):
+                    spatial.load_assets_spatial_report(tmp)
+
+    def test_image_count_rejects_zero_and_two(self):
+        for objects,reason in ((one_cell(shape()),"found 0"),
+                               (two_cell(image())+one_cell(image("Extra")),"found 2")):
+            with self.subTest(reason=reason),TemporaryDirectory() as tmp:
+                fixture(Path(tmp) / "book.xlsx",anchors=objects,sheet_count=2)
+                with self.assertRaisesRegex(spatial.SpatialXlsxError,reason):
+                    spatial.load_assets_spatial_report(tmp)
+
+    def test_shape_preset_and_textbox_classification(self):
+        ellipse=shape(name="检测").replace(
+            '<a:xfrm rot="0"/>',
+            '<a:xfrm rot="0"/><a:prstGeom prst="ellipse"/>')
+        textbox=shape(name="测试框").replace(
+            '</xdr:nvSpPr>',
+            '<xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>')
+        with TemporaryDirectory() as tmp:
+            book=fixture(Path(tmp) / "types.xlsx",
+                         anchors=one_cell(ellipse)+one_cell(textbox)+one_cell(shape()))
+            kinds=[obj["shape_kind"] for obj in spatial.parse_xlsx(book)[0]["objects"]]
+        self.assertEqual(kinds,["ellipse","textbox","rectangle"])
+
 
 
 class TestGeometry(unittest.TestCase):

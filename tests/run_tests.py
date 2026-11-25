@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Python -m startup, XLSX sheet image relationships and shape text/color/geometry, linked CAD panes, SVG references, private workbook handling, Bokeh legacy endpoint, and HTTP serving.",
+        "Two-sheet one-picture workbook validation; sheet image-origin coordinates; DrawingML textbox/ellipse/rectangle classification; CAD 3D shapes, linked reset, resizable panes, equal-width SVGs, and HTTP/Bokeh regression.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

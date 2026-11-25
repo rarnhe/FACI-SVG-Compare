@@ -287,6 +287,33 @@ def vertices_from_rect(rect: tuple[int, int, int, int], angle: float) -> list[di
     return result
 
 
+def shape_kind(node: ET.Element) -> str:
+    """Classify by DrawingML preset and textbox flag, then Excel's object name."""
+    non_visual = first_child(node, "nvSpPr")
+    meta = first_child(non_visual, "cNvSpPr")
+    if meta is not None and meta.get("txBox") in ("1", "true", "True"):
+        return "textbox"
+    props = first_child(node, "spPr")
+    preset = first_child(props, "prstGeom")
+    if preset is not None:
+        value = preset.get("prst", "").lower()
+        if value == "ellipse":
+            return "ellipse"
+        if value in ("rect", "roundrect", "round1samerect", "round2samerect"):
+            return "rectangle"
+    if first_child(props, "custGeom") is not None:
+        return "other"
+    label_node = find_descendant(node, "cNvPr")
+    name = (label_node.get("name", "") if label_node is not None else "").strip().lower()
+    if name.startswith(("文本框", "textbox")):
+        return "textbox"
+    if name.startswith(("椭圆", "ellipse", "oval")):
+        return "ellipse"
+    if name.startswith(("矩形", "rectangle")):
+        return "rectangle"
+    return "other"
+
+
 def shape_text(node: ET.Element) -> str:
     """Read visible shape text, preserving separate DrawingML paragraphs."""
     tx_body = first_child(node, "txBody")
@@ -345,6 +372,7 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
                     if image_part is not None and (members is None or image_part in members):
                         obj["image_part"] = image_part
             if kind == "shape":
+                obj["shape_kind"] = shape_kind(element) if tag == "sp" else "other"
                 obj["text"] = shape_text(element)
                 props = first_child(element, "spPr")
                 if props is None:
@@ -413,9 +441,28 @@ def select_assets_xlsx(directory: Path | str) -> Path | None:
     return candidates[0] if candidates else None
 
 
+def validate_two_layer_workbook(sheets: list[dict]) -> None:
+    """CAD requires exactly two sheets and exactly one image on each."""
+    if len(sheets) != 2:
+        raise SpatialXlsxError(
+            f"XLSX must contain exactly 2 sheets (Fab and Subfab); found {len(sheets)}."
+        )
+    for sheet in sheets:
+        images = [obj for obj in sheet["objects"] if obj["type"] == "image"]
+        if len(images) != 1:
+            raise SpatialXlsxError(
+                f"Sheet '{sheet['sheet']}' must contain exactly 1 image; "
+                f"found {len(images)}."
+            )
+
+
 def load_assets_spatial_report(directory: Path | str) -> tuple[Path | None, list[dict]]:
     selected = select_assets_xlsx(directory)
-    return (selected, parse_xlsx(selected)) if selected is not None else (None, [])
+    if selected is None:
+        return None, []
+    sheets = parse_xlsx(selected)
+    validate_two_layer_workbook(sheets)
+    return selected, sheets
 
 
 def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:

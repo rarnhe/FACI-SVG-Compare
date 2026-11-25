@@ -1,79 +1,75 @@
-# OneThreeOctave-SVG-Compare · 联动 CAD 双层图纸
+# OneThreeOctave-SVG-Compare
 
-由 Python 的 XLSX DrawingML 提取二维图纸和形状，Three.js 展示联动的 **Fab** / **Subfab** 两个平面图层；右侧等宽、纵向显示 PSD 和 1/3 倍频程分析 SVG 底图。Bokeh Python 后端仍可从原来的 `/analysis` 独立访问，**右侧两张静态 SVG 不需要 Bokeh 重绘**。
+以 XLSX 为二维 CAD 空间数据输入，使用 Three.js 在同一交互界面中展示 **Fab / Subfab** 两个联动的图纸，右侧显示 PSD 与 1/3 倍频程参考 SVG。现有 Bokeh Server 仍可通过 `/analysis` 独立访问。
 
 ## 启动
 
-在仓库根目录安装现有依赖：
+在仓库根目录安装依赖：
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-从**仓库父目录**执行：
+从仓库**父目录**启动：
 
 ```bash
 python -m OneThreeOctave-SVG-Compare
 ```
 
-也可以在仓库根目录运行 `python __main__.py`。
+或进入仓库根目录执行 `python __main__.py`。启动时输出 XLSX 图纸坐标和对象文字，并打开 `/viewer/index.html?rev=...`。
 
-启动后自动打开 `http://127.0.0.1:8080/viewer/index.html?rev=...`。原有端口占用识别、HTML 禁止缓存、`/sw.js` 空响应和 Bokeh 入口均保留。
-
-## 本地数据文件
-
-把这些文件放在仓库的 `assets/`（它们没有提交到 GitHub）：
+### assets 文件
 
 ```text
-OneThreeOctave-SVG-Compare/
-├── __main__.py
-├── xlsx_spatial.py
-├── cad_service.py
-├── cad_viewer.js
-├── index.html
-└── assets/
-    ├── luoD.xlsx                 # 恰好一个 xlsx，sheet1=Fab、sheet2=Subfab
-    ├── PSD_base.svg              # 右侧上图
-    └── OneThreeOctave_base.svg   # 右侧下图
+assets/
+├── luoD.xlsx
+├── PSD_base.svg
+└── 1-3-Octave_base.svg
 ```
 
-- 0 个 XLSX：提示并保留空白 CAD 画布与 SVG 参考区。
-- 1 个 XLSX：解析每个 Sheet 的 DrawingML，启动时向终端输出相对 A1 的对象四角坐标、颜色、旋转等信息；左侧用其前两个 Sheet 构建互动视图。
-- 多于 1 个 XLSX：停止启动并提示，忽略 Excel `~$` 临时文件及点号隐藏文件。
-- 缺少 SVG：只展示对应名称的占位信息，不会请求不存在的资源。
-- 仅当 XLSX 图片实际存在且格式受支持时，才按需读取 PNG/JPEG/WebP/GIF/BMP 图片。EMF/WMF 等格式不由浏览器渲染。
+请将旧的 `OneThreeOctave_base.svg` **在本地改名为 `1-3-Octave_base.svg`**。实际 XLSX 与 SVG 尚未提交到仓库，自动化测试使用临时样本。
 
-注意：**无须再放 `Column.glb`**。代码已删除 GLB 依赖，用户本地旧文件可自行保留或清理，不再读取它。
+**严格输入约束：**
 
-## 左侧 CAD 交互
+- `assets/` 不存在 XLSX 时可启动空白 CAD 和 SVG 页面。
+- 若存在 XLSX，则整个 `assets/` **只能存在一个有效 .xlsx**；忽略 `~$` 等 Excel 临时文件。
+- 该 XLSX 必须包含**恰好两个 Sheet**：第一个为 Fab、第二个为 Subfab。
+- **每个 Sheet 必须恰好包含一张 DrawingML 图片**；0 张或超过 1 张会停止启动并显示错误。
+- 图片只读、按需从 XLSX ZIP 中提取；原始 XLSX 文件不通过 HTTP 暴露。
 
-- 上半区：Fab，来自 XLSX 第一个 Sheet 的内嵌图片与形状；下半区：Subfab，来自第二个 Sheet。
-- 两个 Three.js 画布共用观察目标、相机方向和缩放比例，任意一层的操作同步到另一层。
-- **滚轮：** 放大缩小；**右键拖动：** 平移；**左键拖动：** 旋转；**单击色块：** 选中并显示对应形状名称、文字。
-- 左上角有鼠标操作说明，独立 **↺** 按钮同时将两层恢复为正对图纸的俯视视角及初始缩放。
-- 形状覆盖层的坐标、尺寸、旋转、背景颜色、轮廓颜色、文字和文字颜色均源自 XLSX DrawingML；不再通过人工硬编码图形位置。
-- 所有 Sheet 共用 A1 左上角为零点的 **X 向右 / Y 向下** 坐标体系，屏幕渲染将 Excel Y 轴映射到 Three.js 的负 Y 方向。
+## CAD 坐标与联动
 
-## 右侧 SVG 参考图区
+`xlsx_spatial.py` 仍返回以 A1 左上角为原点的 `bounds_emu` 和 `vertices_px`；`cad_service.py` 再将**每个 Sheet 的底图左上角移到局部 (0,0)**，所有形状同步减去该 Sheet 图片的坐标偏移。这样 Fab 和 Subfab 通过各自的图纸原点使用统一的相机位置、朝向和缩放，不受原始单元格排版起点影响。
 
-上部显示 `PSD_base.svg`，下部显示 `OneThreeOctave_base.svg`，通过等宽、各占一半可用高度的容器展示。保持 SVG 本身宽高比例（`object-fit:contain`）；纵向空间被两区域占满，图像不会强制拉伸变形。
+- 滚轮：两层同步缩放。
+- 右键拖动：两层同步平移。
+- 左键拖动：两层同步旋转。
+- 点击覆盖图形：只显示其**形状文字内容**，不显示 Sheet 名称、对象编号或层统计信息。
+- **↺：只恢复平面俯视方向**，保留当前缩放倍数与平移中心，不再自动重新展示全景。
 
-## 工程坐标和边界
+### Excel 形状类型
 
-`xlsx_spatial.parse_xlsx()` 输出每个对象的 `bounds_emu`、`width_px`、`height_px`、`rotation_degrees`、`vertices_px` 及 `colors`（形状还会给出 `text`）。图片由 `image_part` 指向 Excel ZIP 内的媒体对象。
+`xlsx_spatial.py` 优先根据 DrawingML 的 `prstGeom` / `txBox` 确定图形类型，必要时按 Excel 对象名称回退：
 
-1px=9525 EMU，参考 px 基于 96 DPI；Excel 列宽受默认字体指标影响，当前采用常见 MDW=7 的换算方式，**若要与其他 CAD 坐标系精确对齐，需确认工作簿默认字体**。矩形四角代表绘图对象的外框，而不是自由曲线、多边形内部每个路径顶点。
+- **文本框**：灰色背景，文字锚定左上角。
+- **椭圆**：按图形外框两条对角线交点取圆心，以左上至右下对角线为直径，绘制**可点击圆形**。
+- **矩形**：在 Z 轴正向增加厚度，绘制可点击长方体。
+- 其余对象保留原来的平面覆盖层。
 
-原始 XLSX 不由 HTTP 静态服务器暴露；浏览器只请求 `/viewer/cad-layout.json` 的必要布局字段及 `/viewer/cad-image/<sheet>/<object>` 的合法图片数据。
+形状文字独立测量实际 Canvas 文本宽高，并**等比例缩小**以适应形状大小，不再把一张定宽/定高纹理拉伸到矩形。文字位于对象左上角，边框、颜色与旋转继续依照 XLSX 属性。
+
+## 页面可调分割
+
+左侧 CAD 与右侧 SVG 之间的**竖向分割条**可拖动，两侧容器实时改变大小；右侧两幅 SVG 中间的**横向分割条**也可拖动，调整上下区域高度。均支持键盘方向键微调。
+
+右侧两张 SVG 采用相同的**显示宽度**，但根据各自原始宽高比计算不同的高度。首次加载时按原始高度比例划分空间；拖动后始终保证两张图等宽、不拉伸。如果用户手动指定的高度比与两张 SVG 的原始高度比不一致，则较大的区域可能留下留白，这是同时保持等宽与不变形所必需的。
 
 ## 双轨验证
-
-本地与 GitHub Actions 共用一套标准库 unittest：
 
 ```bash
 python tests/run_tests.py
 ```
 
-测试涵盖 XLSX 唯一文件、图片媒体引用、可点击形状文字、行列/EMU/旋转、CAD JSON 及图片读取、两层 HTML/JS 联动约定、资源缺失降级、旧 Bokeh 后端和 HTTP 安全路由。GitHub Actions 在 Ubuntu/Python 3.12 和 Windows/Python 3.14 下测试，并额外检查 CAD JavaScript 模块语法。失败时也生成 `test_report.md` 并上传产物；仅 main 推送时自动写回仓库，避免 CI 无限触发。
+与 `.github/workflows/test.yml` 使用相同的 unittest 测试组，分别由 Ubuntu/Python 3.12 和 Windows/Python 3.14 运行，并验证 `cad_viewer.js` 的模块语法。测试覆盖图纸解析、零点转换、图片唯一性、形状分类、网页静态资源、两处拖动布局和 Bokeh 旧接口。通过与失败都自动生成并上传 `test_report.md`；main 的自动报告回写不会再次触发 CI。
 
-**用户的实际 `luoD.xlsx`、`PSD_base.svg` 和 `OneThreeOctave_base.svg` 没有提供给 CI**，因此 GitHub Actions 使用合成 XLSX Fixture 验证逻辑，真实图纸排版/交互仍需 Windows 浏览器视觉测试。
+**真实 XLSX 图纸的图元与两张 SVG 的显示效果仍需要 Windows 浏览器视觉验证**，CI 无法代替实际资源检查。

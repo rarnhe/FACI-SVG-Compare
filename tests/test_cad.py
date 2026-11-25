@@ -36,6 +36,11 @@ class TestCadManifest(unittest.TestCase):
             self.assertEqual(first["image_url"], "/viewer/cad-image/0/0")
             self.assertNotIn("image_part", first)
             self.assertEqual(first["name"], "图片12")
+            self.assertEqual(first["bounds_emu"]["x"], 0)
+            self.assertEqual(first["bounds_emu"]["y"], 0)
+            self.assertEqual(first["vertices_px"][0], {"x": 0, "y": 0})
+            # The parser itself still exposes A1-relative original coordinates.
+            self.assertNotEqual(sheets[0]["objects"][0]["bounds_emu"]["x"], 0)
             self.assertEqual(manifest["layers"][1]["available"], False)
             payload, mime = cad.extract_embedded_image(xlsx, sheets, 0, 0)
             self.assertEqual(mime, "image/png")
@@ -54,10 +59,29 @@ class TestCadManifest(unittest.TestCase):
             self.assertIn("text", item)
             self.assertEqual(item["colors"]["fill"], "#5B9BD5")
             self.assertEqual(item["bounds_emu"]["width"], 190500)
+            self.assertEqual(item["shape_kind"], "rectangle")
+            self.assertEqual(item["bounds_emu"]["x"], -85 * 9525)
+            self.assertEqual(item["bounds_emu"]["y"], -42 * 9525)
 
     def test_unsupported_embedded_extension_has_no_public_url(self):
         with TemporaryDirectory() as tmp:
             manifest = cad.build_cad_manifest(None, [{"sheet": "S", "objects": [
-                {"type": "image", "name": "bad", "image_part": "xl/media/image1.emf"}
+                {"type": "image", "name": "bad", "image_part": "xl/media/image1.emf",
+                 "bounds_emu": {"x": 0, "y": 0, "width": 95250, "height": 95250},
+                 "vertices_px": [{"x": 0, "y": 0} for _ in range(4)]}
             ]}], Path(tmp))
             self.assertNotIn("image_url", manifest["layers"][0]["objects"][0])
+
+    def test_each_sheet_uses_its_own_image_upper_left_as_origin(self):
+        with TemporaryDirectory() as tmp:
+            folder=Path(tmp)
+            xlsx=fixture(folder/"book.xlsx",media=True,sheet_count=2)
+            sheets=spatial.parse_xlsx(xlsx)
+            manifest=cad.build_cad_manifest(xlsx,sheets,folder)
+            origins=[layer["image_origin_emu"] for layer in manifest["layers"]]
+            self.assertNotEqual(origins[0], origins[1])
+            for layer in manifest["layers"]:
+                self.assertEqual(layer["objects"][0]["bounds_emu"]["x"],0)
+                self.assertEqual(layer["objects"][0]["bounds_emu"]["y"],0)
+                self.assertEqual(layer["objects"][0]["vertices_px"][0],{"x":0,"y":0})
+                self.assertTrue(layer["available"])

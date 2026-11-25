@@ -16,7 +16,7 @@ SUPPORTED_IMAGE_TYPES = {
 MAX_EMBEDDED_IMAGE_BYTES = 64 * 1024 * 1024
 REFERENCE_SVGS = (
     ("psd", "PSD_base.svg"),
-    ("octave", "OneThreeOctave_base.svg"),
+    ("octave", "1-3-Octave_base.svg"),
 )
 
 
@@ -41,11 +41,31 @@ def build_cad_manifest(workbook: Path | None, sheets: list[dict],
             "sheet": source["sheet"] if source else None,
             "available": source is not None,
             "objects": [],
+            "image_origin_emu": None,
         }
         if source:
+            images = [item for item in source["objects"] if item["type"] == "image"]
+            if len(images) != 1:
+                raise ValueError(
+                    f"Sheet {source['sheet']} needs exactly one image for CAD alignment"
+                )
+            image_rect = images[0]["bounds_emu"]
+            ox, oy = image_rect["x"], image_rect["y"]
+            layer["image_origin_emu"] = {"x": ox, "y": oy}
             for object_index, item in enumerate(source["objects"]):
                 obj = {key: deepcopy(value) for key, value in item.items()
                        if key != "image_part"}
+                # Use EACH sheet's picture top-left as (0, 0) for the shared
+                # Fab/Subfab camera. Keep original coordinates in parser output.
+                obj["bounds_emu"]["x"] -= ox
+                obj["bounds_emu"]["y"] -= oy
+                obj["vertices_px"] = [
+                    {
+                        "x": round(point["x"] - ox / 9525, 3),
+                        "y": round(point["y"] - oy / 9525, 3),
+                    }
+                    for point in obj["vertices_px"]
+                ]
                 if (item.get("type") == "image" and item.get("image_part")
                         and Path(item["image_part"]).suffix.lower() in SUPPORTED_IMAGE_TYPES):
                     obj["image_url"] = f"/viewer/cad-image/{layer_index}/{object_index}"

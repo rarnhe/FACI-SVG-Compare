@@ -106,10 +106,28 @@ class TestStaticFrontend(unittest.TestCase):
         viewer = (STATIC_DIR / "cad_viewer.js").read_text(encoding="utf-8")
         for expected in ("OrbitControls", "synchronizeFrom(", "THREE.MOUSE.ROTATE",
                          "THREE.MOUSE.PAN", "raycaster.intersectObjects",
-                         "fitView()", "item.text || item.name", "cad-layout.json"):
+                         "resetTopView()", "drawTopLeftText(", "cad-layout.json",
+                         "kind==='ellipse'", "kind==='rectangle'", "kind==='textbox'",
+                         "installSplitter('main-splitter'", "installSplitter('reference-splitter'"):
             with self.subTest(expected=expected):
                 self.assertIn(expected, viewer)
         self.assertNotIn("GLTFLoader", viewer)
+
+
+    def test_visual_labels_removed_and_splitters_added(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        for absent in ("Fab / Subfab · 联动 CAD 视图", "FAB · Sheet 1",
+                       "SUBFAB · Sheet 2", "数据分析参考图",
+                       "OneThreeOctave_base.svg", "PSD_base.svg</div>"):
+            with self.subTest(absent=absent):
+                self.assertNotIn(absent,html)
+        self.assertIn('id="main-splitter"',html)
+        self.assertIn('id="reference-splitter"',html)
+        self.assertIn('id="selected-info"',html)
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        self.assertIn("zoom intentionally untouched",viewer)
+        self.assertIn("selectedInfo.textContent=(mesh.userData.cadObject.text||'').trim()",viewer)
+        self.assertIn("commonWidth*entry.ratio",viewer)
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())
@@ -221,7 +239,7 @@ class TestHttpIntegration(unittest.TestCase):
             data = json.load(response)
         self.assertEqual([layer["title"] for layer in data["layers"]], ["Fab", "Subfab"])
         self.assertEqual(set(data["reference_svgs"]), {"psd", "octave"})
-        for key, filename in (("psd", "PSD_base.svg"), ("octave", "OneThreeOctave_base.svg")):
+        for key, filename in (("psd", "PSD_base.svg"), ("octave", "1-3-Octave_base.svg")):
             self.assertEqual(
                 data["reference_svgs"][key]["available"],
                 (STATIC_DIR / "assets" / filename).is_file(),
