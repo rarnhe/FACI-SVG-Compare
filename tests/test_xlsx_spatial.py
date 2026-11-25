@@ -214,6 +214,15 @@ class TestGeometry(unittest.TestCase):
         item = self.parse(one_cell(rich_shape))[0]["objects"][0]
         self.assertEqual(item["text"], "压差 A-01")
 
+    def test_shape_text_is_visible_in_terminal_report(self):
+        rich_shape = shape(name="仪表").replace(
+            "</a:r></a:p>", "<a:t>PSD 单位</a:t></a:r></a:p>"
+        )
+        with TemporaryDirectory() as tmp:
+            path = fixture(Path(tmp) / "labels.xlsx", anchors=one_cell(rich_shape))
+            output = spatial.format_spatial_report(path, spatial.parse_xlsx(path))
+        self.assertIn("文字: PSD 单位", output)
+
     def test_media_relationship_is_resolved(self):
         with TemporaryDirectory() as tmp:
             path = fixture(Path(tmp) / "with-media.xlsx", media=True)

@@ -441,6 +441,8 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                     "（顶点已旋转，宽高是未旋转包围框）"
                 )
             if obj["type"] == "shape":
+                if obj.get("text"):
+                    lines.append("    文字: " + obj["text"].replace("\n", " / "))
                 colors = obj["colors"]
                 lines.append(
                     f"    颜色: 背景={colors['fill']} "
