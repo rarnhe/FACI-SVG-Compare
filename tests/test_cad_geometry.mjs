@@ -1,52 +1,82 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {rectangleHeight, rectangleSpecs, pointInsideRotatedRectangle, ellipseElevation} from '../cad_geometry.mjs';
+import {
+  rectangleHeight, rectangleSpecs, rectangleOverlap,
+  pointInsideRotatedRectangle, circleRectangleRelation, ellipseElevation,
+} from '../cad_geometry.mjs';
 
-const rect = (x, y, width, height, rotation=0) =>
-  ({x,y,width,height,rotation});
-const item = (shape_kind, r, text='') => ({
-  type:'shape', shape_kind, text, bounds_emu:r,
+const rect=(x,y,width,height,rotation=0)=>({x,y,width,height,rotation});
+const item=(shape_kind,r,text='')=>({
+  type:'shape',shape_kind,text,bounds_emu:r,
 });
-const identity = obj=>obj.bounds_emu;
+const identity=obj=>obj.bounds_emu;
+const specs=(...items)=>rectangleSpecs(items,identity);
+const circle=(x,y,w,h)=>item('ellipse',rect(x,y,w,h));
 
-test('x suffix measures upper edge; y suffix measures left edge, never diagonal',()=>{
+test('rectangle heights use width for x, height for y, never the diagonal',()=>{
   assert.equal(rectangleHeight('柱A_x0.2',100,50),20);
   assert.equal(rectangleHeight('柱B_y0.1',100,50),5);
-  assert.equal(rectangleHeight('名字_注释_x.25',120,40),30);
-  assert.equal(rectangleHeight('标题_x0',90,70),0);
+  assert.equal(rectangleHeight('A_B_x.25',120,40),30);
+  assert.equal(rectangleHeight('A_x0',100,40),0);
 });
-test('only a valid FINAL underscore directive counts',()=>{
-  for(const text of ['_x','_x-0.2','_z0.2','x0.2','_x.','_xabc','_x0.2a','_y1e2','_x0.2_comment','','_xInfinity','_x 0.2']){
+test('height suffix must be the last valid underscore-separated term',()=>{
+  for(const text of ['x0.2','_x-1','_xabc','X_x.','X_z0.2',
+    'X_x0.2_note','X_y1e2','X_x 0.2','X_xInfinity','']) {
     assert.equal(rectangleHeight(text,100,40),0,text);
   }
-  assert.equal(rectangleHeight('A_x0.2_bad',100,40),0);
-  assert.equal(rectangleHeight('A_y.5',100,40),20);
 });
-test('rectangleSpecs filters shapes and preserves per-rectangle heights',()=>{
-  const specs=rectangleSpecs([
-    item('rectangle',rect(0,0,100,30),'one_x0.2'),
-    item('ellipse',rect(1,1,20,20),'circle'),
-    item('rectangle',rect(30,0,50,20),'two_y0.5'),
-  ],identity);
-  assert.deepEqual(specs.map(s=>s.depth),[20,10]);
+test('rectangleSpec includes only rectangles and computes roof heights',()=>{
+  const found=specs(item('rectangle',rect(0,0,100,30),'one_x0.2'),
+    circle(1,-1,20,20),item('rectangle',rect(120,0,50,20),'two_y0.5'));
+  assert.deepEqual(found.map(x=>x.depth),[20,10]);
 });
-test('rotated footprint point test respects angle and boundaries',()=>{
-  const spec=rectangleSpecs([item('rectangle',rect(0,0,100,20,Math.PI/2),'a_x0.1')],identity)[0];
-  assert.equal(pointInsideRotatedRectangle(50,-10,spec),true);
-  assert.equal(pointInsideRotatedRectangle(50,30,spec),true);
-  assert.equal(pointInsideRotatedRectangle(50,60,spec),false);
+test('rotated footprint is correctly transformed',()=>{
+  const a=specs(item('rectangle',rect(0,0,100,20,Math.PI/2),'A_x0.1'))[0];
+  assert.equal(pointInsideRotatedRectangle(50,-10,a),true);
+  assert.equal(pointInsideRotatedRectangle(50,30,a),true);
+  assert.equal(pointInsideRotatedRectangle(50,60,a),false);
 });
-test('ellipse center over a rectangle gets its top height, otherwise zero',()=>{
-  const specs=rectangleSpecs([item('rectangle',rect(0,0,100,40),'a_x0.2')],identity);
-  assert.equal(ellipseElevation(item('ellipse',rect(10,-10,8,8)),identity,specs),20);
-  assert.equal(ellipseElevation(item('ellipse',rect(110,-10,8,8)),identity,specs),0);
+test('rebuilt circle wholly inside gives full roof height',()=>{
+  const rectangle=specs(item('rectangle',rect(0,0,100,80),'A_x0.2'));
+  assert.equal(circleRectangleRelation(circle(30,-20,10,10),identity,rectangle[0]),'inside');
+  assert.equal(ellipseElevation(circle(30,-20,10,10),identity,rectangle),20);
 });
-test('overlapping rectangles use the highest roof, including flat zero-height cases',()=>{
-  const specs=rectangleSpecs([
-    item('rectangle',rect(0,0,100,100),'floor_x0.1'),
-    item('rectangle',rect(20,-20,50,50),'tower_y0.4'),
-    item('rectangle',rect(20,-20,50,50),'none_wrong'),
-  ],identity);
-  assert.equal(ellipseElevation(item('ellipse',rect(30,-30,10,10)),identity,specs),20);
-  assert.equal(ellipseElevation(item('ellipse',rect(2,-2,5,5)),identity,specs),10);
+test('rebuilt circle intersects one edge -> half roof height, even if its center is inside',()=>{
+  const rectangle=specs(item('rectangle',rect(0,0,100,80),'A_x0.2'));
+  assert.equal(circleRectangleRelation(circle(90,-20,16,16),identity,rectangle[0]),'partial');
+  assert.equal(ellipseElevation(circle(90,-20,16,16),identity,rectangle),10);
+  // Center OUTSIDE, circle crossing left border still intersects.
+  assert.equal(ellipseElevation(circle(-14,-40,20,20),identity,rectangle),10);
+});
+test('entire reconstructed circle outside a rectangle -> zero height',()=>{
+  const rectangle=specs(item('rectangle',rect(0,0,100,80),'A_x0.2'));
+  assert.equal(circleRectangleRelation(circle(130,-20,10,10),identity,rectangle[0]),'outside');
+  assert.equal(ellipseElevation(circle(130,-20,10,10),identity,rectangle),0);
+});
+test('external tangency counts as partial intersection',()=>{
+  const rectSpec=specs(item('rectangle',rect(0,0,100,100),'A_x0.2'));
+  // Center at x=-10, radius=10; use degenerate bbox (w=20,h=0).
+  assert.equal(circleRectangleRelation(circle(-20,-50,20,0),identity,rectSpec[0]),'partial');
+});
+test('rotated rectangle uses its actual boundary not its AABB',()=>{
+  const a=specs(item('rectangle',rect(0,0,80,40,Math.PI/4),'A_y0.5'));
+  assert.equal(ellipseElevation(circle(36,-25,4,4),identity,a),20);
+  assert.equal(ellipseElevation(circle(-15,-5,4,4),identity,a),0);
+});
+test('two nonoverlapping rectangles touching at edge are allowed',()=>{
+  const [a,b]=specs(item('rectangle',rect(0,0,100,50)),
+    item('rectangle',rect(100,0,100,50)));
+  assert.equal(rectangleOverlap(a,b),false);
+});
+test('positive-area overlap between rotated rectangles is detected',()=>{
+  const [a,b]=specs(item('rectangle',rect(0,0,100,50,Math.PI/6)),
+    item('rectangle',rect(50,0,100,50,-Math.PI/6)));
+  assert.equal(rectangleOverlap(a,b),true);
+});
+test('a circle intersecting two disjoint rectangles is an error',()=>{
+  const rs=specs(item('rectangle',rect(0,0,100,80),'left_x0.2'),
+    item('rectangle',rect(140,0,100,80),'right_x0.3'));
+  assert.equal(rectangleOverlap(rs[0],rs[1]),false);
+  assert.throws(()=>ellipseElevation(circle(100,-40,40,40),identity,rs),
+    /multiple rectangles/);
 });

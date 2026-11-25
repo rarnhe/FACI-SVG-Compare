@@ -50,6 +50,7 @@ BUILD_REVISION = sha256(
     + (STATIC_DIR / "cad_service.py").read_bytes()
     + (STATIC_DIR / "cad_viewer.js").read_bytes()
     + (STATIC_DIR / "cad_geometry.mjs").read_bytes()
+    + (STATIC_DIR / "cad_validation.py").read_bytes()
 ).hexdigest()[:12]
 APP_ID = f"OneThreeOctave-SVG-Compare:Bokeh-Three.js:{BUILD_REVISION}"
 

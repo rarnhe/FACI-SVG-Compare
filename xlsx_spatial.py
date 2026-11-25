@@ -462,6 +462,12 @@ def load_assets_spatial_report(directory: Path | str) -> tuple[Path | None, list
         return None, []
     sheets = parse_xlsx(selected)
     validate_two_layer_workbook(sheets)
+    try:
+        from .cad_validation import validate_sheet_collisions
+    except ImportError:
+        from cad_validation import validate_sheet_collisions
+    for sheet in sheets:
+        validate_sheet_collisions(sheet, error_type=SpatialXlsxError)
     return selected, sheets
 
 

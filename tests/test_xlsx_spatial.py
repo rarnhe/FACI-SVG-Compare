@@ -150,7 +150,8 @@ class TestWorkbookDiscovery(unittest.TestCase):
 
     def test_two_sheet_single_picture_workbook_is_valid(self):
         with TemporaryDirectory() as tmp:
-            path=fixture(Path(tmp) / "valid.xlsx",sheet_count=2)
+            path=fixture(Path(tmp) / "valid.xlsx",sheet_count=2,
+                         anchors=two_cell()+one_cell(shape()))
             book,sheets=spatial.load_assets_spatial_report(tmp)
         self.assertEqual(book,path)
         self.assertEqual(len(sheets),2)

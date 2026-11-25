@@ -89,3 +89,49 @@ class TestStartupWithXlsx(TestCase):
                     app.main()
                 server.assert_not_called()
                 browser.assert_not_called()
+
+    def test_overlapping_rotated_rectangles_block_startup(self):
+        shapes=__import__("importlib").import_module(f"{ROOT.name}.tests.test_xlsx_spatial")
+        emu=9525
+        def anchored(x,y,w,h,shape_xml):
+            return (f'<xdr:absoluteAnchor><xdr:pos x="{x*emu}" y="{y*emu}"/>'
+                    f'<xdr:ext cx="{w*emu}" cy="{h*emu}"/>'
+                    f'{shape_xml}</xdr:absoluteAnchor>')
+        a=shapes.shape(name="矩形设备A").replace('rot="0"','rot="1800000"')
+        b=shapes.shape(name="矩形设备B").replace('rot="0"','rot="-1800000"')
+        anchors=(shapes.two_cell()+
+                 anchored(0,0,100,70,a)+anchored(55,10,100,70,b))
+        with TemporaryDirectory() as tmp:
+            assets=Path(tmp)/"assets"
+            assets.mkdir()
+            fixture(assets/"book.xlsx",sheet_count=2,anchors=anchors)
+            with (patch.object(app,"STATIC_DIR",Path(tmp)),
+                  patch.object(app,"Server") as server,
+                  patch.object(app,"open_viewer") as browser):
+                with self.assertRaisesRegex(SystemExit,"overlapping rectangles"):
+                    app.main()
+                server.assert_not_called()
+                browser.assert_not_called()
+
+    def test_reconstructed_circle_hitting_two_disjoint_rectangles_blocks_startup(self):
+        shapes=__import__("importlib").import_module(f"{ROOT.name}.tests.test_xlsx_spatial")
+        emu=9525
+        def anchored(x,y,w,h,shape_xml):
+            return (f'<xdr:absoluteAnchor><xdr:pos x="{x*emu}" y="{y*emu}"/>'
+                    f'<xdr:ext cx="{w*emu}" cy="{h*emu}"/>'
+                    f'{shape_xml}</xdr:absoluteAnchor>')
+        anchors=(shapes.two_cell()+
+                 anchored(0,0,100,80,shapes.shape(name="矩形Left"))+
+                 anchored(140,0,100,80,shapes.shape(name="矩形Right"))+
+                 anchored(100,40,40,40,shapes.shape(name="椭圆Spanning")))
+        with TemporaryDirectory() as tmp:
+            assets=Path(tmp)/"assets"
+            assets.mkdir()
+            fixture(assets/"book.xlsx",sheet_count=2,anchors=anchors)
+            with (patch.object(app,"STATIC_DIR",Path(tmp)),
+                  patch.object(app,"Server") as server,
+                  patch.object(app,"open_viewer") as browser):
+                with self.assertRaisesRegex(SystemExit,"intersects 2 rectangles"):
+                    app.main()
+                server.assert_not_called()
+                browser.assert_not_called()

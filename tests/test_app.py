@@ -156,6 +156,8 @@ class TestStaticFrontend(unittest.TestCase):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
         self.assertIn("rectangleHeight(item.text,w,h)",viewer)
         self.assertIn("ellipseElevation(item,toWorldRect,rectangles)",viewer)
+        self.assertIn("circleRectangleRelation",helper if False else
+                      (STATIC_DIR/"cad_geometry.mjs").read_text(encoding="utf-8"))
         self.assertIn("const rectangles=rectangleSpecs(layerData.objects,toWorldRect)",viewer)
         self.assertIn("depth>0",viewer)
         self.assertIn("new THREE.PlaneGeometry(w,h)",viewer)

@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Two-sheet one-picture workbook validation; sheet image-origin coordinates; DrawingML textbox/ellipse/rectangle classification; CAD 3D shapes, linked reset, resizable panes, height-filling SVGs, rectangle suffix height, raised ellipse, and HTTP/Bokeh regression.",
+        "Two-sheet one-picture workbook validation; sheet image-origin coordinates; DrawingML textbox/ellipse/rectangle classification; CAD 3D shapes, linked reset, resizable panes, height-filling SVGs, rectangle suffix height, rotated rectangle overlap validation, rebuilt circle-vs-rectangle full/partial/outside relations, and HTTP/Bokeh regression.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]
