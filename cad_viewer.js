@@ -1,6 +1,7 @@
 // Linked Fab/Subfab Excel CAD viewer. Each picture starts at (0,0) in local XY.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
 
 const EMU_TO_PX = 1 / 9525;
 const layers = [];
@@ -124,11 +125,17 @@ function makeOutline(points,color) {
   );
 }
 
-function drawShape(layer,item) {
+function kindForElevation(item, rect, rectangles) {
+  return item.shape_kind==='ellipse' ? ellipseElevation(item,toWorldRect,rectangles) : 0;
+}
+
+function drawShape(layer,item,rectangles=[]) {
   const r=toWorldRect(item);
   const w=r.width,h=r.height;
   const group=new THREE.Group();
-  group.position.set(r.x+w/2,r.y-h/2,1);
+  // The XLSX image is at Z=0; all drawing geometry starts at that plane.
+  const raisedZ=kindForElevation(item, r, rectangles);
+  group.position.set(r.x+w/2,r.y-h/2,raisedZ);
   group.rotation.z=r.rotation;
   const colors=item.colors || {};
   const kind=item.shape_kind || 'other';
@@ -157,18 +164,31 @@ function drawShape(layer,item) {
     group.add(makeOutline(circumference,borderColor));
   } else if(kind==='rectangle') {
     // A CAD rectangle is a cuboid with actual +Z thickness.
-    const depth=Math.max(2,Math.min(24,Math.min(w,h)*0.2));
-    const cube=new THREE.BoxGeometry(w,h,depth);
-    clickTarget=new THREE.Mesh(cube,mat);
-    clickTarget.position.z=depth/2;
-    frontZ=depth+1;
-    group.add(clickTarget);
-    const edges=new THREE.LineSegments(
-      new THREE.EdgesGeometry(cube),
-      new THREE.LineBasicMaterial({color:borderColor,transparent:true,opacity:0.85}),
-    );
-    edges.position.copy(clickTarget.position);
-    group.add(edges);
+    const depth=rectangleHeight(item.text,w,h);
+    if (depth>0) {
+      const cube=new THREE.BoxGeometry(w,h,depth);
+      clickTarget=new THREE.Mesh(cube,mat);
+      clickTarget.position.z=depth/2;
+      frontZ=depth+1;
+      group.add(clickTarget);
+      const edges=new THREE.LineSegments(
+        new THREE.EdgesGeometry(cube),
+        new THREE.LineBasicMaterial({color:borderColor,transparent:true,opacity:0.85}),
+      );
+      edges.position.copy(clickTarget.position);
+      group.add(edges);
+    } else {
+      // Missing/invalid directive: zero height, no artificial thickness.
+      clickTarget=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);
+      clickTarget.position.z=0;
+      frontZ=0.7;
+      group.add(clickTarget);
+      const hw=w/2,hh=h/2;
+      group.add(makeOutline([
+        new THREE.Vector3(-hw,hh,0.2),new THREE.Vector3(hw,hh,0.2),
+        new THREE.Vector3(hw,-hh,0.2),new THREE.Vector3(-hw,-hh,0.2),
+      ],borderColor));
+    }
   } else {
     // A textbox always has gray background; unrecognized shapes stay flat.
     clickTarget=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);
@@ -429,9 +449,10 @@ async function initialize() {
     for(let i=0;i<2;i++) {
       const layerData=data.layers[i], layer=targets[i];
       if(!layerData?.available) continue;
+      const rectangles=rectangleSpecs(layerData.objects,toWorldRect);
       for(const item of layerData.objects) {
         if(item.type==='image') drawImage(layer,item);
-        if(item.type==='shape') drawShape(layer,item);
+        if(item.type==='shape') drawShape(layer,item,rectangles);
       }
     }
     collectPictureBounds(data);

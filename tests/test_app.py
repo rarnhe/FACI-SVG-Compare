@@ -151,6 +151,19 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("raycaster.intersectObjects(layer.clickable,false)",viewer)
         self.assertIn("drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ)",viewer)
 
+
+    def test_rectangle_depth_directive_and_ellipse_lifting_are_wired(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        self.assertIn("rectangleHeight(item.text,w,h)",viewer)
+        self.assertIn("ellipseElevation(item,toWorldRect,rectangles)",viewer)
+        self.assertIn("const rectangles=rectangleSpecs(layerData.objects,toWorldRect)",viewer)
+        self.assertIn("depth>0",viewer)
+        self.assertIn("new THREE.PlaneGeometry(w,h)",viewer)
+        with open(STATIC_DIR/"cad_geometry.mjs",encoding="utf-8") as file:
+            helper=file.read()
+        self.assertIn("match[1] === 'x' ? width : height",helper)
+        self.assertIn("pointInsideRotatedRectangle",helper)
+
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())
 
