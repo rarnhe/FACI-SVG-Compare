@@ -13,7 +13,7 @@ import sys
 import time
 import unittest
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.request import urlopen, build_opener, HTTPRedirectHandler, Request
 from urllib.parse import quote
 
 from bokeh.document import Document
@@ -116,6 +116,11 @@ class TestStaticFrontend(unittest.TestCase):
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())
 
+    def test_no_old_model_path_remains_in_viewer(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("柱子.glb", html)
+        self.assertIn("Column.glb", (STATIC_DIR / "__main__.py").read_text(encoding="utf-8"))
+
     def test_glb_is_loaded_only_after_optional_manifest(self):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         self.assertIn("fetch('./model-manifest.json'", html)
@@ -189,7 +194,23 @@ class TestHttpIntegration(unittest.TestCase):
 
     def test_module_entry_prints_url(self):
         self.assertIn("Three.js + Bokeh viewer:", self.startup_log)
-        self.assertIn(f":{self.port}/viewer/index.html", self.startup_log)
+        self.assertIn(f":{self.port}/viewer/index.html?rev={app.BUILD_REVISION}", self.startup_log)
+
+    def test_html_cache_is_disabled(self):
+        with urlopen(self.base + "/viewer/index.html", timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("no-store", response.headers["Cache-Control"])
+            self.assertEqual(response.headers["X-App-Revision"], app.BUILD_REVISION)
+            html = response.read().decode("utf-8")
+            self.assertIn('http-equiv="Cache-Control"', html)
+            self.assertNotIn("柱子.glb", html)
+
+    def test_source_change_invalidates_identity(self):
+        self.assertTrue(app.APP_ID.endswith(app.BUILD_REVISION))
+        self.assertNotIn(":v1", app.APP_ID)
+        with urlopen(self.base + app.IDENTITY_PATH, timeout=5) as response:
+            self.assertEqual(response.read().decode("utf-8"), app.APP_ID)
+
 
     def test_viewer_is_served(self):
         with urlopen(self.base + "/viewer/index.html", timeout=5) as response:
@@ -232,10 +253,24 @@ class TestHttpIntegration(unittest.TestCase):
             urlopen(self.base + "/viewer/__main__.py", timeout=5)
         self.assertEqual(caught.exception.code, 404)
 
-    def test_missing_optional_glb_returns_404(self):
-        with self.assertRaises(HTTPError) as caught:
-            urlopen(self.base + "/viewer/assets/" + quote("柱子.glb"), timeout=5)
-        self.assertEqual(caught.exception.code, 404)
+    def test_legacy_chinese_asset_request_never_returns_404(self):
+        # The browser may still have old HTML in an existing tab.
+        # Suppress redirects to verify the expected 307 response when Column.glb exists.
+        class NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, request, fp, code, msg, headers, newurl):
+                return None
+
+        opener = build_opener(NoRedirect)
+        legacy = self.base + "/viewer/assets/" + quote("柱子.glb")
+        if (STATIC_DIR / "assets" / "Column.glb").is_file():
+            with self.assertRaises(HTTPError) as caught:
+                opener.open(Request(legacy), timeout=5)
+            self.assertEqual(caught.exception.code, 307)
+            self.assertEqual(caught.exception.headers["Location"], "/viewer/assets/Column.glb")
+        else:
+            with opener.open(Request(legacy), timeout=5) as response:
+                self.assertEqual(response.status, 204)
+                self.assertEqual(response.read(), b"")
 
 
 class TestPortConflict(unittest.TestCase):

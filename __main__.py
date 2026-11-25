@@ -5,6 +5,7 @@ Requires: pip install 'bokeh>=3.8,<4'
 """
 
 import errno
+from hashlib import sha256
 from datetime import datetime, timedelta
 from html import escape
 from math import sin
@@ -27,9 +28,42 @@ from tornado.web import RequestHandler, StaticFileHandler
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8080"))
 STATIC_DIR = Path(__file__).resolve().parent
-APP_ID = "OneThreeOctave-SVG-Compare:Bokeh-Three.js:v1"
 IDENTITY_PATH = "/__onethree_identity__"
 COLUMN_MODEL_NAME = "Column.glb"
+# Keep the identity tied to the running source, not just the repository name.
+# A new invocation must not silently reuse a previous Python process serving old HTML.
+BUILD_REVISION = sha256(
+    (STATIC_DIR / "__main__.py").read_bytes()
+    + (STATIC_DIR / "index.html").read_bytes()
+).hexdigest()[:12]
+APP_ID = f"OneThreeOctave-SVG-Compare:Bokeh-Three.js:{BUILD_REVISION}"
+
+
+class NoCacheIndexHandler(StaticFileHandler):
+    """Ensure old HTML containing references to obsolete assets is not reused."""
+
+    def get_cache_time(self, path, modified, mime_type):
+        return 0
+
+    def set_extra_headers(self, path):
+        self.set_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.set_header("Pragma", "no-cache")
+        self.set_header("Expires", "0")
+        self.set_header("X-App-Revision", BUILD_REVISION)
+
+
+class LegacyColumnHandler(RequestHandler):
+    """Handle requests from an already-open, stale viewer without producing a 404."""
+
+    def get(self, _legacy_name):
+        self.set_header("Cache-Control", "no-store")
+        if column_model_available():
+            # Direct old cached GLTFLoader clients to the new, real filename.
+            self.redirect("/viewer/assets/Column.glb", permanent=False, status=307)
+            return
+        # No GLB exists; avoid a server-side 404 while client is migrated.
+        self.set_status(204)
+        self.finish()
 
 
 def column_model_available(asset_dir: Path | None = None) -> bool:
@@ -179,7 +213,8 @@ def make_bokeh_document(doc):
 
 
 def main():
-    url = f"http://{HOST}:{PORT}/viewer/index.html"
+    # An explicit revision in the URL defeats old HTML caches on first launch.
+    url = f"http://{HOST}:{PORT}/viewer/index.html?rev={BUILD_REVISION}"
     try:
         server = Server(
             {"/analysis": Application(FunctionHandler(make_bokeh_document))},
@@ -191,7 +226,8 @@ def main():
                 (r"/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/model-manifest\.json", OptionalModelManifestHandler),
-                (r"/viewer/(index\.html)", StaticFileHandler, {"path": str(STATIC_DIR)}),
+                (r"/viewer/(index\.html)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),
+                (r"/viewer/assets/(柱子\.glb|%E6%9F%B1%E5%AD%90\.glb)", LegacyColumnHandler),
                 (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),
             ],
         )
@@ -208,9 +244,10 @@ def main():
             return
         raise SystemExit(console_message(
             f"端口已被占用 (Port already in use)：{HOST}:{PORT}。"
-            "请结束占用该端口的其他进程或旧实例，或设置 PORT=8081。",
-            f"Port already in use: {HOST}:{PORT}. Close the other service "
-            "or the older app instance, or set PORT=8081.",
+            "可能仍运行旧版服务器。请在旧终端按 Ctrl+C 后重新运行；"
+            "也可以设置 PORT=8081。",
+            f"Port already in use: {HOST}:{PORT}. A previous viewer may still be running. "
+            "Stop the old Python process with Ctrl+C and restart, or set PORT=8081.",
             sys.stderr,
         )) from None
     server.start()
