@@ -43,19 +43,6 @@ class TestPackageLayout(unittest.TestCase):
         self.assertFalse((ROOT / "frontend").exists())
 
 
-class TestOptionalAssets(unittest.TestCase):
-    def test_column_glb_is_optional_and_detected_when_present(self):
-        with TemporaryDirectory() as location:
-            asset_dir = Path(location)
-            self.assertFalse(app.column_model_available(asset_dir))
-            (asset_dir / "Other.glb").write_bytes(b"sample")
-            self.assertFalse(app.column_model_available(asset_dir))
-            (asset_dir / "Column.glb").write_bytes(b"glTF")
-            self.assertTrue(app.column_model_available(asset_dir))
-            (asset_dir / "Column.glb").unlink()
-            self.assertFalse(app.column_model_available(asset_dir))
-
-
 class TestSensorHistory(unittest.TestCase):
     def test_known_sensors_have_24_aligned_samples(self):
         for element_id in SENSORS:
@@ -107,31 +94,34 @@ class TestBokehSelection(unittest.TestCase):
 
 
 class TestStaticFrontend(unittest.TestCase):
-    def test_frontend_links_to_bokeh_and_has_pick_logic(self):
+    def test_new_two_layer_cad_layout_and_svg_panes(self):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        for expected in ('src="/analysis"', "Raycaster", "SELECT_ELEMENT", "BOKEH_READY", "GLTFLoader", "pointerup"):
+        for expected in ('id="fab-stage"', 'id="subfab-stage"', 'id="reset-view"',
+                         'id="psd-reference"', 'id="octave-reference"', 'src="./cad_viewer.js"'):
             with self.subTest(expected=expected):
                 self.assertIn(expected, html)
+        self.assertNotIn("GLTFLoader", html)
+
+    def test_shared_orbit_controls_and_clickable_shapes(self):
+        viewer = (STATIC_DIR / "cad_viewer.js").read_text(encoding="utf-8")
+        for expected in ("OrbitControls", "synchronizeFrom(", "THREE.MOUSE.ROTATE",
+                         "THREE.MOUSE.PAN", "raycaster.intersectObjects",
+                         "fitView()", "item.text || item.name", "cad-layout.json"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, viewer)
+        self.assertNotIn("GLTFLoader", viewer)
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())
 
-    def test_no_old_model_path_remains_in_viewer(self):
+    def test_no_column_or_service_worker_in_viewer(self):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn("柱子.glb", html)
-        self.assertIn("Column.glb", (STATIC_DIR / "__main__.py").read_text(encoding="utf-8"))
+        viewer = (STATIC_DIR / "cad_viewer.js").read_text(encoding="utf-8")
+        server = (STATIC_DIR / "__main__.py").read_text(encoding="utf-8")
+        self.assertNotIn("Column.glb", html + viewer + server)
+        self.assertNotIn("serviceWorker.register(", html + viewer)
+        self.assertNotIn("GLTFLoader", html + viewer)
 
-    def test_glb_is_loaded_only_after_optional_manifest(self):
-        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertIn("fetch('./model-manifest.json'", html)
-        self.assertIn("if (!column?.available)", html)
-        self.assertIn("new GLTFLoader().load(column.url", html)
-        self.assertNotIn("柱子.glb", html)
-
-    def test_no_service_worker_registration_in_html(self):
-        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn("serviceWorker.register(", html)
-        self.assertIn("registration.unregister()", html)
 
 
 class TestHttpIntegration(unittest.TestCase):
@@ -224,16 +214,31 @@ class TestHttpIntegration(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertIn("Bokeh", body)
 
-    def test_model_manifest_matches_local_assets(self):
-        with urlopen(self.base + "/viewer/model-manifest.json", timeout=5) as response:
+    def test_cad_layout_has_two_sheets_and_reference_metadata(self):
+        with urlopen(self.base + "/viewer/cad-layout.json", timeout=5) as response:
             self.assertEqual(response.status, 200)
             self.assertIn("no-store", response.headers["Cache-Control"])
-            manifest = json.load(response)
-        self.assertEqual(
-            manifest["column"]["available"],
-            (STATIC_DIR / "assets" / "Column.glb").is_file(),
-        )
-        self.assertEqual(manifest["column"]["url"], "./assets/Column.glb")
+            data = json.load(response)
+        self.assertEqual([layer["title"] for layer in data["layers"]], ["Fab", "Subfab"])
+        self.assertEqual(set(data["reference_svgs"]), {"psd", "octave"})
+        for key, filename in (("psd", "PSD_base.svg"), ("octave", "OneThreeOctave_base.svg")):
+            self.assertEqual(
+                data["reference_svgs"][key]["available"],
+                (STATIC_DIR / "assets" / filename).is_file(),
+            )
+
+    def test_cad_js_is_served_and_source_xlsx_is_private(self):
+        with urlopen(self.base + "/viewer/cad_viewer.js", timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("OrbitControls", response.read().decode("utf-8"))
+        with self.assertRaises(HTTPError) as failure:
+            urlopen(self.base + "/viewer/assets/private.xlsx", timeout=5)
+        self.assertEqual(failure.exception.code, 404)
+
+    def test_invalid_embedded_image_route_is_safe(self):
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(self.base + "/viewer/cad-image/0/999", timeout=5)
+        self.assertEqual(caught.exception.code, 404)
 
     def test_sw_js_requests_return_204_without_registering(self):
         for path in ("/sw.js", "/viewer/sw.js"):
@@ -246,31 +251,13 @@ class TestHttpIntegration(unittest.TestCase):
     def test_root_asset_file_is_served(self):
         with urlopen(self.base + "/viewer/assets/README.md", timeout=5) as response:
             self.assertEqual(response.status, 200)
-            self.assertIn("GLB", response.read().decode("utf-8"))
+            self.assertIn("XLSX", response.read().decode("utf-8"))
 
     def test_python_source_is_not_exposed_by_static_server(self):
         with self.assertRaises(HTTPError) as caught:
             urlopen(self.base + "/viewer/__main__.py", timeout=5)
         self.assertEqual(caught.exception.code, 404)
 
-    def test_legacy_chinese_asset_request_never_returns_404(self):
-        # The browser may still have old HTML in an existing tab.
-        # Suppress redirects to verify the expected 307 response when Column.glb exists.
-        class NoRedirect(HTTPRedirectHandler):
-            def redirect_request(self, request, fp, code, msg, headers, newurl):
-                return None
-
-        opener = build_opener(NoRedirect)
-        legacy = self.base + "/viewer/assets/" + quote("柱子.glb")
-        if (STATIC_DIR / "assets" / "Column.glb").is_file():
-            with self.assertRaises(HTTPError) as caught:
-                opener.open(Request(legacy), timeout=5)
-            self.assertEqual(caught.exception.code, 307)
-            self.assertEqual(caught.exception.headers["Location"], "/viewer/assets/Column.glb")
-        else:
-            with opener.open(Request(legacy), timeout=5) as response:
-                self.assertEqual(response.status, 204)
-                self.assertEqual(response.read(), b"")
 
 
 class TestPortConflict(unittest.TestCase):

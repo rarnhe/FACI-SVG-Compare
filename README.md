@@ -1,170 +1,79 @@
-# OneThreeOctave-SVG-Compare
+# OneThreeOctave-SVG-Compare · 联动 CAD 双层图纸
 
-1/3 倍频程对比（项目名称）。目前为 **Three.js + Python Bokeh** 三维选点、数据分析联动 Demo。
+由 Python 的 XLSX DrawingML 提取二维图纸和形状，Three.js 展示联动的 **Fab** / **Subfab** 两个平面图层；右侧等宽、纵向显示 PSD 和 1/3 倍频程分析 SVG 底图。Bokeh Python 后端仍可从原来的 `/analysis` 独立访问，**右侧两张静态 SVG 不需要 Bokeh 重绘**。
 
-## 快速运行
+## 启动
 
-安装依赖（在仓库目录运行）：
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-**以仓库目录的父目录为当前工作目录**，通过 Python 模块启动：
-
-```bash
-cd ..
-python -m OneThreeOctave-SVG-Compare
-```
-
-或者，在仓库根目录下直接运行：
-
-```bash
-python __main__.py
-```
-
-注意：`python -m OneThreeOctave-SVG-Compare` 依赖 Python 能从 `sys.path` 找到包含 `__init__.py` 和 `__main__.py` 的同名目录；**如果当前目录正是仓库根目录，应先 `cd ..`**。虽然包名带连字符，不适用于普通 `import` 语句，但 `python -m` 使用的模块查找机制能够加载它。Windows/macOS/Linux 都适用此目录规则。
-
-启动后终端打印 `Three.js + Bokeh viewer: http://127.0.0.1:8080/viewer/index.html`，并自动打开浏览器。设置 `PORT=8081` 可改端口，`NO_BROWSER=1` 可禁用自动打开。
-
-### 重复启动与 Windows WinError 10048
-
-程序监听 `127.0.0.1:8080`，如果该端口已经在使用：
-
-- **同版本程序已在运行：** 通过 `/__onethree_identity__` 核对当前源文件指纹，自动打开现有页面，新进程正常退出。
-- **旧版本程序仍在运行：** 指纹不一致时不再误用旧实例；提示关闭旧终端服务后重新启动。
-- **端口被其他应用占用或旧版程序未提供识别路由：** 输出简明的端口冲突提示，退出码非零，不出现长篇 Traceback，更不会打开其他应用的网页。
-- **需要同时开两个独立服务：** 在第二个终端设置不同的端口，例如 Windows PowerShell 执行 `$env:PORT=8081; python -m OneThreeOctave-SVG-Compare`（在仓库父目录）；CMD 执行 `set PORT=8081 && python -m OneThreeOctave-SVG-Compare`。
-
-默认启动会自动打开浏览器；在 CI/headless 环境设置 `NO_BROWSER=1` 时重复启动也不会打开浏览器。Windows 控制台能编码中文时显示中文提示；遇到 CP1252 等编码不支持中文的情况自动退回英文提示，避免 `UnicodeEncodeError`。
-
-## 目录结构
-
-```text
-OneThreeOctave-SVG-Compare/
-├── __init__.py
-├── __main__.py
-├── index.html
-├── assets/
-│   └── README.md
-├── tests/
-│   ├── __init__.py
-│   ├── run_tests.py
-│   └── test_app.py
-├── .github/workflows/test.yml
-├── requirements.txt
-├── test_report.md
-└── README.md
-```
-
-之前的 `frontend/index.html` 与 `frontend/assets/` 已移到项目根目录。浏览器访问地址保持不变；静态服务器**只暴露** `index.html` 和 `assets/`，不会公开 Python 源码。
-
-## XLSX 作为二维空间输入（A1 原点）
-
-可在 `assets/` 中放入 **一个** `.xlsx` 文件，例如 `assets/luoD.xlsx`。运行 `python -m OneThreeOctave-SVG-Compare` 时，除正常打开 Bokeh/Three.js 页面外，终端会**同步打印**每个 Sheet 的图片与形状的空间坐标。
-
-- `assets/` 中没有 XLSX：提示跳过，正常启动网页。
-- 恰好一个 XLSX：按 Sheet 解析 DrawingML 并输出每个对象的 4 个角、相对宽高及形状颜色，之后自动打开网页。
-- 多个 XLSX：明确报错并停止启动，绝不擅自选择其中一个。自动忽略 Excel 产生的 `~# OneThreeOctave-SVG-Compare
-
-1/3 倍频程对比（项目名称）。目前为 **Three.js + Python Bokeh** 三维选点、数据分析联动 Demo。
-
-## 快速运行
-
-安装依赖（在仓库目录运行）：
+在仓库根目录安装现有依赖：
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-**以仓库目录的父目录为当前工作目录**，通过 Python 模块启动：
+从**仓库父目录**执行：
 
 ```bash
-cd ..
 python -m OneThreeOctave-SVG-Compare
 ```
 
-或者，在仓库根目录下直接运行：
+也可以在仓库根目录运行 `python __main__.py`。
 
-```bash
-python __main__.py
-```
+启动后自动打开 `http://127.0.0.1:8080/viewer/index.html?rev=...`。原有端口占用识别、HTML 禁止缓存、`/sw.js` 空响应和 Bokeh 入口均保留。
 
-注意：`python -m OneThreeOctave-SVG-Compare` 依赖 Python 能从 `sys.path` 找到包含 `__init__.py` 和 `__main__.py` 的同名目录；**如果当前目录正是仓库根目录，应先 `cd ..`**。虽然包名带连字符，不适用于普通 `import` 语句，但 `python -m` 使用的模块查找机制能够加载它。Windows/macOS/Linux 都适用此目录规则。
+## 本地数据文件
 
-启动后终端打印 `Three.js + Bokeh viewer: http://127.0.0.1:8080/viewer/index.html`，并自动打开浏览器。设置 `PORT=8081` 可改端口，`NO_BROWSER=1` 可禁用自动打开。
-
-### 重复启动与 Windows WinError 10048
-
-程序监听 `127.0.0.1:8080`，如果该端口已经在使用：
-
-- **同版本程序已在运行：** 通过 `/__onethree_identity__` 核对当前源文件指纹，自动打开现有页面，新进程正常退出。
-- **旧版本程序仍在运行：** 指纹不一致时不再误用旧实例；提示关闭旧终端服务后重新启动。
-- **端口被其他应用占用或旧版程序未提供识别路由：** 输出简明的端口冲突提示，退出码非零，不出现长篇 Traceback，更不会打开其他应用的网页。
-- **需要同时开两个独立服务：** 在第二个终端设置不同的端口，例如 Windows PowerShell 执行 `$env:PORT=8081; python -m OneThreeOctave-SVG-Compare`（在仓库父目录）；CMD 执行 `set PORT=8081 && python -m OneThreeOctave-SVG-Compare`。
-
-默认启动会自动打开浏览器；在 CI/headless 环境设置 `NO_BROWSER=1` 时重复启动也不会打开浏览器。Windows 控制台能编码中文时显示中文提示；遇到 CP1252 等编码不支持中文的情况自动退回英文提示，避免 `UnicodeEncodeError`。
-
-## 目录结构
+把这些文件放在仓库的 `assets/`（它们没有提交到 GitHub）：
 
 ```text
 OneThreeOctave-SVG-Compare/
-├── __init__.py
 ├── __main__.py
+├── xlsx_spatial.py
+├── cad_service.py
+├── cad_viewer.js
 ├── index.html
-├── assets/
-│   └── README.md
-├── tests/
-│   ├── __init__.py
-│   ├── run_tests.py
-│   └── test_app.py
-├── .github/workflows/test.yml
-├── requirements.txt
-├── test_report.md
-└── README.md
+└── assets/
+    ├── luoD.xlsx                 # 恰好一个 xlsx，sheet1=Fab、sheet2=Subfab
+    ├── PSD_base.svg              # 右侧上图
+    └── OneThreeOctave_base.svg   # 右侧下图
 ```
 
-之前的 `frontend/index.html` 与 `frontend/assets/` 已移到项目根目录。浏览器访问地址保持不变；静态服务器**只暴露** `index.html` 和 `assets/`，不会公开 Python 源码。
+- 0 个 XLSX：提示并保留空白 CAD 画布与 SVG 参考区。
+- 1 个 XLSX：解析每个 Sheet 的 DrawingML，启动时向终端输出相对 A1 的对象四角坐标、颜色、旋转等信息；左侧用其前两个 Sheet 构建互动视图。
+- 多于 1 个 XLSX：停止启动并提示，忽略 Excel `~$` 临时文件及点号隐藏文件。
+- 缺少 SVG：只展示对应名称的占位信息，不会请求不存在的资源。
+- 仅当 XLSX 图片实际存在且格式受支持时，才按需读取 PNG/JPEG/WebP/GIF/BMP 图片。EMF/WMF 等格式不由浏览器渲染。
 
- 临时文件、点号隐藏文件。
-- 图片、矩形、文本框、连接线及分组外框支持 `twoCellAnchor`、`oneCellAnchor`、`absoluteAnchor`。已计算锚点自身的行列偏移、逐列宽、逐行高；存在旋转时将旋转应用到四角。
-- 输出原点是 **A1 左上角**：`X` 向右增加，`Y` 向下增加；坐标单位为 **96 DPI 参考 px**，并在 `xlsx_spatial.parse_xlsx(...)` 结果中保留精确的 `bounds_emu` 供后续工程空间映射（1px=9525 EMU、1mm=360000 EMU）。
-- 注意：**Excel 列宽是字体相关的字符宽度**，解析器以常见 Calibri 11（MDW=7px）换算参考像素，若文件采用不同默认字体，X 方向像素仍需相应校准。曲线/任意多边形的真实轮廓顶点并不等于其绘图对象的四角；此处的“四角”指绘图对象外框（含旋转），不对任意自由曲线进行离散化。
-- 不依赖 openpyxl 去读取图形（避免它丢弃 DrawingML 形状），而是直接使用 Python 标准库读取 XLSX/ZIP/XML。
+注意：**无须再放 `Column.glb`**。代码已删除 GLB 依赖，用户本地旧文件可自行保留或清理，不再读取它。
 
-示例输出（数值为测试数据，不是 `luoD.xlsx` 的实际坐标）：
+## 左侧 CAD 交互
 
-```text
-Three.js + Bokeh viewer: http://127.0.0.1:8080/viewer/index.html?rev=...
-[XLSX] 读取: .../assets/luoD.xlsx
-[Sheet: Sheet1] 图片 1，形状 2
-  IMAGE: 图片12  宽=140.000px 高=28.000px
-    左上: (85.000, 42.000) px
-    右上: (225.000, 42.000) px
-    右下: (225.000, 70.000) px
-    左下: (85.000, 70.000) px
-```
+- 上半区：Fab，来自 XLSX 第一个 Sheet 的内嵌图片与形状；下半区：Subfab，来自第二个 Sheet。
+- 两个 Three.js 画布共用观察目标、相机方向和缩放比例，任意一层的操作同步到另一层。
+- **滚轮：** 放大缩小；**右键拖动：** 平移；**左键拖动：** 旋转；**单击色块：** 选中并显示对应形状名称、文字。
+- 左上角有鼠标操作说明，独立 **↺** 按钮同时将两层恢复为正对图纸的俯视视角及初始缩放。
+- 形状覆盖层的坐标、尺寸、旋转、背景颜色、轮廓颜色、文字和文字颜色均源自 XLSX DrawingML；不再通过人工硬编码图形位置。
+- 所有 Sheet 共用 A1 左上角为零点的 **X 向右 / Y 向下** 坐标体系，屏幕渲染将 Excel Y 轴映射到 Three.js 的负 Y 方向。
 
-目前这些数据在 Python 中解析并显示在终端，**并未改变现有 Three.js 三维模型的绘制**；后续可将 `parse_xlsx()` 输出用作模型对象映射或 SVG 平面坐标输入。
+## 右侧 SVG 参考图区
 
-## 功能
+上部显示 `PSD_base.svg`，下部显示 `OneThreeOctave_base.svg`，通过等宽、各占一半可用高度的容器展示。保持 SVG 本身宽高比例（`object-fit:contain`）；纵向空间被两区域占满，图像不会强制拉伸变形。
 
-- Three.js 展示可选演示柱体 C001 / C002 / C003，可旋转、缩放、平移。
-- 点击构件后通过 `postMessage` 通知 Bokeh iframe，`ColumnDataSource` 更新 Python 后端图表，不需要刷新页面。
-- 在 `__main__.py` 的 `SENSORS` / `query_sensor_history` 中用真实数据替换演示数据。
-- 可将真实模型 `Column.glb` 放入根目录 `assets/`；前端先请求 `/viewer/model-manifest.json` 查询是否存在，存在才调用 GLTFLoader，缺失时仅显示演示柱体，不产生 GLB 404。模型 Mesh 仍需包含与数据库一致的名称或 `elementId`。
-- 页面 `index.html` 禁用浏览器 HTTP 缓存，并在启动 URL 附加源文件指纹。若旧标签页继续请求历史 `柱子.glb`，后端在 `Column.glb` 存在时返回 307 重定向到新模型；如果不存在则返回 204，避免旧路径的 404。该兼容路由不代表旧页面已更新，建议关闭旧标签页。
-- 目前提供的是演示地板几何体，未包含原始 Fab / Subfab SVG 图纸。Three.js 目前通过 CDN 加载，初次使用仍需网络。
-- 不使用也不注册 Service Worker。服务器对旧页面或浏览器发出的 `/sw.js`（以及 `/viewer/sw.js`）请求返回 `204 No Content`，避免无用的 404 日志；页面只清理已存在的根路径 `/sw.js` 旧注册，不影响其他 Service Worker。若浏览器扩展仍主动注册 Service Worker，须在开发者工具 Network 的 Initiator 中排查。
+## 工程坐标和边界
 
-## 双轨测试
+`xlsx_spatial.parse_xlsx()` 输出每个对象的 `bounds_emu`、`width_px`、`height_px`、`rotation_degrees`、`vertices_px` 及 `colors`（形状还会给出 `text`）。图片由 `image_part` 指向 Excel ZIP 内的媒体对象。
 
-本地与 GitHub Actions 使用同一组标准库 `unittest`：
+1px=9525 EMU，参考 px 基于 96 DPI；Excel 列宽受默认字体指标影响，当前采用常见 MDW=7 的换算方式，**若要与其他 CAD 坐标系精确对齐，需确认工作簿默认字体**。矩形四角代表绘图对象的外框，而不是自由曲线、多边形内部每个路径顶点。
+
+原始 XLSX 不由 HTTP 静态服务器暴露；浏览器只请求 `/viewer/cad-layout.json` 的必要布局字段及 `/viewer/cad-image/<sheet>/<object>` 的合法图片数据。
+
+## 双轨验证
+
+本地与 GitHub Actions 共用一套标准库 unittest：
 
 ```bash
 python tests/run_tests.py
 ```
 
-测试包括 **XLSX 图形顶点、颜色、行列尺寸、多个 XLSX 报错与启动同步输出**、**Python -m 启动**、不同源码版本的实例识别、HTML 缓存禁止、旧 GLB 路径兼容、重复启动检测、端口占用、可选 Column.glb 文件检测、无效 SW 请求处理、静态路由、Bokeh 回调、HTTP 页面、数据联动约定和源码不可公开访问。根目录的 `test_report.md` 总会在执行后生成（失败也会记录），GitHub Actions 会上传测试报告；在推送 `main` 时还会回写报告，报告-only 提交不会引起 CI 循环。
+测试涵盖 XLSX 唯一文件、图片媒体引用、可点击形状文字、行列/EMU/旋转、CAD JSON 及图片读取、两层 HTML/JS 联动约定、资源缺失降级、旧 Bokeh 后端和 HTTP 安全路由。GitHub Actions 在 Ubuntu/Python 3.12 和 Windows/Python 3.14 下测试，并额外检查 CAD JavaScript 模块语法。失败时也生成 `test_report.md` 并上传产物；仅 main 推送时自动写回仓库，避免 CI 无限触发。
 
-浏览器 WebGL 视觉效果仍需要人工验证。
+**用户的实际 `luoD.xlsx`、`PSD_base.svg` 和 `OneThreeOctave_base.svg` 没有提供给 CI**，因此 GitHub Actions 使用合成 XLSX Fixture 验证逻辑，真实图纸排版/交互仍需 Windows 浏览器视觉测试。

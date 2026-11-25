@@ -64,9 +64,14 @@ def absolute(child=None):
 
 
 def fixture(path: Path, anchors: str | None = None, worksheet_xml: str | None = None,
-            draw: bool = True) -> Path:
+            draw: bool = True, media: bool = False) -> Path:
     if anchors is None:
         anchors = two_cell() + one_cell() + absolute()
+    if media:
+        anchors = anchors.replace(
+            "<xdr:blipFill/>",
+            '<xdr:blipFill><a:blip r:embed="rId3"/></xdr:blipFill>',
+        )
     if worksheet_xml is None:
         worksheet_xml = ('<sheetFormatPr defaultRowHeight="15" defaultColWidth="8.43"/>'
                          '<cols><col min="1" max="1" width="10"/>'
@@ -88,7 +93,13 @@ def fixture(path: Path, anchors: str | None = None, worksheet_xml: str | None = 
                        f'<Relationships xmlns="{P}"><Relationship Id="rId2" '
                        f'Type="{REL}/drawing" Target="../drawings/drawing1.xml"/></Relationships>')
             z.writestr("xl/drawings/drawing1.xml",
-                       f'<xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}">{anchors}</xdr:wsDr>')
+                       f'<xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{R}">'
+                       f'{anchors}</xdr:wsDr>')
+        if media:
+            z.writestr("xl/drawings/_rels/drawing1.xml.rels",
+                       f'<Relationships xmlns="{P}"><Relationship Id="rId3" '
+                       f'Type="{REL}/image" Target="../media/image1.png"/></Relationships>')
+            z.writestr("xl/media/image1.png", b"\x89PNG\r\n\x1a\nfixture")
         z.writestr("xl/theme/theme1.xml",
                    f'<a:theme xmlns:a="{A}"><a:themeElements><a:clrScheme name="Office">'
                    '<a:accent1><a:srgbClr val="5B9BD5"/></a:accent1>'
@@ -194,6 +205,20 @@ class TestGeometry(unittest.TestCase):
                      "矩形14", "#5B9BD5"):
             with self.subTest(item=item):
                 self.assertIn(item, output)
+
+
+    def test_shape_text_is_kept(self):
+        rich_shape = shape(name="文本标注").replace(
+            "</a:r></a:p>", "<a:t>压差 A-01</a:t></a:r></a:p>"
+        )
+        item = self.parse(one_cell(rich_shape))[0]["objects"][0]
+        self.assertEqual(item["text"], "压差 A-01")
+
+    def test_media_relationship_is_resolved(self):
+        with TemporaryDirectory() as tmp:
+            path = fixture(Path(tmp) / "with-media.xlsx", media=True)
+            sheets = spatial.parse_xlsx(path)
+        self.assertEqual(sheets[0]["objects"][0]["image_part"], "xl/media/image1.png")
 
     def test_invalid_relationship_escape_is_rejected(self):
         with self.assertRaises(spatial.SpatialXlsxError):

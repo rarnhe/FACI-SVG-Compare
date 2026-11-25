@@ -30,22 +30,25 @@ if __package__:
     from .xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
     )
+    from .cad_service import build_cad_manifest, extract_embedded_image
 else:
     from xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
     )
+    from cad_service import build_cad_manifest, extract_embedded_image
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8080"))
 STATIC_DIR = Path(__file__).resolve().parent
 IDENTITY_PATH = "/__onethree_identity__"
-COLUMN_MODEL_NAME = "Column.glb"
 # Keep the identity tied to the running source, not just the repository name.
 # A new invocation must not silently reuse a previous Python process serving old HTML.
 BUILD_REVISION = sha256(
     (STATIC_DIR / "__main__.py").read_bytes()
     + (STATIC_DIR / "index.html").read_bytes()
     + (STATIC_DIR / "xlsx_spatial.py").read_bytes()
+    + (STATIC_DIR / "cad_service.py").read_bytes()
+    + (STATIC_DIR / "cad_viewer.js").read_bytes()
 ).hexdigest()[:12]
 APP_ID = f"OneThreeOctave-SVG-Compare:Bokeh-Three.js:{BUILD_REVISION}"
 
@@ -63,37 +66,43 @@ class NoCacheIndexHandler(StaticFileHandler):
         self.set_header("X-App-Revision", BUILD_REVISION)
 
 
-class LegacyColumnHandler(RequestHandler):
-    """Handle requests from an already-open, stale viewer without producing a 404."""
+class CadManifestHandler(RequestHandler):
+    """Serve a read-only JSON manifest for two linked XLSX sheets."""
 
-    def get(self, _legacy_name):
-        self.set_header("Cache-Control", "no-store")
-        if column_model_available():
-            # Direct old cached GLTFLoader clients to the new, real filename.
-            self.redirect("/viewer/assets/Column.glb", permanent=False, status=307)
-            return
-        # No GLB exists; avoid a server-side 404 while client is migrated.
-        self.set_status(204)
-        self.finish()
-
-
-def column_model_available(asset_dir: Path | None = None) -> bool:
-    """Check the real local asset directory without downloading a missing GLB."""
-    directory = asset_dir if asset_dir is not None else STATIC_DIR / "assets"
-    return (directory / COLUMN_MODEL_NAME).is_file()
-
-
-class OptionalModelManifestHandler(RequestHandler):
-    """Tell the viewer which optional models exist; refreshes after assets change."""
+    def initialize(self, state):
+        self.state = state
 
     def get(self):
         self.set_header("Cache-Control", "no-store")
-        self.write({
-            "column": {
-                "available": column_model_available(),
-                "url": "./assets/Column.glb",
-            }
-        })
+        self.write(self.state["manifest"])
+
+
+class CadImageHandler(RequestHandler):
+    """Read only XLSX-embedded drawing images identified in the parsed sheet."""
+
+    def initialize(self, state):
+        self.state = state
+
+    def get(self, layer, image_index):
+        try:
+            data, content_type = extract_embedded_image(
+                self.state["workbook"], self.state["sheets"],
+                int(layer), int(image_index),
+            )
+        except (ValueError, KeyError, FileNotFoundError, OSError):
+            self.send_error(404)
+            return
+        self.set_header("Content-Type", content_type)
+        self.set_header("Cache-Control", "no-store")
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.write(data)
+
+
+class PrivateWorkbookHandler(RequestHandler):
+    """The source Excel workbook is local input data, never public static media."""
+
+    def get(self, _filename):
+        self.send_error(404)
 
 
 class NoServiceWorkerHandler(RequestHandler):
@@ -242,6 +251,12 @@ def main():
     except (SpatialXlsxError, OSError) as error:
         raise SystemExit(f"[XLSX ERROR] {error}") from None
 
+    cad_state = {
+        "workbook": workbook,
+        "sheets": spatial_sheets,
+        "manifest": build_cad_manifest(workbook, spatial_sheets, STATIC_DIR / "assets"),
+    }
+
     # An explicit revision in the URL defeats old HTML caches on first launch.
     url = f"http://{HOST}:{PORT}/viewer/index.html?rev={BUILD_REVISION}"
     try:
@@ -254,9 +269,10 @@ def main():
                 (r"/__onethree_identity__", ApplicationIdentityHandler),
                 (r"/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/sw\.js", NoServiceWorkerHandler),
-                (r"/viewer/model-manifest\.json", OptionalModelManifestHandler),
-                (r"/viewer/(index\.html)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),
-                (r"/viewer/assets/(柱子\.glb|%E6%9F%B1%E5%AD%90\.glb)", LegacyColumnHandler),
+                (r"/viewer/cad-layout\.json", CadManifestHandler, {"state": cad_state}),
+                (r"/viewer/cad-image/([0-9]+)/([0-9]+)", CadImageHandler, {"state": cad_state}),
+                (r"/viewer/(index\.html|cad_viewer\.js)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),
+                (r"/viewer/assets/((?i:.*\.xlsx))", PrivateWorkbookHandler),
                 (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),
             ],
         )

@@ -287,8 +287,26 @@ def vertices_from_rect(rect: tuple[int, int, int, int], angle: float) -> list[di
     return result
 
 
+def shape_text(node: ET.Element) -> str:
+    """Read visible shape text, preserving separate DrawingML paragraphs."""
+    tx_body = first_child(node, "txBody")
+    if tx_body is None:
+        return ""
+    paragraphs = []
+    for paragraph in tx_body:
+        if local_name(paragraph.tag) != "p":
+            continue
+        parts = [part.text or "" for part in paragraph.iter() if local_name(part.tag) == "t"]
+        line = "".join(parts).strip()
+        if line:
+            paragraphs.append(line)
+    return "\n".join(paragraphs)
+
+
 def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, str],
-                    fills: list[ET.Element], lines: list[ET.Element]) -> list[dict]:
+                    fills: list[ET.Element], lines: list[ET.Element],
+                    drawing_rels: dict[str, tuple[str, str]] | None = None,
+                    drawing_part: str = "", members: set[str] | None = None) -> list[dict]:
     objects = []
     for anchor in root:
         if local_name(anchor.tag) not in {"oneCellAnchor", "twoCellAnchor", "absoluteAnchor"}:
@@ -312,7 +330,22 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
                 "rotation_degrees": angle,
                 "vertices_px": vertices_from_rect(rect, angle),
             }
+            if kind == "image":
+                blip = find_descendant(element, "blip")
+                embed_id = None if blip is None else next(
+                    (value for key, value in blip.attrib.items() if local_name(key) == "embed"),
+                    None,
+                )
+                rel = (drawing_rels or {}).get(embed_id or "")
+                if rel is not None and rel[0].endswith("/image"):
+                    try:
+                        image_part = resolve_part(drawing_part, rel[1])
+                    except SpatialXlsxError:
+                        image_part = None
+                    if image_part is not None and (members is None or image_part in members):
+                        obj["image_part"] = image_part
             if kind == "shape":
+                obj["text"] = shape_text(element)
                 props = first_child(element, "spPr")
                 if props is None:
                     props = first_child(element, "grpSpPr")
@@ -352,8 +385,13 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                 for rel_type, target in relationships(z, sheet_part).values():
                     if not rel_type.endswith("/drawing"):
                         continue
-                    drawing = ET.fromstring(z.read(resolve_part(sheet_part, target)))
-                    objects.extend(drawing_objects(drawing, metrics, palette, fills, lines))
+                    drawing_part = resolve_part(sheet_part, target)
+                    drawing = ET.fromstring(z.read(drawing_part))
+                    objects.extend(drawing_objects(
+                        drawing, metrics, palette, fills, lines,
+                        drawing_rels=relationships(z, drawing_part),
+                        drawing_part=drawing_part, members=set(z.namelist()),
+                    ))
                 sheets.append({"sheet": name, "objects": objects})
             return sheets
     except (BadZipFile, KeyError, ET.ParseError) as error:
