@@ -12,7 +12,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
 app = import_module(f"{ROOT.name}.__main__")
-fixture = import_module(f"{ROOT.name}.tests.test_xlsx_spatial").fixture
+shapes = import_module(f"{ROOT.name}.tests.test_xlsx_spatial")
+fixture = shapes.fixture
 
 
 class TestStartupWithXlsx(TestCase):
@@ -32,10 +33,11 @@ class TestStartupWithXlsx(TestCase):
         with TemporaryDirectory() as tmp:
             assets = Path(tmp) / "assets"
             assets.mkdir()
-            fixture(assets / "luoD.xlsx",sheet_count=2)
+            fixture(assets / "luoD.xlsx", sheet_count=2,
+                    anchors=shapes.two_cell()+shapes.one_cell(shapes.shape()))
             report = self.run_entrypoint(assets)
         self.assertIn("Three.js + Bokeh viewer:", report)
-        self.assertIn("[Sheet: Sheet1] 图片 1，形状 2", report)
+        self.assertIn("[Sheet: Sheet1] 图片 1，形状 1", report)
         self.assertIn("左上: (85.000, 42.000)", report)
         self.assertIn("矩形14", report)
 
