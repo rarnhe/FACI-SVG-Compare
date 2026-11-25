@@ -325,22 +325,14 @@ function applySvgSplitRatio() {
     'minmax(0,'+ratio+'fr) 8px minmax(0,'+(1-ratio)+'fr)';
 }
 
-function refreshEqualSvgWidth() {
-  const first=document.getElementById('psd-frame');
-  const second=document.getElementById('octave-frame');
-  const w=Math.max(0,Math.min(first.clientWidth,second.clientWidth));
-  let commonWidth=w;
-  for(const [key,frame] of [['psd',first],['octave',second]]) {
-    const image=referenceImages.get(key);
-    if(!image) continue;
-    commonWidth=Math.min(commonWidth,Math.max(0,frame.clientHeight)/(image.ratio));
-  }
-  // A shared intrinsic display width; images do not stretch or change aspect.
-  for(const [key] of [['psd'],['octave']]) {
-    const entry=referenceImages.get(key);
-    if(!entry) continue;
-    entry.element.style.width=commonWidth+'px';
-    entry.element.style.height=(commonWidth*entry.ratio)+'px';
+function fitSvgHeightToPane() {
+  // Each SVG fills its OWN pane height. Its width follows the intrinsic ratio
+  // independently of the other SVG; horizontal scrolling handles overflow.
+  for(const [key,entry] of referenceImages) {
+    const frame=document.getElementById(key+'-frame');
+    const height=Math.max(0,frame.clientHeight);
+    entry.element.style.height=height+'px';
+    entry.element.style.width=(height/entry.ratio)+'px';
   }
 }
 
@@ -358,7 +350,7 @@ function referenceImage(key,info) {
       rightSplitRatio=r1/(r1+r2);
       applySvgSplitRatio();
     }
-    refreshEqualSvgWidth();
+    fitSvgHeightToPane();
   };
   image.onerror=()=>{placeholder.textContent='SVG 资源加载失败';};
   image.src=info.url;
@@ -405,7 +397,7 @@ installSplitter('main-splitter','vertical',event=>{
   const left=Math.max(240,Math.min(bounds.width-248,event.clientX-bounds.left));
   layout.style.gridTemplateColumns='minmax(0,'+left+'px) 8px minmax(0,1fr)';
   resizeCadLayers();
-  refreshEqualSvgWidth();
+  fitSvgHeightToPane();
 });
 
 installSplitter('reference-splitter','horizontal',event=>{
@@ -415,14 +407,14 @@ installSplitter('reference-splitter','horizontal',event=>{
   rightSplitRatio=Math.min(0.95,Math.max(0.05,(event.clientY-bounds.top)/usable));
   rightSplitChangedByUser=true;
   applySvgSplitRatio();
-  refreshEqualSvgWidth();
+  fitSvgHeightToPane();
 });
 
 const fab=createLayer('fab-stage');
 const subfab=createLayer('subfab-stage');
 document.getElementById('reset-view').addEventListener('click',resetTopView);
 new ResizeObserver(()=>resizeCadLayers()).observe(document.getElementById('cad-layers'));
-new ResizeObserver(()=>refreshEqualSvgWidth()).observe(document.getElementById('reference-frames'));
+new ResizeObserver(()=>fitSvgHeightToPane()).observe(document.getElementById('reference-frames'));
 for(const layer of layers) {
   new ResizeObserver(()=>resizeCadLayers()).observe(layer.stage);
 }

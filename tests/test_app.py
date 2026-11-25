@@ -127,7 +127,29 @@ class TestStaticFrontend(unittest.TestCase):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
         self.assertIn("zoom intentionally untouched",viewer)
         self.assertIn("selectedInfo.textContent=(mesh.userData.cadObject.text||'').trim()",viewer)
-        self.assertIn("commonWidth*entry.ratio",viewer)
+        self.assertIn("entry.element.style.height=height+'px'",viewer)
+        self.assertIn("entry.element.style.width=(height/entry.ratio)+'px'",viewer)
+        self.assertIn("fitSvgHeightToPane()",viewer)
+        self.assertNotIn("refreshEqualSvgWidth",viewer)
+        self.assertNotIn("commonWidth",viewer)
+        self.assertIn("overflow-x:auto",html)
+        self.assertIn("flex:0 0 auto",html)
+
+
+    def test_drawing_strategies_use_actual_meshes_and_raycaster(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        strategies={
+            "textbox": ("kind==='textbox' ? 0x828b96", "new THREE.PlaneGeometry(w,h)"),
+            "ellipse": ("kind==='ellipse'", "new THREE.CircleGeometry(radius,72)"),
+            "rectangle": ("kind==='rectangle'", "new THREE.BoxGeometry(w,h,depth)"),
+        }
+        for shape, snippets in strategies.items():
+            with self.subTest(shape=shape):
+                for snippet in snippets:
+                    self.assertIn(snippet,viewer)
+        self.assertIn("layer.clickable.push(clickTarget)",viewer)
+        self.assertIn("raycaster.intersectObjects(layer.clickable,false)",viewer)
+        self.assertIn("drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ)",viewer)
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())

@@ -26,8 +26,8 @@ html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#0d1b29}
 .cad-layer canvas{display:block;position:absolute;inset:0;width:100%;height:100%;}
 #reference-pane{min-width:0;min-height:0;background:#fff;overflow:hidden;}
 #reference-frames{display:grid;grid-template-rows:minmax(0,1fr) 8px minmax(0,1fr);height:100%;width:100%;}
-.reference-frame{min-height:0;min-width:0;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#fff;}
-.reference-frame img{display:none;width:auto;height:auto;object-fit:contain;max-width:none;max-height:none;}
+.reference-frame{min-height:0;min-width:0;position:relative;overflow-x:auto;overflow-y:hidden;display:flex;align-items:center;justify-content:flex-start;background:#fff;}
+.reference-frame img{display:none;flex:0 0 auto;width:auto;height:100%;object-fit:contain;max-width:none;max-height:none;}
 .reference-placeholder{padding:15px;color:#8293a4;font-size:12px;text-align:center;}
 .splitter{z-index:7;touch-action:none;user-select:none;position:relative;
   display:flex;align-items:center;justify-content:center;background:#c4d1da;}
