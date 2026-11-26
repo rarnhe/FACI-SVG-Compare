@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "XLSX per-run DrawingML font-point extraction; same-size Fab controls and 8px fixed CAD divider; 1:1 aligned reference split; transparent SVG overlays and paint-derived legend; deduplicated selection, right-click per-entry close; existing Bokeh/MIME/security and CAD geometry regressions.",
+        "Removed XLSX font-point parsing; textbox/rectangle/ellipse hover breadcrumbs without workbook or sheet; 17-color SVG palette, pair file persistence of color/width/dash, 4-tier legend menu and removal; independent width/height constrained SVG pane fit; dual Python HTTP and Node UI regression.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

@@ -344,58 +344,6 @@ def shape_text(node: ET.Element) -> str:
     return "\n".join(paragraphs)
 
 
-def shape_text_layout(node: ET.Element) -> list[dict]:
-    """Preserve per-run DrawingML font sizes in points (a:rPr/@sz is 1/100pt).
-
-    Prioritize run properties, then paragraph defaults and the text-body
-    list-style default. Fallback to Excel's usual 11 pt only when unspecified.
-    Geometry consumers use the same reference-pixel scale as the XLSX image.
-    """
-    body = first_child(node, "txBody")
-    if body is None:
-        return []
-    style = first_child(body, "lstStyle")
-    default_p = first_child(style, "defPPr")
-    body_default = first_child(default_p, "defRPr")
-
-    def pt(*properties: ET.Element | None) -> float:
-        for prop in properties:
-            if prop is not None and prop.get("sz"):
-                try:
-                    value = int(prop.get("sz", "0")) / 100
-                except ValueError:
-                    continue
-                if 0 < value <= 500:
-                    return value
-        return 11.0
-
-    lines = []
-    for paragraph in body:
-        if local_name(paragraph.tag) != "p":
-            continue
-        paragraph_props = first_child(paragraph, "pPr")
-        paragraph_default = first_child(paragraph_props, "defRPr")
-        end_props = first_child(paragraph, "endParaRPr")
-        runs = []
-        for child in paragraph:
-            if local_name(child.tag) not in ("r", "fld"):
-                continue
-            text = first_child(child, "t")
-            if text is None or not text.text:
-                continue
-            properties = first_child(child, "rPr")
-            font_size = pt(properties, paragraph_default, body_default, end_props)
-            runs.append({"text": text.text, "font_pt": font_size})
-        if not runs:
-            # A paragraph without explicit runs can still have an end style.
-            value = "".join(p.text or "" for p in paragraph.iter() if local_name(p.tag) == "t")
-            if value:
-                runs = [{"text": value, "font_pt": pt(paragraph_default, end_props, body_default)}]
-        if runs:
-            lines.append({"runs": runs})
-    return lines
-
-
 def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, str],
                     fills: list[ET.Element], lines: list[ET.Element],
                     drawing_rels: dict[str, tuple[str, str]] | None = None,
@@ -440,7 +388,6 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
             if kind == "shape":
                 obj["shape_kind"] = shape_kind(element) if tag == "sp" else "other"
                 obj["text"] = shape_text(element)
-                obj["text_layout"] = shape_text_layout(element)
                 obj["alt_text"] = shape_alternative_text(element)
                 props = first_child(element, "spPr")
                 if props is None:

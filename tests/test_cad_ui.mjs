@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   INITIAL_REFERENCE_SPLIT, shapeLabel, selectOnButton,
-  containsShape, shapeAncestors, selectionPath, fitSvgPair,
+  containsShape, shapeAncestors, selectionParts, fitSvgPair, fitSvgPane,
   clampMainDivider, clampReferenceSplit, pictureLayerScales,
-  requiredSvgRatio,svgPaintColors,legendForeground,legendPaint,canAddOverlay,
+  requiredSvgRatio,canAddOverlay,SVG_COLORS,SVG_LINE_WIDTHS,SVG_LINE_TYPES,
+  nextLegendColor,
 } from '../cad_ui.mjs';
 
 const shape=(kind,x,y,width,height,text,rotation=0)=>({
@@ -23,25 +24,23 @@ test('operation menu selection: textbox never, ellipse right only, other shapes 
   assert.equal(selectOnButton({type:'image'},0),false);
 });
 
-test('Fab selection breadcrumb uses workbook stem, exact sheet, parent textbox and child text',()=>{
-  const body=shape('textbox',0,0,200,160,'BODYv2');
-  const child=shape('rectangle',40,-35,70,55,'B1_x0.2');
-  const peer=shape('rectangle',140,-35,35,40,'B2_x0.1');
-  const items=[body,child,peer];
-  assert.deepEqual(shapeAncestors(items,child,toRect),[body]);
-  assert.equal(selectionPath('luoD.xlsx','FAB',items,child,toRect),
-               'luoD·FAB·BODYv2·B1_x0.2');
-  assert.equal(selectionPath('la.xlsx','Subfab',items,peer,toRect),
-               'la·Subfab·BODYv2·B2_x0.1');
-});
-
-test('multiple ancestor levels are ordered outermost to innermost',()=>{
+test('hover breadcrumb excludes workbook and sheet and bolds textbox',()=>{
   const body=shape('textbox',0,0,300,300,'BODYv2');
-  const area=shape('rectangle',30,-30,200,200,'Floor_A_x0.2');
-  const dot=shape('ellipse',80,-80,10,10,'Sensor');
-  assert.deepEqual(shapeAncestors([body,dot,area],dot,toRect),[body,area]);
-  assert.equal(selectionPath('A.XLSX','Sheet2',[body,dot,area],dot,toRect),
-               'A·Sheet2·BODYv2·Floor_A_x0.2·Sensor');
+  const rectangle=shape('rectangle',30,-30,200,200,'20260704_SCN_B1');
+  const dot=shape('ellipse',80,-80,10,10,'测点名称');
+  const parts=selectionParts([body,rectangle,dot],dot,toRect);
+  assert.deepEqual(parts,[
+    {kind:'textbox',text:'BODYv2'},
+    {kind:'rectangle',text:'20260704_SCN_B1'},
+    {kind:'ellipse',text:'测点名称'},
+  ]);
+  assert.equal(parts.map(p=>p.text).join('·'),'BODYv2·20260704_SCN_B1·测点名称');
+  assert.deepEqual(selectionParts([body,rectangle,dot],body,toRect),
+    [{kind:'textbox',text:'BODYv2'}]);
+  assert.deepEqual(selectionParts([body,rectangle,dot],rectangle,toRect),[
+    {kind:'textbox',text:'BODYv2'},
+    {kind:'rectangle',text:'20260704_SCN_B1'},
+  ]);
 });
 
 test('no sibling, unrelated, ellipse parent, or equal-size duplicate enters the hierarchy',()=>{
@@ -137,15 +136,14 @@ test('divider clamps stop before any displayed SVG would need horizontal scrolli
 });
 
 
-test('transparent SVG paint extraction uses explicit shapes and never invents white',()=>{
-  assert.deepEqual(svgPaintColors('<svg><path stroke="#FF5733" fill="none"/></svg>'),['#FF5733']);
-  const two='<svg><style>.a{fill:#0066cc;stroke:#00bbaa}</style>'+
-    '<path class="a" fill="none" stroke="transparent"/></svg>';
-  assert.deepEqual(svgPaintColors(two),['#0066cc','#00bbaa']);
-  assert.deepEqual(svgPaintColors('<svg><path fill="url(#grad)" stroke="none"/></svg>'),[]);
-  assert.equal(legendForeground(['#ffffff','#FF5733']),'#FF5733');
-  assert.equal(legendPaint(['#ff0000']),'#ff0000');
-  assert.match(legendPaint(['#ff0000','#0000ff']),/linear-gradient/);
+test('all seventeen palette colors are unique, including rollover',()=>{
+  assert.equal(SVG_COLORS.length,17);
+  assert.equal(new Set(SVG_COLORS).size,17);
+  assert.equal(nextLegendColor(0),'#4F99CF');
+  assert.equal(nextLegendColor(1),'#E41A1C');
+  assert.equal(nextLegendColor(17),'#4F99CF');
+  assert.deepEqual(SVG_LINE_WIDTHS,['0.75','1.5','2.25','3','3.75']);
+  assert.deepEqual(SVG_LINE_TYPES,['-·','--']);
 });
 
 test('legend deduplicates before SVG loads and also during pending loads',()=>{
@@ -160,10 +158,19 @@ test('legend deduplicates before SVG loads and also during pending loads',()=>{
   assert.equal(canAddOverlay(active,pending,'B1_20260704101627_+X'),true);
 });
 
-test('oversize overlays influence fit without changing the base image ratio',()=>{
+test('each SVG pane maximizes width or height independently without overflow',()=>{
   assert.equal(requiredSvgRatio(0.4,[0.5,0.3]),0.5);
   assert.equal(requiredSvgRatio(0.4,[0.8,0.3]),0.8);
-  const fit=fitSvgPair({width:800,height:250},{width:800,height:250},0.8,0.7);
-  assert.ok(fit.heightA<=250 && fit.heightB<=250);
-  assert.ok(fit.width>0);
+  const a=fitSvgPane(800,250,0.8);
+  assert.equal(a.width,312.5);
+  assert.equal(a.height,250);
+  const b=fitSvgPane(800,650,0.5);
+  assert.equal(b.width,800);
+  assert.equal(b.height,400);
+  assert.notEqual(a.width,b.width);
+  for(const [width,height,ratio] of [[100,30,2],[800,400,0.1],[550,150,0.8]]) {
+    const fit=fitSvgPane(width,height,ratio);
+    assert.ok(fit.width<=width && fit.height<=height);
+    assert.ok(Math.abs(fit.height/fit.width-ratio)<1e-9);
+  }
 });

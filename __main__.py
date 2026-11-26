@@ -5,6 +5,7 @@ Requires: pip install 'bokeh>=3.8,<4'
 """
 
 import errno
+import json
 from hashlib import sha256
 from datetime import datetime, timedelta
 from html import escape
@@ -32,12 +33,14 @@ if __package__:
     )
     from .cad_service import build_cad_manifest, extract_embedded_image
     from .cad_svg_catalog import build_ellipse_svg_catalog
+    from .svg_styling import update_svg_pair
 else:
     from xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
     )
     from cad_service import build_cad_manifest, extract_embedded_image
     from cad_svg_catalog import build_ellipse_svg_catalog
+    from svg_styling import update_svg_pair
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8080"))
@@ -54,6 +57,7 @@ BUILD_REVISION = sha256(
     + (STATIC_DIR / "cad_geometry.mjs").read_bytes()
     + (STATIC_DIR / "cad_ui.mjs").read_bytes()
     + (STATIC_DIR / "cad_svg_catalog.py").read_bytes()
+    + (STATIC_DIR / "svg_styling.py").read_bytes()
     + (STATIC_DIR / "cad_validation.py").read_bytes()
 ).hexdigest()[:12]
 APP_ID = f"OneThreeOctave-SVG-Compare:Bokeh-Three.js:{BUILD_REVISION}"
@@ -104,6 +108,45 @@ class EllipseSvgCatalogHandler(RequestHandler):
             return
         self.set_header("Cache-Control", "no-store")
         self.write(payload)
+
+
+class SvgStyleHandler(RequestHandler):
+    """Same-origin, validated writes to a catalog-resolved pair of local SVGs."""
+
+    def initialize(self, state):
+        self.state = state
+
+    def post(self):
+        origin = self.request.headers.get("Origin")
+        expected = f"{self.request.protocol}://{self.request.host}"
+        if origin and origin != expected:
+            self.send_error(403)
+            return
+        if not self.request.headers.get("Content-Type", "").lower().startswith("application/json"):
+            self.send_error(415)
+            return
+        if len(self.request.body) > 2048:
+            self.send_error(413)
+            return
+        try:
+            request = json.loads(self.request.body)
+            if not isinstance(request, dict):
+                raise ValueError("Expected JSON object")
+            pair = update_svg_pair(
+                STATIC_DIR / "assets", self.state["sheets"],
+                int(request["layer"]), int(request["object_index"]),
+                request["date"], request["axis"],
+                request["operation"], request["value"],
+            )
+        except (ValueError, TypeError, KeyError, UnicodeDecodeError):
+            self.send_error(400)
+            return
+        except (OSError, RuntimeError):
+            self.send_error(500)
+            return
+        self.set_header("Cache-Control", "no-store")
+        self.set_header("Content-Type", "application/json; charset=utf-8")
+        self.write({"pair": pair, "saved": True})
 
 
 class CadImageHandler(RequestHandler):
@@ -304,6 +347,7 @@ def main():
                 (r"/viewer/cad-image/([0-9]+)/([0-9]+)", CadImageHandler, {"state": cad_state}),
                 (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)", EllipseSvgCatalogHandler,
                  {"state": cad_state}),
+                (r"/viewer/cad-svg-style", SvgStyleHandler, {"state": cad_state}),
                 (r"/viewer/(index\.html|cad_viewer\.js|cad_geometry\.mjs|cad_ui\.mjs)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),
                 (r"/viewer/assets/((?i:.*\.xlsx))", PrivateWorkbookHandler),
                 (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),

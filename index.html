@@ -43,14 +43,18 @@ html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
 #reference-log{position:absolute;z-index:12;top:12px;right:12px;display:none;
   width:max-content;max-width:calc(100% - 24px);height:auto;max-height:calc(100% - 24px);
   overflow:hidden;background:#fffffff2;border:1px solid #555;border-radius:0;
-  box-shadow:0 3px 10px #0002;padding:6px 9px;color:#111;font-size:12px;
+  box-shadow:0 3px 10px #0002;padding:6px 9px;color:#111;font-size:14px;font-weight:700;
   white-space:nowrap;cursor:grab;touch-action:none;user-select:none}
 #reference-log:active{cursor:grabbing}
-#reference-log .reference-log-line{display:flex;align-items:center;gap:6px;line-height:1.7}
-#reference-log .legend-swatch{width:12px;height:12px;flex:0 0 12px;
-  border:1px solid #8886;background:transparent}
+#reference-log .reference-log-line{display:block;line-height:1.7;
+  font-size:14px;font-weight:700;cursor:context-menu}
 #legend-context-menu{position:absolute;z-index:20;display:block;background:#fff;
   border:1px solid #9cabb7;padding:4px;box-shadow:0 4px 12px #0002}
+.legend-menu-primary,.legend-menu-secondary{display:flex;flex-direction:column;gap:2px}
+.legend-menu-secondary{position:absolute;z-index:21;top:0;left:100%;min-width:118px;
+  max-height:min(75vh,460px);overflow-y:auto;white-space:nowrap;background:#fff;
+  border:1px solid #9cabb7;box-shadow:0 4px 12px #0002;padding:4px}
+.legend-menu-secondary[hidden]{display:none}
 #legend-context-menu[hidden]{display:none}
 #legend-context-menu button{padding:5px 18px;border:0;background:#fff;color:#111;
   font:13px "Segoe UI","Microsoft YaHei",sans-serif;cursor:pointer}
@@ -118,7 +122,7 @@ body.dragging-divider.vertical{cursor:row-resize}
       </div>
     </div>
     <div id="reference-log" role="status" aria-label="已选择 SVG 图表"></div>
-    <div id="legend-context-menu" hidden role="menu"><button type="button" role="menuitem">关闭</button></div>
+    <div id="legend-context-menu" hidden role="menu"></div>
   </aside>
 </div>
 <script type="module" src="./cad_viewer.js"></script>

@@ -3,9 +3,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
 import {
-  INITIAL_REFERENCE_SPLIT, selectOnButton, selectionPath, shapeAncestors, shapeLabel,
-  pictureLayerScales, fitSvgPair, clampMainDivider, clampReferenceSplit,
-  requiredSvgRatio, svgPaintColors, legendForeground, legendPaint, canAddOverlay,
+  INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
+  pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
+  requiredSvgRatio, canAddOverlay, SVG_COLORS, SVG_LINE_WIDTHS, SVG_LINE_TYPES,
+  nextLegendColor,
 } from './cad_ui.mjs';
 
 const EMU_TO_PX = 1 / 9525;
@@ -22,6 +23,8 @@ const svgHistory = document.getElementById('reference-log');
 const legendMenu = document.getElementById('legend-context-menu');
 const overlaySelections = new Map();
 const overlayLoads = new Set();
+let colorCursor=0;
+let lastLegendIndex=-1;
 let displayedSvgWidth = 0;
 
 function createLayer(stageId) {
@@ -48,7 +51,7 @@ function createLayer(stageId) {
   controls.update();
   stage.prepend(renderer.domElement);
   const layer = {
-    stage,scene,renderer,camera,controls,clickable:[],objects:[],images:[],
+    stage,scene,renderer,camera,controls,clickable:[],hoverable:[],objects:[],images:[],
     sheetName:'',selectedMesh:null,scaleX:1,scaleY:1,layerIndex:stageId==='fab-stage'?0:1,
     selectedInfo:document.getElementById(
       stageId==='fab-stage'?'fab-selected-info':'subfab-selected-info'),
@@ -96,61 +99,41 @@ function colorValue(value,fallback) {
 
 // Text is a natural-aspect texture anchored to the upper-left of its shape.
 // Never stretch a 1024x256 text canvas to an arbitrary shape rectangle.
-function drawTopLeftText(group,label,width,height,foreground,frontZ,textLayout=[],imageScale=1) {
+function drawTopLeftText(group,label,width,height,foreground,frontZ) {
   if(!label?.trim()) return;
-  // OOXML run font size is in points. 96dpi workbook pixels: 1pt=96/72px.
-  // The same per-image scale is applied to text and drawing coordinates.
-  // Never force an arbitrary 48px font or shrink text to the shape bounds.
-  const lines=textLayout.length ? textLayout.map(line=>line.runs)
-    : label.split(/\r?\n/).map(text=>[{text,font_pt:11}]);
-  const cssPixels=pt=>Math.max(1,Number(pt)||11)*(96/72)*imageScale;
-  const pad=Math.max(1,2*imageScale);
+  const lines=label.split(/\r?\n/).slice(0,6);
+  const unitFont=48, pad=6, lineHeight=58;
   const canvas=document.createElement('canvas');
   const measure=canvas.getContext('2d');
-  const font=px=>px+'px "Microsoft YaHei","Segoe UI",sans-serif';
-  const layouts=lines.map(runs=>{
-    let lineWidth=0,maxFont=0;
-    const segments=runs.map(run=>{
-      const px=cssPixels(run.font_pt);
-      measure.font=font(px);
-      const measured=measure.measureText(run.text||'').width;
-      lineWidth+=measured;
-      maxFont=Math.max(maxFont,px);
-      return {text:run.text||'',width:measured,fontPx:px};
-    });
-    return {segments,width:lineWidth,height:Math.max(maxFont,cssPixels(11))*1.22};
-  });
-  const logicalWidth=Math.max(1,...layouts.map(line=>line.width))+pad*2;
-  const logicalHeight=layouts.reduce((sum,line)=>sum+line.height,0)+pad*2;
-  const resolution=Math.max(0.1,Math.min(2,4096/logicalWidth,4096/logicalHeight));
-  canvas.width=Math.max(1,Math.ceil(logicalWidth*resolution));
-  canvas.height=Math.max(1,Math.ceil(logicalHeight*resolution));
+  measure.font='500 48px "Microsoft YaHei","Segoe UI",sans-serif';
+  const measured=Math.max(...lines.map(line=>measure.measureText(line).width),16);
+  canvas.width=Math.ceil(Math.min(4096,measured+pad*2));
+  canvas.height=Math.ceil(lines.length*lineHeight+pad*2);
   const ctx=canvas.getContext('2d');
-  ctx.scale(resolution,resolution);
+  ctx.font='500 48px "Microsoft YaHei","Segoe UI",sans-serif';
   ctx.textBaseline='top';
-  ctx.fillStyle=/^#[0-9a-f]{6}$/i.test(foreground||'') ? foreground : '#111111';
-  let y=pad;
-  for(const line of layouts) {
-    let x=pad;
-    for(const seg of line.segments) {
-      ctx.font=font(seg.fontPx);
-      ctx.fillText(seg.text,x,y);
-      x+=seg.width;
-    }
-    y+=line.height;
-  }
+  ctx.textAlign='left';
+  ctx.fillStyle=/^#[0-9a-f]{6}$/i.test(foreground||'') ? foreground : '#f4f9fd';
+  lines.forEach((line,index)=>ctx.fillText(line,pad,pad+index*lineHeight,canvas.width-pad*2));
   const texture=new THREE.CanvasTexture(canvas);
   texture.colorSpace=THREE.SRGBColorSpace;
-  const mesh=new THREE.Mesh(
-    new THREE.PlaneGeometry(logicalWidth,logicalHeight),
+  const margin=Math.max(1,Math.min(width,height)*0.04);
+  const scale=Math.max(0.0001,Math.min(
+    0.35,
+    Math.max(0.1,width-2*margin)/canvas.width,
+    Math.max(0.1,height-2*margin)/canvas.height,
+  ));
+  const textWidth=canvas.width*scale, textHeight=canvas.height*scale;
+  const text=new THREE.Mesh(
+    new THREE.PlaneGeometry(textWidth,textHeight),
     new THREE.MeshBasicMaterial({
       map:texture,transparent:true,depthWrite:false,side:THREE.DoubleSide,
       polygonOffset:true,polygonOffsetFactor:-1,
     }),
   );
-  mesh.position.set(-width/2+pad+logicalWidth/2,
-                    height/2-pad-logicalHeight/2,frontZ);
-  group.add(mesh);
+  text.position.set(-width/2+margin+textWidth/2,
+                    height/2-margin-textHeight/2,frontZ);
+  group.add(text);
 }
 
 function makeOutline(points,color) {
@@ -242,9 +225,9 @@ function drawShape(layer,item,rectangles=[]) {
       group.add(makeOutline(vertices,borderColor));
   }
   clickTarget.userData.cadObject=item;
+  layer.hoverable.push(clickTarget);
   if (kind !== 'textbox') layer.clickable.push(clickTarget);
-  drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ,
-                  item.text_layout,layer.scaleX);
+  drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ);
   layer.scene.add(group);
 }
 
@@ -324,8 +307,10 @@ function showAxisSubmenu(layer,button,date,catalog) {
       }
       try {
         const line=[catalog.rectangle,date,'+'+axis].join('_');
-        if (await switchReferencePair(pair,line)) closeContextMenus();
-        else closeContextMenus();
+        const selection={layer:layer.layerIndex,
+          object_index:layer.objects.indexOf(layer.menu.selectedObject),date,axis};
+        await switchReferencePair(pair,line,selection);
+        closeContextMenus();
       } catch(error) {
         console.error('Unable to switch SVG pair:',error);
         item.title='SVG 图片载入失败，原图保持不变';
@@ -352,6 +337,7 @@ function showAxisSubmenu(layer,button,date,catalog) {
 
 async function openContextMenu(layer,clientX,clientY,selectedObject) {
   closeContextMenus();
+  layer.menu.selectedObject=selectedObject;
   const id=layer.menu.requestId;
   const menu=layer.menu.element;
   const bounds=layer.stage.getBoundingClientRect();
@@ -417,7 +403,7 @@ function installPicking(layer) {
     mouse.set((clientX-rect.left)/rect.width*2-1,
               1-(clientY-rect.top)/rect.height*2);
     raycaster.setFromCamera(mouse,layer.camera);
-    const targets=button===null ? layer.clickable : layer.clickable.filter(mesh=>
+    const targets=button===null ? layer.hoverable : layer.clickable.filter(mesh=>
       selectOnButton(mesh.userData.cadObject,button));
     return raycaster.intersectObjects(targets,false)[0]?.object || null;
   }
@@ -425,10 +411,16 @@ function installPicking(layer) {
     // Hover breadcrumbs are independent per pane; a drag must never select.
     if(event.buttons!==0) return;
     const mesh=pick(event.clientX,event.clientY);
-    layer.selectedInfo.textContent=mesh
-      ? selectionPath(workbookName,layer.sheetName,layer.objects,
-                      mesh.userData.cadObject,obj=>toWorldRect(obj,layer))
-      : '';
+    const parts=mesh
+      ? selectionParts(layer.objects,mesh.userData.cadObject,
+                       obj=>toWorldRect(obj,layer)) : [];
+    layer.selectedInfo.replaceChildren();
+    parts.forEach((part,i)=>{
+      if(i) layer.selectedInfo.append(document.createTextNode('·'));
+      const node=document.createElement(part.kind==='textbox'?'strong':'span');
+      node.textContent=part.text;
+      layer.selectedInfo.append(node);
+    });
   });
   canvas.addEventListener('pointerleave',()=>{layer.selectedInfo.textContent='';});
   canvas.addEventListener('pointerdown',event=>{
@@ -557,26 +549,25 @@ function displayedRatio(key) {
 }
 
 function fitSvgHeightToPane() {
-  const psd=document.getElementById('psd-frame');
-  const octave=document.getElementById('octave-frame');
-  const a=referenceImages.get('psd'),b=referenceImages.get('octave');
-  const ratioA=displayedRatio('psd'),ratioB=displayedRatio('octave');
-  const sizes=fitSvgPair(
-    {width:psd.clientWidth,height:psd.clientHeight},
-    {width:octave.clientWidth,height:octave.clientHeight},ratioA,ratioB);
-  const width=sizes.width;
-  displayedSvgWidth=width;
-  for(const [key,base] of referenceImages) {
-    base.element.style.width=width+'px';
-    base.element.style.height=(width*base.ratio)+'px';
-  }
-  for(const entry of overlaySelections.values()) {
-    for(const key of ['psd','octave']) {
-      const overlay=entry[key];
-      overlay.element.style.width=width+'px';
-      overlay.element.style.height=(width*overlay.ratio)+'px';
+  // Each pane uses its own available width and height. An oversized image is
+  // scaled down by whichever dimension would otherwise exceed its pane.
+  let widest=0;
+  for(const key of ['psd','octave']) {
+    const frame=document.getElementById(key+'-frame');
+    const base=referenceImages.get(key);
+    const {width}=fitSvgPane(frame.clientWidth,frame.clientHeight,displayedRatio(key));
+    widest=Math.max(widest,width);
+    if(base) {
+      base.element.style.width=width+'px';
+      base.element.style.height=(width*base.ratio)+'px';
+    }
+    for(const entry of overlaySelections.values()) {
+      const layer=entry[key];
+      layer.element.style.width=width+'px';
+      layer.element.style.height=(width*layer.ratio)+'px';
     }
   }
+  displayedSvgWidth=widest;
 }
 
 function applyReferenceImage(key,url,width,height) {
@@ -599,41 +590,45 @@ function prefetchSvg(url) {
   });
 }
 
-async function inspectSvgColors(url) {
-  // Only SVG-defined paint values are used. No white fill is added by the app.
-  try {
-    const response=await fetch(url,{cache:'no-store'});
-    if(!response.ok) return [];
-    return svgPaintColors(await response.text());
-  } catch(error) {
-    console.warn('SVG paint lookup unavailable:',error);
-    return [];
-  }
+function styleUrl(url) {
+  return url+(url.includes('?')?'&':'?')+'v='+Date.now();
 }
 
-async function switchReferencePair(pair,label) {
-  // Check the legend BEFORE image loading. Guard concurrent requests too.
+async function persistSvgStyle(selection,operation,value) {
+  const response=await fetch('./cad-svg-style',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...selection,operation,value}),
+  });
+  if(!response.ok) throw new Error('SVG 修改未保存 (HTTP '+response.status+')');
+  const result=await response.json();
+  if(!result.saved || !result.pair?.psd || !result.pair?.octave)
+    throw new Error('SVG 修改未得到本地写入确认');
+  return result.pair;
+}
+
+async function switchReferencePair(pair,label,selection) {
   if(!canAddOverlay(overlaySelections,overlayLoads,label)) return false;
   overlayLoads.add(label);
   try {
-    const [psd,octave,psdColors,octaveColors]=await Promise.all([
-      prefetchSvg(pair.psd),prefetchSvg(pair.octave),
-      inspectSvgColors(pair.psd),inspectSvgColors(pair.octave),
+    // The same palette entry is saved in BOTH SVG files before displaying
+    // either one. It cycles per successfully requested new legend item.
+    const color=nextLegendColor(colorCursor++);
+    const urls=await persistSvgStyle(selection,'color',color);
+    const [psd,octave]=await Promise.all([
+      prefetchSvg(styleUrl(urls.psd)),prefetchSvg(styleUrl(urls.octave)),
     ]);
     if(overlaySelections.has(label)) return false;
-    const entry={};
-    for(const [key,probe,colors] of [
-      ['psd',psd,psdColors],['octave',octave,octaveColors],
-    ]) {
+    const entry={selection,color,width:'1.5',dash:'--',saving:false};
+    for(const [key,image] of [['psd',psd],['octave',octave]]) {
       const element=document.createElement('img');
       element.alt='';
-      element.decoding='async';
       element.className='reference-overlay-image';
+      element.decoding='async';
       element.style.background='transparent';
-      element.src=probe.url;
-      entry[key]={element,ratio:probe.height/probe.width,colors};
+      element.src=image.url;
+      entry[key]={element,ratio:image.height/image.width,url:urls[key]};
     }
-    // Both decoded; add in one DOM turn. Keep base reference images untouched.
     overlaySelections.set(label,entry);
     document.getElementById('psd-overlays').append(entry.psd.element);
     document.getElementById('octave-overlays').append(entry.octave.element);
@@ -662,21 +657,12 @@ function appendReferenceHistory(label,entry) {
   const line=document.createElement('span');
   line.className='reference-log-line';
   line.dataset.legend=label;
-  const colors=[...entry.psd.colors,...entry.octave.colors];
-  line.style.color=legendForeground(colors);
-  for(const key of ['psd','octave']) {
-    const swatch=document.createElement('span');
-    swatch.className='legend-swatch';
-    swatch.style.background=legendPaint(entry[key].colors);
-    swatch.title=key==='psd'?'PSD 实际颜色':'1-3-Octave 实际颜色';
-    line.append(swatch);
-  }
-  const title=document.createElement('span');
-  title.textContent=label;
-  line.append(title);
+  line.textContent=label;
+  line.style.color=entry.color;
   line.addEventListener('contextmenu',event=>{
     event.preventDefault();
-    showLegendClose(label,event.clientX,event.clientY);
+    event.stopPropagation();
+    showLegendMenu(label,event.clientX,event.clientY);
   });
   entry.legend=line;
   svgHistory.append(line);
@@ -691,17 +677,92 @@ function removeReferenceOverlay(label) {
   entry.legend.remove();
   overlaySelections.delete(label);
   legendMenu.hidden=true;
-  if(overlaySelections.size===0) svgHistory.style.display='none';
+  if(!overlaySelections.size) svgHistory.style.display='none';
   fitSvgHeightToPane();
   clampFloatingLog();
 }
 
-function showLegendClose(label,x,y) {
+async function changeLegendStyle(label,operation,value) {
+  const entry=overlaySelections.get(label);
+  if(!entry || entry.saving) return;
+  entry.saving=true;
+  try {
+    const urls=await persistSvgStyle(entry.selection,operation,value);
+    const [psd,octave]=await Promise.all([
+      prefetchSvg(styleUrl(urls.psd)),prefetchSvg(styleUrl(urls.octave)),
+    ]);
+    if(!overlaySelections.has(label)) return;
+    for(const [key,image] of [['psd',psd],['octave',octave']]) {
+      entry[key].element.src=image.url;
+      entry[key].ratio=image.height/image.width;
+      entry[key].url=urls[key];
+    }
+    if(operation==='color') {
+      entry.color=value;
+      entry.legend.style.color=value;
+    }
+    if(operation==='width') entry.width=value;
+    if(operation==='dash') entry.dash=value;
+    fitSvgHeightToPane();
+    legendMenu.hidden=true;
+  } catch(error) {
+    console.error('Cannot save local SVG styling:',error);
+    legendMenu.title='修改失败：'+error.message;
+  } finally {
+    entry.saving=false;
+  }
+}
+
+function showLegendMenu(label,x,y) {
+  if(!overlaySelections.has(label)) return;
   const pane=document.getElementById('reference-pane');
-  const close=legendMenu.querySelector('button');
-  close.onclick=()=>removeReferenceOverlay(label);
-  legendMenu.hidden=false;
   const bounds=pane.getBoundingClientRect();
+  legendMenu.replaceChildren();
+  const primary=document.createElement('div');
+  primary.className='legend-menu-primary';
+  const secondary=document.createElement('div');
+  secondary.className='legend-menu-secondary';
+  secondary.hidden=true;
+  legendMenu.append(primary,secondary);
+  for(const [title,kind,options] of [
+    ['颜色','color',SVG_COLORS],
+    ['线宽','width',SVG_LINE_WIDTHS],
+    ['线型','dash',SVG_LINE_TYPES],
+  ]) {
+    const button=document.createElement('button');
+    button.type='button';
+    button.setAttribute('role','menuitem');
+    button.textContent=title+' ›';
+    button.addEventListener('click',()=>{
+      secondary.replaceChildren();
+      for(const option of options) {
+        const item=document.createElement('button');
+        item.type='button';
+        item.setAttribute('role','menuitem');
+        item.textContent=option;
+        if(kind==='color') item.style.color=option;
+        item.addEventListener('click',()=>{void changeLegendStyle(label,kind,option);});
+        secondary.append(item);
+      }
+      secondary.hidden=false;
+      const primaryWidth=primary.offsetWidth;
+      const popupWidth=secondary.offsetWidth;
+      // Right-opening vertically stacked options, with edge fallback.
+      secondary.style.left=(parseFloat(legendMenu.style.left||'0')
+        +primaryWidth+popupWidth<=pane.clientWidth ? primaryWidth : -popupWidth)+'px';
+      secondary.style.top=Math.max(0,Math.min(
+        button.offsetTop,pane.clientHeight-secondary.offsetHeight-
+        parseFloat(legendMenu.style.top||'0')))+'px';
+    });
+    primary.append(button);
+  }
+  const close=document.createElement('button');
+  close.type='button';
+  close.setAttribute('role','menuitem');
+  close.textContent='退出';
+  close.addEventListener('click',()=>removeReferenceOverlay(label));
+  primary.append(close);
+  legendMenu.hidden=false;
   legendMenu.style.left=Math.max(0,Math.min(x-bounds.left,
     pane.clientWidth-legendMenu.offsetWidth))+'px';
   legendMenu.style.top=Math.max(0,Math.min(y-bounds.top,
@@ -799,10 +860,7 @@ installSplitter('main-splitter','vertical',event=>{
 installSplitter('reference-splitter','horizontal',event=>{
   const panel=document.getElementById('reference-frames');
   const bounds=panel.getBoundingClientRect();
-  rightSplitRatio=clampReferenceSplit(
-    event.clientY-bounds.top,bounds.height,8,
-    displayedRatio('psd')*displayedSvgWidth,
-    displayedRatio('octave')*displayedSvgWidth);
+  rightSplitRatio=clampReferenceSplit(event.clientY-bounds.top,bounds.height);
   applySvgSplitRatio();
   fitSvgHeightToPane();
 });

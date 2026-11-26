@@ -134,7 +134,7 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("scene.background = new THREE.Color(0xffffff)",viewer)
         self.assertIn("background:#fff",html)
         for marker in ("createContextMenu(", "closeContextMenus(", "openContextMenu(",
-                       "selectionPath(", "workbookName=data.workbook",
+                       "selectionParts(", "workbookName=data.workbook",
                        "if (kind !== 'textbox') layer.clickable.push(clickTarget)",
                        "event.button===2", "'X','Y','Z'",
                        "'./cad-svg-catalog/'", "showAxisSubmenu(", "prefetchSvg(",
@@ -159,7 +159,7 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertNotIn("overflow-x:auto",html)
         self.assertIn("minmax(0,1fr) 8px minmax(0,1fr)",html)
         self.assertIn("let rightSplitRatio = INITIAL_REFERENCE_SPLIT",viewer)
-        self.assertIn("fitSvgPair(",viewer)
+        self.assertIn("fitSvgPane(",viewer)
         self.assertIn("clampMainDivider(",viewer)
         self.assertIn("clampReferenceSplit(",viewer)
         self.assertIn("fitSvgHeightToPane()",viewer)
@@ -183,10 +183,11 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("layer.clickable.push(clickTarget)",viewer)
         self.assertIn("raycaster.intersectObjects(targets,false)",viewer)
         self.assertIn("selectOnButton(mesh.userData.cadObject,button)",viewer)
-        self.assertIn("drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ,",viewer)
-        self.assertIn("item.text_layout,layer.scaleX",viewer)
-        self.assertIn("run.font_pt",viewer)
-        self.assertNotIn("const unitFont=48",viewer)
+        self.assertIn("drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ)",viewer)
+        self.assertNotIn("item.text_layout",viewer)
+        self.assertNotIn("run.font_pt",viewer)
+        self.assertNotIn("shape_text_layout", (STATIC_DIR/"xlsx_spatial.py").read_text(encoding="utf-8"))
+        self.assertIn("drawTopLeftText(",viewer)
 
 
     def test_rectangle_depth_directive_and_ellipse_lifting_are_wired(self):
@@ -247,22 +248,56 @@ class TestStaticFrontend(unittest.TestCase):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
         pure=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
         for snippet in ('id="psd-overlays"', 'id="octave-overlays"',
-                        'id="legend-context-menu"', 'role="menuitem">关闭',
+                        'id="legend-context-menu"',
                         '.reference-overlays{', 'background:transparent', 
                         '.reference-overlays img'):
             self.assertIn(snippet,html)
         for snippet in ("canAddOverlay(overlaySelections,overlayLoads,label)",
                         "overlayLoads.add(label)", "overlaySelections.set(label,entry)",
-                        "showLegendClose(label,event.clientX,event.clientY)",
+                        "showLegendMenu(label,event.clientX,event.clientY)",
                         "removeReferenceOverlay(label)", "overlaySelections.delete(label)",
-                        "inspectSvgColors(pair.psd)", "inspectSvgColors(pair.octave)",
-                        "legendForeground(colors)", "legendPaint(entry[key].colors)",
+                        "persistSvgStyle(selection,'color',color)",
+                        "changeLegendStyle(", "showLegendMenu(",
+                        "SVG_COLORS", "SVG_LINE_WIDTHS", "SVG_LINE_TYPES",
                         "document.getElementById('psd-overlays').append",
                         "document.getElementById('octave-overlays').append"):
             self.assertIn(snippet,viewer)
-        self.assertIn("svgPaintColors(source)",pure)
+        self.assertIn("selectionParts(items,selected,toRect)",pure)
         self.assertIn("requiredSvgRatio(baseRatio, entries)",pure)
         self.assertNotIn("applyReferenceImage('psd',psd.url",viewer)
+
+    def test_hover_breadcrumb_textbox_rectangle_sensor_and_bold_parent(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        geometry=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        self.assertIn("layer.hoverable.push(clickTarget)",viewer)
+        self.assertIn("button===null ? layer.hoverable",viewer)
+        self.assertIn("selectionParts(",viewer)
+        self.assertIn("part.kind==='textbox'?'strong':'span'",viewer)
+        self.assertNotIn("selectionPath(workbookName",viewer)
+        self.assertIn("shape_kind==='textbox'",geometry)
+        self.assertIn("shape_kind==='rectangle'",geometry)
+
+    def test_pair_style_http_route_is_registered_and_safe(self):
+        service=(STATIC_DIR/"__main__.py").read_text(encoding="utf-8")
+        self.assertIn("SvgStyleHandler",service)
+        self.assertIn("update_svg_pair(",service)
+        self.assertIn("cad-svg-style",service)
+        self.assertIn('startswith("application/json")',service)
+        self.assertIn('self.request.headers.get("Origin")',service)
+
+    def test_independent_panel_fit_and_unadorned_colored_legend(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        helper=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        self.assertIn("fitSvgPane(frame.clientWidth,frame.clientHeight,displayedRatio(key))",viewer)
+        self.assertIn("font-size:14px;font-weight:700",html)
+        self.assertIn("line.textContent=label",viewer)
+        self.assertIn("line.style.color=entry.color",viewer)
+        self.assertNotIn('className=\'legend-swatch\'',viewer)
+        self.assertIn("SVG_COLORS=Object.freeze([",helper)
+        self.assertIn("SVG_LINE_WIDTHS=Object.freeze([",helper)
+        self.assertIn("SVG_LINE_TYPES=Object.freeze([",helper)
+        self.assertIn("close.textContent='退出'",viewer)
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())
@@ -420,6 +455,28 @@ class TestHttpIntegration(unittest.TestCase):
         with self.assertRaises(HTTPError) as error:
             urlopen(self.base + "/viewer/cad-svg-catalog/0/999", timeout=5)
         self.assertEqual(error.exception.code, 404)
+
+    def test_svg_style_rejects_untrusted_http_mutations(self):
+        data=json.dumps({"layer":0,"object_index":999,"date":"20260704101627",
+                         "axis":"X","operation":"color","value":"#4F99CF"}).encode()
+        request=Request(self.base+"/viewer/cad-svg-style",data=data,
+                        method="POST",headers={"Content-Type":"application/json"})
+        with self.assertRaises(HTTPError) as bad_index:
+            urlopen(request,timeout=5)
+        self.assertEqual(bad_index.exception.code,400)
+
+        wrong_origin=Request(self.base+"/viewer/cad-svg-style",data=data,
+            method="POST",headers={"Content-Type":"application/json",
+                                   "Origin":"https://attacker.example"})
+        with self.assertRaises(HTTPError) as forbidden:
+            urlopen(wrong_origin,timeout=5)
+        self.assertEqual(forbidden.exception.code,403)
+
+        wrong_type=Request(self.base+"/viewer/cad-svg-style",data=data,
+            method="POST",headers={"Content-Type":"text/plain"})
+        with self.assertRaises(HTTPError) as unsupported:
+            urlopen(wrong_type,timeout=5)
+        self.assertEqual(unsupported.exception.code,415)
 
     def test_invalid_embedded_image_route_is_safe(self):
         with self.assertRaises(HTTPError) as caught:

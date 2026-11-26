@@ -72,12 +72,27 @@ export function shapeAncestors(items, selected, toRect) {
   return ancestors.reverse();
 }
 
-export function selectionPath(workbookName,sheetName,items,selected,toRect) {
-  const book=String(workbookName||'').replace(/\.xlsx$/i,'');
-  const components=[book,String(sheetName||'')];
-  components.push(...shapeAncestors(items,selected,toRect).map(shapeLabel));
-  components.push(shapeLabel(selected));
-  return components.filter(Boolean).join('·');
+/** Hover breadcrumb: textbox (bold in DOM) · rectangle · sensor ellipse. */
+export function selectionParts(items,selected,toRect) {
+  if(!selected || selected.type!=='shape') return [];
+  const ancestors=shapeAncestors(items,selected,toRect);
+  const parentTextboxes=ancestors.filter(x=>x.shape_kind==='textbox');
+  const parentRectangles=ancestors.filter(x=>x.shape_kind==='rectangle');
+  const parts=[];
+  if(parentTextboxes.length) parts.push({
+    kind:'textbox',text:shapeLabel(parentTextboxes[parentTextboxes.length-1]),
+  });
+  if(parentRectangles.length) parts.push({
+    kind:'rectangle',text:shapeLabel(parentRectangles[parentRectangles.length-1]),
+  });
+  if(selected.shape_kind==='textbox') {
+    parts.push({kind:'textbox',text:shapeLabel(selected)});
+  } else if(selected.shape_kind==='rectangle') {
+    parts.push({kind:'rectangle',text:shapeLabel(selected)});
+  } else {
+    parts.push({kind:selected.shape_kind,text:shapeLabel(selected)});
+  }
+  return parts.filter(part=>part.text);
 }
 
 /** Fit both complete SVG images at a common pixel width; never overflow. */
@@ -176,4 +191,25 @@ export function legendPaint(colors) {
 /** Duplicate guard for both completed and concurrent menu selections. */
 export function canAddOverlay(active,loading,label) {
   return Boolean(label) && !active.has(label) && !loading.has(label);
+}
+
+
+/** Fit one SVG pane independently: its own width and height always constrain it. */
+export function fitSvgPane(width,height,maxHeightOverWidth) {
+  const ratio=Number.isFinite(maxHeightOverWidth)&&maxHeightOverWidth>0
+    ? maxHeightOverWidth : 1;
+  const fittedWidth=Math.max(0,Math.min(width,height/ratio));
+  return {width:fittedWidth,height:fittedWidth*ratio};
+}
+
+export const SVG_COLORS=Object.freeze([
+  '#4F99CF','#E41A1C','#4DAF4A','#FF7F00','#2C3E50','#333333',
+  '#3C5488','#E64B35','#00A087','#3A3935','#1F77B4',
+  '#FF7F0E','#2CA02C','#9A8B7A','#7E8B96','#A6998A','#D1C7BD',
+]);
+export const SVG_LINE_WIDTHS=Object.freeze(['0.75','1.5','2.25','3','3.75']);
+export const SVG_LINE_TYPES=Object.freeze(['-·','--']);
+
+export function nextLegendColor(index) {
+  return SVG_COLORS[Math.abs(Math.trunc(index))%SVG_COLORS.length];
 }
