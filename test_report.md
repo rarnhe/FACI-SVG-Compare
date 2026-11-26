@@ -1,67 +1,68 @@
 # Test Report
 
-- UTC: 2026-11-26 07:38:57
+- UTC: 2026-11-26 08:43:37
 - Result: **PASS**
-- Python unittest cases: **93 per platform**
-- Node CAD geometry + UI cases: **27 per platform**
-- Failures: **0**
-- Errors: **0**
+- Python unittest: **101 / 101 per environment**
+- Node CAD geometry / UI tests: **26 / 26 per environment**
+- Failures: 0
+- Errors: 0
 
-## Dual-track GitHub Actions verification
+## GitHub Actions + report dual-track verification
 
-| Platform | Python unittest | Node geometry/UI | JavaScript module syntax | Result |
-| --- | ---: | ---: | --- | --- |
-| Ubuntu / Python 3.12 | **93/93** (3.332s) | **27/27** | PASS | **PASS** |
-| Windows / Python 3.14 | **93/93** (5.667s) | **27/27** | PASS | **PASS** |
+| Environment | Python unittest | Node geometry/UI | JavaScript syntax | Result |
+| --- | --- | --- | --- | --- |
+| Ubuntu / Python 3.12 | **101/101** (4.202s) | **26/26** | PASS | **PASS** |
+| Windows / Python 3.14 | **101/101** (4.282s) | **26/26** | PASS | **PASS** |
 
-Verified feature commit: `3a9f9593be0282af1332a64a7de327a7cbeeb83e`.
-Successful workflow:
-https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45776813730
+- Verified commit: `b6c1ed6db81d9fef32e497081200b86fb9e6c75f`.
+- Successful Actions: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45785503605
+- Both platforms run `python tests/run_tests.py` and the Node CAD
+  geometry/UI tests; JavaScript syntax is checked separately. The Python
+  runner writes its `test_report.md` on success/failure and Actions uploads
+  the report artifact even when a test fails.
 
-The existing `.github/workflows/test.yml` independently executes
-`python tests/run_tests.py` and `node --test tests/test_cad_geometry.mjs
-tests/test_cad_ui.mjs` on both platforms, checks `cad_viewer.js` JavaScript
-module syntax, and uploads its own `test_report.md` artifact on pass or fail.
-The Python test runner independently writes `test_report.md` on every run.
+## Features and regression tests
 
-## Changes covered
-
-1. XLSX DrawingML `a:rPr/@sz`, paragraph default `a:defRPr/@sz`,
-   and text-run sizes are exposed as `text_layout` with real sizes in
-   points (hundredths converted to points). The CAD text canvas uses these
-   sizes converted to 96-dpi pixels, including mixed sizes within one line.
-   The former 48px fixed font and arbitrary downscaling have been removed.
-2. Fab's top-left operation hint and the top-right ↺ button now share the
-   same 14px font, white background, border and 36px height, aligned at
-   the same vertical coordinate.
-3. A static non-draggable 8px horizontal CAD divider matches the vertical
-   splitter color and thickness. Right SVG horizontal divider starts at
-   exactly the same viewport height (1:1, centered).
-4. Selected PSD and 1-3-Octave SVGs are loaded as transparent, independently
-   stacked overlays above the original right-side reference images.
-   No white fill is applied by the overlay containers or images; unpainted
-   SVG regions remain transparent so the underlying image remains visible.
-5. Before loading, overlay labels are checked against the active legend and
-   a set of pending loads. Duplicate selection does not create another
-   SVG pair or legend entry, including fast concurrent clicks.
-6. Each legend entry displays swatches derived from the actual SVG's
-   explicitly declared fill/stroke paint values. Multiple paints are
-   represented by a gradient; no invented white background is used.
-7. Right-clicking an individual legend row opens a '关闭' menu. Clicking it
-   removes precisely the corresponding two SVG overlays and legend row,
-   restoring visibility of the original base/reference layers below.
-   Removed selections may be added again.
-8. SVG fitting accounts for active overlays' intrinsic aspect ratios and
-   current pane sizes. Divider movement remains constrained so images do
-   not overflow; no fixed image max-width / max-height is imposed.
-9. Existing XLSX alt-text cuboid heights, Fab/Subfab camera synchronization,
-   dynamic timestamp catalog, Bokeh server, static MIME headers, and HTTP
-   security regressions remain green.
+1. **Removed** the XLSX DrawingML font-size extraction function and the
+   `text_layout` field. Three.js no longer receives or interprets Excel
+   font sizes; it uses the established fixed texture font for shape text.
+2. Both CAD layer hover captions now contain only the containing textbox,
+   rectangle, and sensor: **BODYv2**·20260704_SCN_B1·测点名称. The textbox
+   segment is rendered using an actual `strong` element. Neither XLSX name
+   nor worksheet name is shown. Textboxes are hoverable but cannot be
+   selected with a mouse click.
+3. The floating legend has bold 14px text, no leading swatch/icons. New
+   overlays follow the approved 17-color palette in sequence, and the
+   PSD and 1-3-Octave files for one entry get the exact same color.
+4. The per-entry context menu has **颜色 / 线宽 / 线型 / 退出**.
+   Color opens the 17 specified choices; width offers
+   0.75/1.5/2.25/3/3.75; line style offers -· (dash-dot) and -- (dash).
+   Secondary choices are vertically stacked beside the parent menu.
+5. **Real local persistence:** the Bokeh/Tornado `cad-svg-style` POST
+   handler recomputes the catalog from the chosen XLSX ellipse. The
+   server checks the source sheet/shape indices, time, axis, allowed
+   palette, width and dash options. Only the matched two local SVGs are
+   updated. It uses temp-file replacement and paired rollback if an
+   update fails. Tests create temporary real SVG files and assert the
+   resulting XML on disk for both PSD and octave files.
+6. Source SVG elements without an explicit paint continue to be
+   transparent; explicit `none` is preserved. The browser cache is
+   bypassed when an updated SVG is reloaded.
+7. SVG fit is computed **independently for the upper and lower panes**.
+   Each takes the largest width satisfying both available pane width
+   and available height at its own intrinsic aspect ratio. Height wins
+   when width-based scaling would overflow. All overlays are considered
+   for bounds. There is no forced common pixel width across both panes.
+8. Existing MIME, HTTP, Bokeh, XLSX alt-text cuboid height, dynamic date
+   lookup, CAD camera synchronization and secure private-XLSX tests
+   are still green.
 
 ## Limitations
 
-The user's real XLSX and SVG assets under `assets/` are not committed to
-the repository. CI uses synthetic XLSX fixtures, pure Node SVG/color tests,
-and a real local Bokeh HTTP server. Interactive Chrome/WebGL rendering,
-the exact private SVG colors, and final visual alignment still require
-the user's Windows browser visual verification.
+The user's actual XLSX, PSD and octave SVG assets are not present in
+the GitHub repository. CI covers synthetic XLSX fixtures, real temporary
+SVG file edits, Node UI/geometry calculations, and HTTP endpoint
+validation, but not Chrome visual rendering with the private inputs.
+A local visual check is still needed. Files in `assets/` are written
+in place by the new styling controls; back up the originals if their
+initial formatting must be recoverable.
