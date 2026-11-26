@@ -5,6 +5,7 @@ import {
   containsShape, shapeAncestors, selectionParts, fitSvgPair, fitSvgPane,
   clampMainDivider, clampReferenceSplit, pictureLayerScales,
   requiredSvgRatio,canAddOverlay,SVG_COLORS,nextLegendColor,
+  svgLegendName,svgSelectionKey,CUBOID_FACE_OPACITY,CUBOID_SELECTED_OPACITY,
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
 } from '../cad_ui.mjs';
 
@@ -241,4 +242,27 @@ test('SVG markup recolor runs on browser XML nodes without creating painted back
     if(beforeSerializer===undefined)delete globalThis.XMLSerializer;
     else globalThis.XMLSerializer=beforeSerializer;
   }
+});
+
+
+test('SVG legend shows folder_sheet_rectangle-or-sensor_axis, never date',()=>{
+  const inside={folder:'BODYv2',sheet:'fab',target_kind:'rectangle',
+    identifier:'20260704_SCN_B1',ellipse:'测点名称'};
+  assert.equal(svgLegendName(inside,'Y'),'BODYv2_fab_20260704_SCN_B1_+Y');
+  const outside={folder:'BODYv2',sheet:'subfab',target_kind:'ellipse',
+    identifier:'测点名称'};
+  assert.equal(svgLegendName(outside,'Z'),'BODYv2_subfab_测点名称_+Z');
+  const key1=svgSelectionKey(inside,'20260704101627','Y');
+  const key2=svgSelectionKey(inside,'20260705101627','Y');
+  assert.notEqual(key1,key2);
+  assert.equal(svgSelectionKey(inside,'20260704101627','Y'),key1);
+  const map=new Map([[key1,{}]]);
+  assert.equal(canAddOverlay(map,new Set(),key2),true);
+  assert.equal(canAddOverlay(map,new Set(),key1),false);
+});
+
+test('cuboid has translucent face and never becomes opaque on selection',()=>{
+  assert.ok(CUBOID_FACE_OPACITY>0 && CUBOID_FACE_OPACITY<0.5);
+  assert.ok(CUBOID_SELECTED_OPACITY>CUBOID_FACE_OPACITY);
+  assert.ok(CUBOID_SELECTED_OPACITY<0.5);
 });

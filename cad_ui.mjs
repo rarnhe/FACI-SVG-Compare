@@ -3,6 +3,10 @@ const EPS = 1e-7;
 
 export const INITIAL_REFERENCE_SPLIT = 0.5;
 
+// Transparent cuboid faces let elevated measurement ellipses remain visible.
+export const CUBOID_FACE_OPACITY = 0.23;
+export const CUBOID_SELECTED_OPACITY = 0.30;
+
 export function shapeLabel(shape) {
   return String(shape?.text || shape?.name || '').trim().replace(/\s*\n\s*/g, ' ');
 }

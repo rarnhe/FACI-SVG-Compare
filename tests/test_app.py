@@ -222,7 +222,7 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("pictureLayerScales(bounds,ratios)",viewer)
         self.assertIn("loadCadTexture(",viewer)
         self.assertIn("applyReferenceImage(key,image.url,image.width,image.height)",viewer)
-        self.assertIn("overlaySelections.set(label,entry)",viewer)
+        self.assertIn("overlaySelections.set(key,entry)",viewer)
         self.assertIn("displayedSvgWidth",viewer)
         self.assertIn("svgHistory.append(line)",viewer)
         self.assertIn("EllipseSvgCatalogHandler",service)
@@ -255,10 +255,10 @@ class TestStaticFrontend(unittest.TestCase):
                         '.reference-overlays{', 'background:transparent', 
                         '.reference-overlays img'):
             self.assertIn(snippet,html)
-        for snippet in ("canAddOverlay(overlaySelections,overlayLoads,label)",
-                        "overlayLoads.add(label)", "overlaySelections.set(label,entry)",
-                        "showLegendMenu(label,event.clientX,event.clientY)",
-                        "removeReferenceOverlay(label)", "overlaySelections.delete(label)",
+        for snippet in ("canAddOverlay(overlaySelections,overlayLoads,key)",
+                        "overlayLoads.add(key)", "overlaySelections.set(key,entry)",
+                        "showLegendMenu(key,event.clientX,event.clientY)",
+                        "removeReferenceOverlay(key)", "overlaySelections.delete(key)",
                         "makeColoredPair(pair,color)",
                         "changeLegendColor(", "showLegendMenu(",
                         "SVG_COLORS", "recolorSvgMarkup(markup,color)",
@@ -308,6 +308,30 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertNotIn("SVG_LINE_TYPES",helper)
         self.assertIn("recolorSvgMarkup(source,color)",helper)
         self.assertIn("close.textContent='退出'",viewer)
+
+    def test_svg_catalog_labels_and_translucent_cuboids(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        ui=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        catalog=(STATIC_DIR/"cad_svg_catalog.py").read_text(encoding="utf-8")
+        self.assertIn("name_matches(p.name, identifier)",catalog)
+        self.assertIn('"target_kind": "rectangle" if rectangle is not None else "ellipse"',catalog)
+        self.assertIn('circle_relation(ellipse, Rectangle.from_object(obj)) == "inside"',catalog)
+        self.assertIn('"sheet": sheets[layer_index]["sheet"]',catalog)
+        self.assertIn("svgLegendName(catalog,axis)",viewer)
+        self.assertIn("svgSelectionKey(catalog,date,axis)",viewer)
+        self.assertIn("appendReferenceHistory(key,label,entry)",viewer)
+        self.assertIn("export function svgLegendName(catalog,axis)",ui)
+        self.assertIn("export function svgSelectionKey(catalog,date,axis)",ui)
+        self.assertIn("for(const axis of ['X','Y','Z'])",viewer)
+        self.assertIn("display:flex;flex-direction:column;align-items:stretch;gap:2px",html)
+        self.assertIn(".cad-submenu button{display:block",html)
+        self.assertIn("wireframe:false,depthTest:true,depthWrite:false",viewer)
+        self.assertIn("side:THREE.FrontSide",viewer)
+        self.assertIn("CUBOID_FACE_OPACITY",viewer)
+        self.assertIn("CUBOID_SELECTED_OPACITY",viewer)
+        self.assertIn("isTransparentCuboid=true",viewer)
+        self.assertNotIn("new THREE.EdgesGeometry(",viewer)
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())

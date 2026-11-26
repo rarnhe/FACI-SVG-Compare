@@ -38,7 +38,11 @@ html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
 .cad-context-menu button:hover,.cad-context-menu button:focus-visible{background:#eaf3fc;outline:0}
 .cad-menu-arrow{font-size:16px}
 .cad-submenu{position:absolute;z-index:11;left:0;top:0;padding:5px;min-width:94px;
+  display:flex;flex-direction:column;align-items:stretch;gap:2px;
   background:#fff;border:1px solid #aab6c0;box-shadow:0 5px 17px #0002;border-radius:5px}
+.cad-submenu button{display:block;flex:none;width:100%;padding:7px 12px;
+  text-align:left;border:0;background:#fff;color:#111;cursor:pointer;font:inherit}
+.cad-submenu button:hover,.cad-submenu button:focus-visible{background:#eaf3fc;outline:0}
 #reference-pane{position:relative;min-width:0;min-height:0;background:#fff;overflow:hidden}
 #reference-log{position:absolute;z-index:12;top:12px;right:12px;display:none;
   width:max-content;max-width:calc(100% - 24px);height:auto;max-height:calc(100% - 24px);

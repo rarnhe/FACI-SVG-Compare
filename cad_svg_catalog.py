@@ -46,16 +46,19 @@ def enclosing_textbox(objects: list[dict], ellipse: dict) -> dict | None:
 
 
 def enclosing_rectangle(objects: list[dict], ellipse: dict) -> dict | None:
-    """A circle belongs to its intersecting cuboid footprint (including roof edge)."""
-    found = []
-    for obj in objects:
-        if obj.get("type") != "shape" or obj.get("shape_kind") != "rectangle":
-            continue
-        relation = circle_relation(ellipse, Rectangle.from_object(obj))
-        if relation != "outside":
-            found.append((relation == "inside", obj))
-    # The workbook startup already prohibits one circle meeting multiple rectangles.
-    return sorted(found, key=lambda pair: not pair[0])[0][1] if found else None
+    """Only a circle COMPLETELY inside a rectangle is its child.
+
+    An ellipse partly crossing the boundary uses its own visible text for
+    the SVG catalog, just like an ellipse outside every rectangle.
+    """
+    found = [
+        obj for obj in objects
+        if obj.get("type") == "shape" and obj.get("shape_kind") == "rectangle"
+        and circle_relation(ellipse, Rectangle.from_object(obj)) == "inside"
+    ]
+    return min(found, key=lambda obj: (
+        obj["bounds_emu"]["width"] * obj["bounds_emu"]["height"]
+    ), default=None)
 
 
 def name_matches(candidate: str, identifier: str) -> bool:
@@ -80,12 +83,24 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
         raise ValueError("CAD object is not an ellipse")
     textbox = enclosing_textbox(objects, ellipse)
     rectangle = enclosing_rectangle(objects, ellipse)
-    folder_name = ((textbox.get("text") or "").strip() if textbox else "")
+    label = lambda obj: ((obj.get("text") or obj.get("name") or "").strip()
+                         if obj is not None else "")
+    folder_name = label(textbox)
+    rectangle_name = label(rectangle)
+    ellipse_name = label(ellipse)
+    identifier = rectangle_name if rectangle is not None else ellipse_name
     root = svg_directory(asset_dir, folder_name)
-    result = {"folder": folder_name, "rectangle": (
-        (rectangle.get("text") or rectangle.get("name") or "").strip() if rectangle else ""),
-        "dates": [], "pairs": {}}
-    if root is None:
+    result = {
+        "folder": folder_name,
+        "sheet": sheets[layer_index]["sheet"],
+        "rectangle": rectangle_name,
+        "ellipse": ellipse_name,
+        "identifier": identifier,
+        "target_kind": "rectangle" if rectangle is not None else "ellipse",
+        "dates": [],
+        "pairs": {},
+    }
+    if root is None or not identifier:
         return result
 
     entries = sorted(
@@ -93,22 +108,22 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
          and p.suffix.lower() == ".svg"),
         key=lambda p: p.name.casefold()
     )
-    result["dates"] = sorted({match.group(1) for file in entries
-                              for match in TIMESTAMP.finditer(file.name)})
-    if not rectangle:
-        return result
-    identifiers = {str(rectangle.get(key, "")).strip()
-                   for key in ("text", "name")}
-    identifiers.discard("")
+    # A date is meaningful only when the SAME SVG filename also contains
+    # the current rectangle's text (case A) or ellipse's text (case B).
+    matching_entries = [
+        p for p in entries if name_matches(p.name, identifier)
+    ]
+    result["dates"] = sorted({
+        match.group(1) for file in matching_entries
+        for match in TIMESTAMP.finditer(file.name)
+    })
     for date in result["dates"]:
         axes = {}
         for axis in ("X", "Y", "Z"):
             matching = {"psd": None, "octave": None}
-            for file in entries:
+            for file in matching_entries:
                 filename = file.name
                 if date not in TIMESTAMP.findall(filename):
-                    continue
-                if not any(name_matches(filename, identifier) for identifier in identifiers):
                     continue
                 if axis not in [m.group(1).upper() for m in AXIS.finditer(filename)]:
                     continue

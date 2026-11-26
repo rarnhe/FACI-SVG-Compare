@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Removed CAD shape text rendering and XLSX font/font-color extraction; geometry hover labels preserved; 17-color same-pair browser-only SVG recoloring with cached read-only source and Blob URL cleanup; color/exit legend menu only; deleted write endpoint and width/dash code; Python HTTP and Node geometry/UI regression.",
+        "Filtered date menus by exact current rectangle-or-ellipse text plus timestamp; right-opening vertically stacked X/Y/Z; date-independent BODYv2_sheet_identifier_+axis legend labels with date-specific internal keys; translucent cuboid faces without EdgesGeometry wireframe; read-only SVG recoloring, XLSX/HTTP and Node geometry/UI regressions.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

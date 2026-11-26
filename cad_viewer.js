@@ -6,7 +6,8 @@ import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
-  recolorSvgMarkup,
+  recolorSvgMarkup, svgLegendName, svgSelectionKey,
+  CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
 } from './cad_ui.mjs';
 
 const EMU_TO_PX = 1 / 9525;
@@ -134,6 +135,7 @@ function drawShape(layer,item,rectangles=[]) {
     const radius=Math.hypot(w,h)/2;
     clickTarget=new THREE.Mesh(new THREE.CircleGeometry(radius,72),mat);
     clickTarget.position.z=0.5;
+    clickTarget.renderOrder=2;
     group.add(clickTarget);
     const circumference=[];
     for(let i=0;i<72;i++) {
@@ -142,19 +144,20 @@ function drawShape(layer,item,rectangles=[]) {
     }
     group.add(makeOutline(circumference,borderColor));
   } else if(kind==='rectangle') {
-    // A CAD rectangle is a cuboid with actual +Z thickness.
+    // Translucent solid (NOT a wireframe): both roof and side faces remain
+    // visible while allowing elevated ellipse measurement points to show.
     const depth=rectangleHeight(item.alt_text,w,h);
     if (depth>0) {
       const cube=new THREE.BoxGeometry(w,h,depth);
-      clickTarget=new THREE.Mesh(cube,mat);
+      const translucent=new THREE.MeshBasicMaterial({
+        color:fillColor,transparent:true,opacity:CUBOID_FACE_OPACITY,
+        side:THREE.FrontSide,wireframe:false,depthTest:true,depthWrite:false,
+      });
+      clickTarget=new THREE.Mesh(cube,translucent);
       clickTarget.position.z=depth/2;
+      clickTarget.renderOrder=1;
+      clickTarget.userData.isTransparentCuboid=true;
       group.add(clickTarget);
-      const edges=new THREE.LineSegments(
-        new THREE.EdgesGeometry(cube),
-        new THREE.LineBasicMaterial({color:borderColor,transparent:true,opacity:0.85}),
-      );
-      edges.position.copy(clickTarget.position);
-      group.add(edges);
     } else {
       // Missing/invalid directive: zero height, no artificial thickness.
       clickTarget=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);
@@ -256,12 +259,13 @@ function showAxisSubmenu(layer,button,date,catalog) {
     item.addEventListener('click',async()=>{
       const pair=catalog.pairs?.[date]?.[axis];
       if(!pair) {
-        item.title='没有匹配此矩形、时间及方向的成对 SVG 文件';
+        item.title='没有匹配当前矩形或测点、时间及方向的成对 SVG 文件';
         return;
       }
       try {
-        const line=[catalog.rectangle,date,'+'+axis].join('_');
-        await switchReferencePair(pair,line);
+        const label=svgLegendName(catalog,axis);
+        const key=svgSelectionKey(catalog,date,axis);
+        await switchReferencePair(pair,key,label);
         closeContextMenus();
       } catch(error) {
         console.error('Unable to switch SVG pair:',error);
@@ -392,7 +396,8 @@ function installPicking(layer) {
       layer.selectedMesh.material.opacity=layer.selectedMesh.userData.originalOpacity;
     if(mesh.userData.originalOpacity===undefined)
       mesh.userData.originalOpacity=mesh.material.opacity;
-    mesh.material.opacity=0.95;
+    mesh.material.opacity=mesh.userData.isTransparentCuboid
+      ? CUBOID_SELECTED_OPACITY : 0.95;
     layer.selectedMesh=mesh;
     if(event.button===2) void openContextMenu(layer,event.clientX,event.clientY,
                                             mesh.userData.cadObject);
@@ -590,14 +595,14 @@ async function makeColoredPair(sourcePair,color) {
   }
 }
 
-async function switchReferencePair(pair,label) {
-  // Reject both already-selected and in-flight selections BEFORE any fetch.
-  if(!canAddOverlay(overlaySelections,overlayLoads,label)) return false;
-  overlayLoads.add(label);
+async function switchReferencePair(pair,key,label) {
+  // Internally dedupe by actual date as well as named shape and axis.
+  if(!canAddOverlay(overlaySelections,overlayLoads,key)) return false;
+  overlayLoads.add(key);
   try {
     const color=nextLegendColor(colorCursor++);
     const previews=await makeColoredPair(pair,color);
-    if(overlaySelections.has(label)) {
+    if(overlaySelections.has(key)) {
       releaseColoredPair(previews);
       return false;
     }
@@ -612,14 +617,14 @@ async function switchReferencePair(pair,label) {
       entry[key]={element,ratio:preview.height/preview.width,
         blobUrl:preview.blobUrl};
     }
-    overlaySelections.set(label,entry);
+    overlaySelections.set(key,entry);
     document.getElementById('psd-overlays').append(entry.psd.element);
     document.getElementById('octave-overlays').append(entry.octave.element);
-    appendReferenceHistory(label,entry);
+    appendReferenceHistory(key,label,entry);
     fitSvgHeightToPane();
     return true;
   } finally {
-    overlayLoads.delete(label);
+    overlayLoads.delete(key);
   }
 }
 
@@ -635,30 +640,30 @@ function referenceImage(key,info) {
   });
 }
 
-function appendReferenceHistory(label,entry) {
+function appendReferenceHistory(key,label,entry) {
   svgHistory.style.display='block';
   const line=document.createElement('span');
   line.className='reference-log-line';
-  line.dataset.legend=label;
+  line.dataset.legend=key;
   line.textContent=label;
   line.style.color=entry.color;
   line.addEventListener('contextmenu',event=>{
     event.preventDefault();
     event.stopPropagation();
-    showLegendMenu(label,event.clientX,event.clientY);
+    showLegendMenu(key,event.clientX,event.clientY);
   });
   entry.legend=line;
   svgHistory.append(line);
   clampFloatingLog();
 }
 
-function removeReferenceOverlay(label) {
-  const entry=overlaySelections.get(label);
+function removeReferenceOverlay(key) {
+  const entry=overlaySelections.get(key);
   if(!entry) return;
   entry.psd.element.remove();
   entry.octave.element.remove();
   entry.legend.remove();
-  overlaySelections.delete(label);
+  overlaySelections.delete(key);
   releaseColoredPair(entry);
   legendMenu.hidden=true;
   if(!overlaySelections.size) svgHistory.style.display='none';
@@ -666,13 +671,13 @@ function removeReferenceOverlay(label) {
   clampFloatingLog();
 }
 
-async function changeLegendColor(label,color) {
-  const entry=overlaySelections.get(label);
+async function changeLegendColor(key,color) {
+  const entry=overlaySelections.get(key);
   if(!entry || entry.saving || entry.color===color) return;
   entry.saving=true;
   try {
     const next=await makeColoredPair(entry.sourcePair,color);
-    if(overlaySelections.get(label)!==entry) {
+    if(overlaySelections.get(key)!==entry) {
       releaseColoredPair(next);
       return;
     }
@@ -696,8 +701,8 @@ async function changeLegendColor(label,color) {
   }
 }
 
-function showLegendMenu(label,x,y) {
-  if(!overlaySelections.has(label)) return;
+function showLegendMenu(key,x,y) {
+  if(!overlaySelections.has(key)) return;
   const pane=document.getElementById('reference-pane');
   const bounds=pane.getBoundingClientRect();
   legendMenu.replaceChildren();
@@ -719,7 +724,7 @@ function showLegendMenu(label,x,y) {
       item.setAttribute('role','menuitem');
       item.textContent=color;
       item.style.color=color;
-      item.addEventListener('click',()=>{void changeLegendColor(label,color);});
+      item.addEventListener('click',()=>{void changeLegendColor(key,color);});
       secondary.append(item);
     }
     secondary.hidden=false;
@@ -737,7 +742,7 @@ function showLegendMenu(label,x,y) {
   close.type='button';
   close.setAttribute('role','menuitem');
   close.textContent='退出';
-  close.addEventListener('click',()=>removeReferenceOverlay(label));
+  close.addEventListener('click',()=>removeReferenceOverlay(key));
   primary.append(close);
   legendMenu.hidden=false;
   legendMenu.style.left=Math.max(0,Math.min(x-bounds.left,
