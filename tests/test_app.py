@@ -121,7 +121,7 @@ class TestStaticFrontend(unittest.TestCase):
                      'class="cad-operation"', 'class="cad-selection"'):
             self.assertIn(attr,html)
         self.assertIn(".cad-operation{",html)
-        self.assertIn("color:#111;background:#fffffff0;border:1px",html)
+        self.assertIn("border:1px solid #bfc8cf;border-radius:8px",html)
         self.assertIn("border-radius:8px",html)
         self.assertIn("bottom:12px;left:12px",html)
         self.assertNotIn('id="selected-info"',html)
@@ -157,16 +157,16 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("justify-content:center;background:#fff",html)
         self.assertIn("overflow:hidden;display:flex",html)
         self.assertNotIn("overflow-x:auto",html)
-        self.assertIn("minmax(0,5.8fr) 8px minmax(0,18.1fr)",html)
+        self.assertIn("minmax(0,1fr) 8px minmax(0,1fr)",html)
         self.assertIn("let rightSplitRatio = INITIAL_REFERENCE_SPLIT",viewer)
         self.assertIn("fitSvgPair(",viewer)
         self.assertIn("clampMainDivider(",viewer)
         self.assertIn("clampReferenceSplit(",viewer)
         self.assertIn("fitSvgHeightToPane()",viewer)
-        self.assertIn("5.8 / (5.8 + 18.1)",pure)
+        self.assertIn("INITIAL_REFERENCE_SPLIT = 0.5",pure)
         self.assertNotIn("rightSplitChangedByUser",viewer)
-        self.assertIn("a.element.style.width=sizes.width+'px'",viewer)
-        self.assertIn("b.element.style.width=sizes.width+'px'",viewer)
+        self.assertIn("base.element.style.width=width+'px'",viewer)
+        self.assertIn("overlay.element.style.width=width+'px'",viewer)
 
 
     def test_drawing_strategies_use_actual_meshes_and_raycaster(self):
@@ -183,7 +183,10 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("layer.clickable.push(clickTarget)",viewer)
         self.assertIn("raycaster.intersectObjects(targets,false)",viewer)
         self.assertIn("selectOnButton(mesh.userData.cadObject,button)",viewer)
-        self.assertIn("drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ)",viewer)
+        self.assertIn("drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ,",viewer)
+        self.assertIn("item.text_layout,layer.scaleX",viewer)
+        self.assertIn("run.font_pt",viewer)
+        self.assertNotIn("const unitFont=48",viewer)
 
 
     def test_rectangle_depth_directive_and_ellipse_lifting_are_wired(self):
@@ -214,8 +217,8 @@ class TestStaticFrontend(unittest.TestCase):
         service=(STATIC_DIR/"__main__.py").read_text(encoding="utf-8")
         self.assertIn("pictureLayerScales(bounds,ratios)",viewer)
         self.assertIn("loadCadTexture(",viewer)
-        self.assertIn("applyReferenceImage('psd'",viewer)
-        self.assertIn("applyReferenceImage('octave'",viewer)
+        self.assertIn("applyReferenceImage(key,image.url,image.width,image.height)",viewer)
+        self.assertIn("overlaySelections.set(label,entry)",viewer)
         self.assertIn("displayedSvgWidth",viewer)
         self.assertIn("svgHistory.append(line)",viewer)
         self.assertIn("EllipseSvgCatalogHandler",service)
@@ -226,6 +229,40 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("border-radius:0",html)
         self.assertIn("cursor:grab",html)
         self.assertNotIn("max-width:100%;max-height:100%;object-fit:contain",html)
+
+    def test_cad_fixed_divider_and_matching_top_controls(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        self.assertIn('id="cad-fixed-divider"',html)
+        self.assertIn("#cad-fixed-divider{width:100%;height:8px;background:#c4d1da;",html)
+        self.assertIn("pointer-events:none;user-select:none",html)
+        self.assertIn("grid-template-rows:minmax(0,1fr) 8px minmax(0,1fr)",html)
+        self.assertIn("top:10px;left:12px",html)
+        self.assertIn("top:10px;right:12px",html)
+        self.assertIn("height:36px",html)
+        self.assertIn("font-size:14px",html)
+        self.assertIn("border:1px solid #bfc8cf;background:#fff",html)
+
+    def test_svg_transparent_overlay_legend_dedup_and_pair_close(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        pure=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        for snippet in ('id="psd-overlays"', 'id="octave-overlays"',
+                        'id="legend-context-menu"', 'role="menuitem">关闭',
+                        '.reference-overlays{', 'background:transparent', 
+                        '.reference-overlays img'):
+            self.assertIn(snippet,html)
+        for snippet in ("canAddOverlay(overlaySelections,overlayLoads,label)",
+                        "overlayLoads.add(label)", "overlaySelections.set(label,entry)",
+                        "showLegendClose(label,event.clientX,event.clientY)",
+                        "removeReferenceOverlay(label)", "overlaySelections.delete(label)",
+                        "inspectSvgColors(pair.psd)", "inspectSvgColors(pair.octave)",
+                        "legendForeground(colors)", "legendPaint(entry[key].colors)",
+                        "document.getElementById('psd-overlays').append",
+                        "document.getElementById('octave-overlays').append"):
+            self.assertIn(snippet,viewer)
+        self.assertIn("svgPaintColors(source)",pure)
+        self.assertIn("requiredSvgRatio(baseRatio, entries)",pure)
+        self.assertNotIn("applyReferenceImage('psd',psd.url",viewer)
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())

@@ -11,21 +11,22 @@
 html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
 #layout{display:grid;grid-template-columns:minmax(0,58fr) 8px minmax(0,42fr);width:100vw;height:100vh}
 #cad-pane{position:relative;min-width:0;min-height:0;overflow:hidden;background:#fff}
-#cad-layers{width:100%;height:100%;display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
-.cad-layer{position:relative;min-width:0;min-height:0;overflow:hidden;background:#fff;border-bottom:1px solid #d1d7dc}
-.cad-layer:last-child{border-bottom:0}
+#cad-layers{width:100%;height:100%;display:grid;grid-template-rows:minmax(0,1fr) 8px minmax(0,1fr)}
+#cad-fixed-divider{width:100%;height:8px;background:#c4d1da;pointer-events:none;user-select:none}
+.cad-layer{position:relative;min-width:0;min-height:0;overflow:hidden;background:#fff}
 .cad-layer canvas{display:block;position:absolute;inset:0;width:100%;height:100%}
-.cad-operation{position:absolute;top:10px;left:12px;z-index:3;max-width:calc(100% - 75px);
-  color:#111;background:#fffffff0;border:1px solid #bfc8cf;border-radius:8px;padding:5px 9px;
-  pointer-events:none;font-size:12px;line-height:1.5}
+.cad-operation{position:absolute;top:10px;left:12px;z-index:3;max-width:calc(100% - 80px);
+  display:flex;align-items:center;height:36px;color:#111;background:#fff;
+  border:1px solid #bfc8cf;border-radius:8px;padding:0 10px;
+  pointer-events:none;font-size:14px;line-height:1}
 .cad-selection{position:absolute;bottom:12px;left:12px;right:auto;z-index:3;
   max-width:calc(100% - 24px);color:#111;background:#fffffff2;border:1px solid #bbc6d0;
   border-radius:8px;padding:5px 9px;font-size:12px;line-height:1.5;
   overflow-wrap:anywhere;pointer-events:none}
 .cad-selection:empty{display:none}
-#reset-view{position:absolute;top:12px;right:13px;z-index:5;width:42px;height:42px;
-  border:1px solid #849bb1;background:#e9f2f8;color:#172f44;border-radius:9px;
-  font-size:27px;line-height:1;cursor:pointer}
+#reset-view{position:absolute;top:10px;right:12px;z-index:5;width:36px;height:36px;
+  border:1px solid #bfc8cf;background:#fff;color:#111;border-radius:8px;
+  font-size:14px;line-height:1;cursor:pointer}
 #reset-view:hover,#reset-view:focus-visible{background:#c9e3f3;outline:2px solid #7bb8e1}
 .cad-context-menu{position:absolute;z-index:9;min-width:112px;
   padding:5px;background:#fff;border:1px solid #aab6c0;box-shadow:0 5px 17px #0002;
@@ -45,10 +46,21 @@ html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
   box-shadow:0 3px 10px #0002;padding:6px 9px;color:#111;font-size:12px;
   white-space:nowrap;cursor:grab;touch-action:none;user-select:none}
 #reference-log:active{cursor:grabbing}
-#reference-log .reference-log-line{display:block;line-height:1.7}
-#reference-frames{display:grid;grid-template-rows:minmax(0,5.8fr) 8px minmax(0,18.1fr);height:100%;width:100%}
+#reference-log .reference-log-line{display:flex;align-items:center;gap:6px;line-height:1.7}
+#reference-log .legend-swatch{width:12px;height:12px;flex:0 0 12px;
+  border:1px solid #8886;background:transparent}
+#legend-context-menu{position:absolute;z-index:20;display:block;background:#fff;
+  border:1px solid #9cabb7;padding:4px;box-shadow:0 4px 12px #0002}
+#legend-context-menu[hidden]{display:none}
+#legend-context-menu button{padding:5px 18px;border:0;background:#fff;color:#111;
+  font:13px "Segoe UI","Microsoft YaHei",sans-serif;cursor:pointer}
+#legend-context-menu button:hover{background:#e5f2fc}
+#reference-frames{display:grid;grid-template-rows:minmax(0,1fr) 8px minmax(0,1fr);height:100%;width:100%}
 .reference-frame{min-height:0;min-width:0;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#fff}
 .reference-frame img{display:none;flex:0 0 auto;width:auto;height:auto;object-fit:contain}
+.reference-overlays{position:absolute;inset:0;z-index:2;background:transparent;pointer-events:none}
+.reference-overlays img{display:block;position:absolute;left:50%;top:50%;
+  transform:translate(-50%,-50%);background:transparent;opacity:1;pointer-events:none}
 .reference-placeholder{padding:15px;color:#8293a4;font-size:12px;text-align:center}
 .splitter{z-index:7;touch-action:none;user-select:none;position:relative;
   display:flex;align-items:center;justify-content:center;background:#c4d1da}
@@ -63,7 +75,7 @@ body.dragging-divider.vertical{cursor:row-resize}
 @media(max-width:750px){
  #layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,55%) minmax(0,45%)}
  #main-splitter{display:none}
- .cad-operation{top:6px;left:6px;right:59px;font-size:11px}
+ .cad-operation{top:6px;left:6px;right:59px;font-size:14px}
  .cad-selection{bottom:6px;left:6px;font-size:11px}
  #reset-view{top:6px;right:6px}
 }
@@ -84,6 +96,7 @@ body.dragging-divider.vertical{cursor:row-resize}
         <div class="cad-operation">滚轮缩放·右键拖动平移·左键拖动旋转</div>
         <div id="fab-selected-info" class="cad-selection" aria-live="polite"></div>
       </div>
+      <div id="cad-fixed-divider" aria-hidden="true"></div>
       <div class="cad-layer" id="subfab-stage" aria-label="Subfab CAD">
         <div id="subfab-selected-info" class="cad-selection" aria-live="polite"></div>
       </div>
@@ -94,15 +107,18 @@ body.dragging-divider.vertical{cursor:row-resize}
     <div id="reference-frames">
       <div class="reference-frame" id="psd-frame">
         <img id="psd-reference" alt="PSD 参考底图">
+        <div class="reference-overlays" id="psd-overlays" aria-hidden="true"></div>
         <div class="reference-placeholder" id="psd-placeholder">PSD 图片未提供</div>
       </div>
       <div id="reference-splitter" class="splitter" role="separator" aria-label="拖动调整上下 SVG 图片区域高度" aria-orientation="horizontal" tabindex="0"></div>
       <div class="reference-frame" id="octave-frame">
         <img id="octave-reference" alt="1/3 倍频程参考底图">
+        <div class="reference-overlays" id="octave-overlays" aria-hidden="true"></div>
         <div class="reference-placeholder" id="octave-placeholder">倍频程图片未提供</div>
       </div>
     </div>
     <div id="reference-log" role="status" aria-label="已选择 SVG 图表"></div>
+    <div id="legend-context-menu" hidden role="menu"><button type="button" role="menuitem">关闭</button></div>
   </aside>
 </div>
 <script type="module" src="./cad_viewer.js"></script>

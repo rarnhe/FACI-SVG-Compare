@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "XLSX alternative-text z=height parsing; native-picture-aspect synchronized CAD; sheet-colored textbox; mouse-hover breadcrumbs; dynamic timestamp SVG catalogs with validated pairs; right-opening X/Y/Z menu; draggable SVG history; constrained splitters; legacy Bokeh/HTTP/MIME and CAD math regressions.",
+        "XLSX per-run DrawingML font-point extraction; same-size Fab controls and 8px fixed CAD divider; 1:1 aligned reference split; transparent SVG overlays and paint-derived legend; deduplicated selection, right-click per-entry close; existing Bokeh/MIME/security and CAD geometry regressions.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

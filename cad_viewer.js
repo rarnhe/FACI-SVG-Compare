@@ -5,6 +5,7 @@ import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometr
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionPath, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPair, clampMainDivider, clampReferenceSplit,
+  requiredSvgRatio, svgPaintColors, legendForeground, legendPaint, canAddOverlay,
 } from './cad_ui.mjs';
 
 const EMU_TO_PX = 1 / 9525;
@@ -18,6 +19,9 @@ let lastCadSize = null;
 let rightSplitRatio = INITIAL_REFERENCE_SPLIT;
 const referenceImages = new Map();
 const svgHistory = document.getElementById('reference-log');
+const legendMenu = document.getElementById('legend-context-menu');
+const overlaySelections = new Map();
+const overlayLoads = new Set();
 let displayedSvgWidth = 0;
 
 function createLayer(stageId) {
@@ -92,41 +96,61 @@ function colorValue(value,fallback) {
 
 // Text is a natural-aspect texture anchored to the upper-left of its shape.
 // Never stretch a 1024x256 text canvas to an arbitrary shape rectangle.
-function drawTopLeftText(group,label,width,height,foreground,frontZ) {
+function drawTopLeftText(group,label,width,height,foreground,frontZ,textLayout=[],imageScale=1) {
   if(!label?.trim()) return;
-  const lines=label.split(/\r?\n/).slice(0,6);
-  const unitFont=48, pad=6, lineHeight=58;
+  // OOXML run font size is in points. 96dpi workbook pixels: 1pt=96/72px.
+  // The same per-image scale is applied to text and drawing coordinates.
+  // Never force an arbitrary 48px font or shrink text to the shape bounds.
+  const lines=textLayout.length ? textLayout.map(line=>line.runs)
+    : label.split(/\r?\n/).map(text=>[{text,font_pt:11}]);
+  const cssPixels=pt=>Math.max(1,Number(pt)||11)*(96/72)*imageScale;
+  const pad=Math.max(1,2*imageScale);
   const canvas=document.createElement('canvas');
   const measure=canvas.getContext('2d');
-  measure.font='500 48px "Microsoft YaHei","Segoe UI",sans-serif';
-  const measured=Math.max(...lines.map(line=>measure.measureText(line).width),16);
-  canvas.width=Math.ceil(Math.min(4096,measured+pad*2));
-  canvas.height=Math.ceil(lines.length*lineHeight+pad*2);
+  const font=px=>px+'px "Microsoft YaHei","Segoe UI",sans-serif';
+  const layouts=lines.map(runs=>{
+    let lineWidth=0,maxFont=0;
+    const segments=runs.map(run=>{
+      const px=cssPixels(run.font_pt);
+      measure.font=font(px);
+      const measured=measure.measureText(run.text||'').width;
+      lineWidth+=measured;
+      maxFont=Math.max(maxFont,px);
+      return {text:run.text||'',width:measured,fontPx:px};
+    });
+    return {segments,width:lineWidth,height:Math.max(maxFont,cssPixels(11))*1.22};
+  });
+  const logicalWidth=Math.max(1,...layouts.map(line=>line.width))+pad*2;
+  const logicalHeight=layouts.reduce((sum,line)=>sum+line.height,0)+pad*2;
+  const resolution=Math.max(0.1,Math.min(2,4096/logicalWidth,4096/logicalHeight));
+  canvas.width=Math.max(1,Math.ceil(logicalWidth*resolution));
+  canvas.height=Math.max(1,Math.ceil(logicalHeight*resolution));
   const ctx=canvas.getContext('2d');
-  ctx.font='500 48px "Microsoft YaHei","Segoe UI",sans-serif';
+  ctx.scale(resolution,resolution);
   ctx.textBaseline='top';
-  ctx.textAlign='left';
-  ctx.fillStyle=/^#[0-9a-f]{6}$/i.test(foreground||'') ? foreground : '#f4f9fd';
-  lines.forEach((line,index)=>ctx.fillText(line,pad,pad+index*lineHeight,canvas.width-pad*2));
+  ctx.fillStyle=/^#[0-9a-f]{6}$/i.test(foreground||'') ? foreground : '#111111';
+  let y=pad;
+  for(const line of layouts) {
+    let x=pad;
+    for(const seg of line.segments) {
+      ctx.font=font(seg.fontPx);
+      ctx.fillText(seg.text,x,y);
+      x+=seg.width;
+    }
+    y+=line.height;
+  }
   const texture=new THREE.CanvasTexture(canvas);
   texture.colorSpace=THREE.SRGBColorSpace;
-  const margin=Math.max(1,Math.min(width,height)*0.04);
-  const scale=Math.max(0.0001,Math.min(
-    0.35,
-    Math.max(0.1,width-2*margin)/canvas.width,
-    Math.max(0.1,height-2*margin)/canvas.height,
-  ));
-  const textWidth=canvas.width*scale, textHeight=canvas.height*scale;
-  const text=new THREE.Mesh(
-    new THREE.PlaneGeometry(textWidth,textHeight),
+  const mesh=new THREE.Mesh(
+    new THREE.PlaneGeometry(logicalWidth,logicalHeight),
     new THREE.MeshBasicMaterial({
       map:texture,transparent:true,depthWrite:false,side:THREE.DoubleSide,
       polygonOffset:true,polygonOffsetFactor:-1,
     }),
   );
-  text.position.set(-width/2+margin+textWidth/2,
-                    height/2-margin-textHeight/2,frontZ);
-  group.add(text);
+  mesh.position.set(-width/2+pad+logicalWidth/2,
+                    height/2-pad-logicalHeight/2,frontZ);
+  group.add(mesh);
 }
 
 function makeOutline(points,color) {
@@ -219,7 +243,8 @@ function drawShape(layer,item,rectangles=[]) {
   }
   clickTarget.userData.cadObject=item;
   if (kind !== 'textbox') layer.clickable.push(clickTarget);
-  drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ);
+  drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ,
+                  item.text_layout,layer.scaleX);
   layer.scene.add(group);
 }
 
@@ -298,10 +323,9 @@ function showAxisSubmenu(layer,button,date,catalog) {
         return;
       }
       try {
-        await switchReferencePair(pair);
         const line=[catalog.rectangle,date,'+'+axis].join('_');
-        appendReferenceHistory(line);
-        closeContextMenus();
+        if (await switchReferencePair(pair,line)) closeContextMenus();
+        else closeContextMenus();
       } catch(error) {
         console.error('Unable to switch SVG pair:',error);
         item.title='SVG 图片载入失败，原图保持不变';
@@ -526,27 +550,31 @@ function applySvgSplitRatio() {
     'minmax(0,'+rightSplitRatio+'fr) 8px minmax(0,'+(1-rightSplitRatio)+'fr)';
 }
 
+function displayedRatio(key) {
+  const base=referenceImages.get(key);
+  return requiredSvgRatio(base?.ratio||1,
+    [...overlaySelections.values()].map(entry=>entry[key].ratio));
+}
+
 function fitSvgHeightToPane() {
   const psd=document.getElementById('psd-frame');
   const octave=document.getElementById('octave-frame');
   const a=referenceImages.get('psd'),b=referenceImages.get('octave');
-  if(a && b) {
-    const sizes=fitSvgPair(
-      {width:psd.clientWidth,height:psd.clientHeight},
-      {width:octave.clientWidth,height:octave.clientHeight},
-      a.ratio,b.ratio);
-    a.element.style.width=sizes.width+'px';
-    a.element.style.height=sizes.heightA+'px';
-    b.element.style.width=sizes.width+'px';
-    b.element.style.height=sizes.heightB+'px';
-    displayedSvgWidth=sizes.width;
-  } else {
-    for (const [key,entry] of referenceImages) {
-      const frame=document.getElementById(key+'-frame');
-      const width=Math.max(0,Math.min(
-        frame.clientWidth,frame.clientHeight/entry.ratio));
-      entry.element.style.width=width+'px';
-      entry.element.style.height=(width*entry.ratio)+'px';
+  const ratioA=displayedRatio('psd'),ratioB=displayedRatio('octave');
+  const sizes=fitSvgPair(
+    {width:psd.clientWidth,height:psd.clientHeight},
+    {width:octave.clientWidth,height:octave.clientHeight},ratioA,ratioB);
+  const width=sizes.width;
+  displayedSvgWidth=width;
+  for(const [key,base] of referenceImages) {
+    base.element.style.width=width+'px';
+    base.element.style.height=(width*base.ratio)+'px';
+  }
+  for(const entry of overlaySelections.values()) {
+    for(const key of ['psd','octave']) {
+      const overlay=entry[key];
+      overlay.element.style.width=width+'px';
+      overlay.element.style.height=(width*overlay.ratio)+'px';
     }
   }
 }
@@ -571,14 +599,50 @@ function prefetchSvg(url) {
   });
 }
 
-async function switchReferencePair(pair) {
-  // Transactional change: neither pane changes unless both SVGs decoded.
-  const [psd,octave]=await Promise.all([
-    prefetchSvg(pair.psd),prefetchSvg(pair.octave),
-  ]);
-  applyReferenceImage('psd',psd.url,psd.width,psd.height);
-  applyReferenceImage('octave',octave.url,octave.width,octave.height);
-  fitSvgHeightToPane();
+async function inspectSvgColors(url) {
+  // Only SVG-defined paint values are used. No white fill is added by the app.
+  try {
+    const response=await fetch(url,{cache:'no-store'});
+    if(!response.ok) return [];
+    return svgPaintColors(await response.text());
+  } catch(error) {
+    console.warn('SVG paint lookup unavailable:',error);
+    return [];
+  }
+}
+
+async function switchReferencePair(pair,label) {
+  // Check the legend BEFORE image loading. Guard concurrent requests too.
+  if(!canAddOverlay(overlaySelections,overlayLoads,label)) return false;
+  overlayLoads.add(label);
+  try {
+    const [psd,octave,psdColors,octaveColors]=await Promise.all([
+      prefetchSvg(pair.psd),prefetchSvg(pair.octave),
+      inspectSvgColors(pair.psd),inspectSvgColors(pair.octave),
+    ]);
+    if(overlaySelections.has(label)) return false;
+    const entry={};
+    for(const [key,probe,colors] of [
+      ['psd',psd,psdColors],['octave',octave,octaveColors],
+    ]) {
+      const element=document.createElement('img');
+      element.alt='';
+      element.decoding='async';
+      element.className='reference-overlay-image';
+      element.style.background='transparent';
+      element.src=probe.url;
+      entry[key]={element,ratio:probe.height/probe.width,colors};
+    }
+    // Both decoded; add in one DOM turn. Keep base reference images untouched.
+    overlaySelections.set(label,entry);
+    document.getElementById('psd-overlays').append(entry.psd.element);
+    document.getElementById('octave-overlays').append(entry.octave.element);
+    appendReferenceHistory(label,entry);
+    fitSvgHeightToPane();
+    return true;
+  } finally {
+    overlayLoads.delete(label);
+  }
 }
 
 function referenceImage(key,info) {
@@ -593,14 +657,62 @@ function referenceImage(key,info) {
   });
 }
 
-function appendReferenceHistory(text) {
+function appendReferenceHistory(label,entry) {
   svgHistory.style.display='block';
   const line=document.createElement('span');
   line.className='reference-log-line';
-  line.textContent=text;
+  line.dataset.legend=label;
+  const colors=[...entry.psd.colors,...entry.octave.colors];
+  line.style.color=legendForeground(colors);
+  for(const key of ['psd','octave']) {
+    const swatch=document.createElement('span');
+    swatch.className='legend-swatch';
+    swatch.style.background=legendPaint(entry[key].colors);
+    swatch.title=key==='psd'?'PSD 实际颜色':'1-3-Octave 实际颜色';
+    line.append(swatch);
+  }
+  const title=document.createElement('span');
+  title.textContent=label;
+  line.append(title);
+  line.addEventListener('contextmenu',event=>{
+    event.preventDefault();
+    showLegendClose(label,event.clientX,event.clientY);
+  });
+  entry.legend=line;
   svgHistory.append(line);
   clampFloatingLog();
 }
+
+function removeReferenceOverlay(label) {
+  const entry=overlaySelections.get(label);
+  if(!entry) return;
+  entry.psd.element.remove();
+  entry.octave.element.remove();
+  entry.legend.remove();
+  overlaySelections.delete(label);
+  legendMenu.hidden=true;
+  if(overlaySelections.size===0) svgHistory.style.display='none';
+  fitSvgHeightToPane();
+  clampFloatingLog();
+}
+
+function showLegendClose(label,x,y) {
+  const pane=document.getElementById('reference-pane');
+  const close=legendMenu.querySelector('button');
+  close.onclick=()=>removeReferenceOverlay(label);
+  legendMenu.hidden=false;
+  const bounds=pane.getBoundingClientRect();
+  legendMenu.style.left=Math.max(0,Math.min(x-bounds.left,
+    pane.clientWidth-legendMenu.offsetWidth))+'px';
+  legendMenu.style.top=Math.max(0,Math.min(y-bounds.top,
+    pane.clientHeight-legendMenu.offsetHeight))+'px';
+}
+document.addEventListener('pointerdown',event=>{
+  if(!legendMenu.contains(event.target)) legendMenu.hidden=true;
+});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape') legendMenu.hidden=true;
+});
 
 function clampFloatingLog() {
   if(svgHistory.style.display==='none') return;
@@ -687,10 +799,10 @@ installSplitter('main-splitter','vertical',event=>{
 installSplitter('reference-splitter','horizontal',event=>{
   const panel=document.getElementById('reference-frames');
   const bounds=panel.getBoundingClientRect();
-  const a=referenceImages.get('psd'),b=referenceImages.get('octave');
   rightSplitRatio=clampReferenceSplit(
     event.clientY-bounds.top,bounds.height,8,
-    (a?.ratio||0)*displayedSvgWidth,(b?.ratio||0)*displayedSvgWidth);
+    displayedRatio('psd')*displayedSvgWidth,
+    displayedRatio('octave')*displayedSvgWidth);
   applySvgSplitRatio();
   fitSvgHeightToPane();
 });

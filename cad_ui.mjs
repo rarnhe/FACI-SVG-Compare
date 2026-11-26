@@ -1,7 +1,7 @@
 /** Pure CAD UI geometry and responsive layout helpers (no DOM dependencies). */
 const EPS = 1e-7;
 
-export const INITIAL_REFERENCE_SPLIT = 5.8 / (5.8 + 18.1);
+export const INITIAL_REFERENCE_SPLIT = 0.5;
 
 export function shapeLabel(shape) {
   return String(shape?.text || shape?.name || '').trim().replace(/\s*\n\s*/g, ' ');
@@ -129,3 +129,51 @@ export function clampReferenceSplit(position,totalHeight,dividerHeight=8,minTop=
   return Math.max(top/usable,Math.min(1-bottom/usable,position/usable));
 }
 
+
+
+/** Base and active SVGs share a coordinate plane but may have different viewBox ratios. */
+export function requiredSvgRatio(baseRatio, entries) {
+  const candidates=[baseRatio,...entries].filter(value=>Number.isFinite(value)&&value>0);
+  return candidates.length ? Math.max(...candidates) : 1;
+}
+
+/** Identify actual SVG fill/stroke colors. Never fabricate background paint. */
+export function svgPaintColors(source) {
+  const text=String(source||'');
+  const candidates=[];
+  for(const match of text.matchAll(/\b(?:fill|stroke|stop-color)\s*=\s*["']([^"']+)["']/gi))
+    candidates.push(match[1]);
+  for(const match of text.matchAll(/(?:^|[;{])\s*(?:fill|stroke|stop-color)\s*:\s*([^;}"']+)/gim))
+    candidates.push(match[1]);
+  const seen=new Set(),colors=[];
+  for(const raw of candidates) {
+    const value=raw.trim().replace(/\s*!important\s*$/i,'');
+    // Safe color-only CSS values; exclude url() and unpainted regions.
+    if(!/^(?:#[0-9a-f]{3,8}|(?:rgba?|hsla?)\([\d\s.,%+\-]+\)|[a-z]{3,24})$/i.test(value) ||
+       /^(none|transparent|inherit|initial|currentcolor|unset)$/i.test(value)) continue;
+    const key=value.toLowerCase();
+    if(!seen.has(key)){seen.add(key);colors.push(value);}
+  }
+  return colors;
+}
+
+export function legendForeground(colors) {
+  return colors.find(color=>!/^(#fff(?:fff)?(?:ff)?|white)$/i.test(color)) ||
+    colors[0] || '#000000';
+}
+
+export function legendPaint(colors) {
+  if(!colors.length) return 'transparent';
+  if(colors.length===1) return colors[0];
+  const step=100/colors.length,stops=[];
+  colors.forEach((color,i)=>{
+    stops.push(color+' '+(step*i).toFixed(3)+'%');
+    stops.push(color+' '+(step*(i+1)).toFixed(3)+'%');
+  });
+  return 'linear-gradient(90deg,'+stops.join(',')+')';
+}
+
+/** Duplicate guard for both completed and concurrent menu selections. */
+export function canAddOverlay(active,loading,label) {
+  return Boolean(label) && !active.has(label) && !loading.has(label);
+}

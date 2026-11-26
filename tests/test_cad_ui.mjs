@@ -4,6 +4,7 @@ import {
   INITIAL_REFERENCE_SPLIT, shapeLabel, selectOnButton,
   containsShape, shapeAncestors, selectionPath, fitSvgPair,
   clampMainDivider, clampReferenceSplit, pictureLayerScales,
+  requiredSvgRatio,svgPaintColors,legendForeground,legendPaint,canAddOverlay,
 } from '../cad_ui.mjs';
 
 const shape=(kind,x,y,width,height,text,rotation=0)=>({
@@ -89,8 +90,8 @@ test('SVGs have equal widths, intrinsic aspect ratios, and fit inside BOTH panes
   }
 });
 
-test('split defaults to exactly 5.8:18.1, without adapting to SVG intrinsic size',()=>{
-  assert.ok(Math.abs(INITIAL_REFERENCE_SPLIT-5.8/23.9)<1e-12);
+test('right SVG split initially aligns with the fixed CAD center divider',()=>{
+  assert.equal(INITIAL_REFERENCE_SPLIT,0.5);
 });
 
 test('both splitter clamps keep each area visible, including narrow displays',()=>{
@@ -133,4 +134,36 @@ test('divider clamps stop before any displayed SVG would need horizontal scrolli
   const max=clampReferenceSplit(9999,700,8,topHeight,bottomHeight);
   assert.ok(min*(700-8)+1e-8>=topHeight);
   assert.ok((1-max)*(700-8)+1e-8>=bottomHeight);
+});
+
+
+test('transparent SVG paint extraction uses explicit shapes and never invents white',()=>{
+  assert.deepEqual(svgPaintColors('<svg><path stroke="#FF5733" fill="none"/></svg>'),['#FF5733']);
+  const two='<svg><style>.a{fill:#0066cc;stroke:#00bbaa}</style>'+
+    '<path class="a" fill="none" stroke="transparent"/></svg>';
+  assert.deepEqual(svgPaintColors(two),['#0066cc','#00bbaa']);
+  assert.deepEqual(svgPaintColors('<svg><path fill="url(#grad)" stroke="none"/></svg>'),[]);
+  assert.equal(legendForeground(['#ffffff','#FF5733']),'#FF5733');
+  assert.equal(legendPaint(['#ff0000']),'#ff0000');
+  assert.match(legendPaint(['#ff0000','#0000ff']),/linear-gradient/);
+});
+
+test('legend deduplicates before SVG loads and also during pending loads',()=>{
+  const active=new Map(),pending=new Set();
+  assert.equal(canAddOverlay(active,pending,'B1_20260704101627_+X'),true);
+  pending.add('B1_20260704101627_+X');
+  assert.equal(canAddOverlay(active,pending,'B1_20260704101627_+X'),false);
+  pending.clear();
+  active.set('B1_20260704101627_+X',{});
+  assert.equal(canAddOverlay(active,pending,'B1_20260704101627_+X'),false);
+  active.delete('B1_20260704101627_+X');
+  assert.equal(canAddOverlay(active,pending,'B1_20260704101627_+X'),true);
+});
+
+test('oversize overlays influence fit without changing the base image ratio',()=>{
+  assert.equal(requiredSvgRatio(0.4,[0.5,0.3]),0.5);
+  assert.equal(requiredSvgRatio(0.4,[0.8,0.3]),0.8);
+  const fit=fitSvgPair({width:800,height:250},{width:800,height:250},0.8,0.7);
+  assert.ok(fit.heightA<=250 && fit.heightB<=250);
+  assert.ok(fit.width>0);
 });

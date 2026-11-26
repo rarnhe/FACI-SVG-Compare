@@ -275,6 +275,37 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(obj["shape_kind"],"textbox")
         self.assertEqual(obj["colors"]["outline"],"无/透明")
 
+    def test_text_runs_preserve_excel_font_pt_and_paragraph_defaults(self):
+        shape_xml = shape(name="文本框12")
+        shape_xml = shape_xml.replace(
+            "<a:rPr>", '<a:rPr sz="1800">'
+        ).replace("</a:rPr></a:r>", "</a:rPr><a:t>BODYv2</a:t></a:r>")
+        obj=self.parse(one_cell(shape_xml))[0]["objects"][0]
+        self.assertEqual(obj["text"],"BODYv2")
+        self.assertEqual(obj["text_layout"],[
+            {"runs":[{"text":"BODYv2","font_pt":18.0}]}
+        ])
+
+        defaults = shape(name="矩形3").replace(
+            '<a:p><a:r><a:rPr>',
+            '<a:p><a:pPr><a:defRPr sz="1250"/></a:pPr><a:r><a:rPr>',
+        ).replace("</a:rPr></a:r>", "</a:rPr><a:t>R</a:t></a:r>")
+        obj=self.parse(one_cell(defaults))[0]["objects"][0]
+        self.assertEqual(obj["text_layout"][0]["runs"][0]["font_pt"],12.5)
+
+    def test_text_runs_distinct_sizes_within_one_paragraph(self):
+        xml=shape(name="文本框3").replace(
+            '</a:rPr></a:r>',
+            '</a:rPr><a:t>First</a:t></a:r>'
+            '<a:r><a:rPr sz="2400"/><a:t>Second</a:t></a:r>',
+        )
+        xml=xml.replace("<a:rPr>",'<a:rPr sz="1000">',1)
+        obj=self.parse(one_cell(xml))[0]["objects"][0]
+        self.assertEqual(obj["text_layout"][0]["runs"],[
+            {"text":"First","font_pt":10.0},
+            {"text":"Second","font_pt":24.0},
+        ])
+
     def test_alt_text_title_description_are_extracted_and_cleaned(self):
         marked = shape(name="矩形14").replace(
             'name="矩形14"/>',
