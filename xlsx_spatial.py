@@ -514,6 +514,6 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                 colors = obj["colors"]
                 lines.append(
                     f"    颜色: 背景={colors['fill']} "
-                    f"轮廓={colors['outline']} 文字={colors['text']}"
+                    f"轮廓={colors['outline']}"
                 )
     return "\n".join(lines)
