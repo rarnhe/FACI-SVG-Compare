@@ -714,7 +714,7 @@ async function initialize() {
     if(!response.ok) throw new Error('CAD layout HTTP '+response.status);
     const data=await response.json();
     workbookName=data.workbook || '';
-    document.title=workbookName.replace(/\.xlsx$/i,'') || 'Fab / Subfab CAD';
+    document.title=workbookName || 'Fab / Subfab CAD';
 
     const layerImages=data.layers.map(src=>
       src?.objects?.find(item=>item.type==='image') || null);
