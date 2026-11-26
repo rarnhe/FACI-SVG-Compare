@@ -3,7 +3,7 @@ const EPS = 1e-7;
 
 export const INITIAL_REFERENCE_SPLIT = 0.5;
 
-// Transparent cuboid faces let elevated measurement ellipses remain visible.
+// Translucent cuboid faces reveal elevated ellipse measurement points.
 export const CUBOID_FACE_OPACITY = 0.23;
 export const CUBOID_SELECTED_OPACITY = 0.30;
 
@@ -97,6 +97,24 @@ export function selectionParts(items,selected,toRect) {
     parts.push({kind:selected.shape_kind,text:shapeLabel(selected)});
   }
   return parts.filter(part=>part.text);
+}
+
+/** Viewer legend: folder_sheet_rectangle-or-ellipse_+direction (no date). */
+export function svgLegendName(catalog,axis) {
+  return [
+    String(catalog.folder||'').trim(),
+    String(catalog.sheet||'').trim(),
+    String(catalog.identifier||'').trim(),
+    '+'+String(axis||'').toUpperCase(),
+  ].join('_');
+}
+
+/** Keep distinct timepoints independent even when their legend text matches. */
+export function svgSelectionKey(catalog,date,axis) {
+  return JSON.stringify([
+    catalog.folder,catalog.sheet,catalog.target_kind,catalog.identifier,
+    date,String(axis||'').toUpperCase(),
+  ]);
 }
 
 /** Fit both complete SVG images at a common pixel width; never overflow. */
