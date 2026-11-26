@@ -116,18 +116,19 @@ class TestStaticFrontend(unittest.TestCase):
 
     def test_operation_labels_are_plain_black_and_each_layer_has_own_breadcrumb(self):
         html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
-        self.assertEqual(html.count("滚轮缩放·右键拖动平移·左键拖动旋转"),2)
+        self.assertEqual(html.count("滚轮缩放·右键拖动平移·左键拖动旋转"),1)
         for attr in ('id="fab-selected-info"', 'id="subfab-selected-info"',
                      'class="cad-operation"', 'class="cad-selection"'):
             self.assertIn(attr,html)
         self.assertIn(".cad-operation{",html)
-        self.assertIn("color:#111;background:none;border:0",html)
+        self.assertIn("color:#111;background:#fffffff0;border:1px",html)
+        self.assertIn("border-radius:8px",html)
         self.assertIn("bottom:12px;left:12px",html)
         self.assertNotIn('id="selected-info"',html)
         self.assertNotIn('id="cad-info"',html)
         self.assertNotIn("Fab / Subfab · 联动 CAD 视图",html)
 
-    def test_white_background_and_context_menu_hierarchy(self):
+    def test_white_background_and_dynamic_context_menu_hierarchy(self):
         html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
         self.assertIn("scene.background = new THREE.Color(0xffffff)",viewer)
@@ -135,11 +136,17 @@ class TestStaticFrontend(unittest.TestCase):
         for marker in ("createContextMenu(", "closeContextMenus(", "openContextMenu(",
                        "selectionPath(", "workbookName=data.workbook",
                        "if (kind !== 'textbox') layer.clickable.push(clickTarget)",
-                       "event.button===2", "2025", "2026", "'X','Y','Z'"):
+                       "event.button===2", "'X','Y','Z'",
+                       "'./cad-svg-catalog/'", "showAxisSubmenu(", "prefetchSvg(",
+                       "appendReferenceHistory(", "document.title=workbookName"):
             with self.subTest(marker=marker):
                 self.assertIn(marker,viewer)
-        self.assertIn("selectOnButton(mesh.userData.cadObject,event.button)",viewer)
+        self.assertIn("selectOnButton(mesh.userData.cadObject,button)",viewer)
+        self.assertIn("canvas.addEventListener('pointermove'",viewer)
+        self.assertIn("canvas.addEventListener('pointerleave'",viewer)
         self.assertIn("stageId==='fab-stage'?'fab-selected-info':'subfab-selected-info'",viewer)
+        self.assertNotIn("2025 ›",viewer)
+
 
     def test_svg_fit_is_centered_bounded_and_initial_split_ratio_fixed(self):
         html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
@@ -165,7 +172,7 @@ class TestStaticFrontend(unittest.TestCase):
     def test_drawing_strategies_use_actual_meshes_and_raycaster(self):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
         strategies={
-            "textbox": ("kind==='textbox' ? 0x828b96", "new THREE.PlaneGeometry(w,h)"),
+            "textbox": ("const fillColor=colorValue(colors.fill", "new THREE.PlaneGeometry(w,h)"),
             "ellipse": ("kind==='ellipse'", "new THREE.CircleGeometry(radius,72)"),
             "rectangle": ("kind==='rectangle'", "new THREE.BoxGeometry(w,h,depth)"),
         }
@@ -174,24 +181,42 @@ class TestStaticFrontend(unittest.TestCase):
                 for snippet in snippets:
                     self.assertIn(snippet,viewer)
         self.assertIn("layer.clickable.push(clickTarget)",viewer)
-        self.assertIn("raycaster.intersectObjects(pickable,false)",viewer)
-        self.assertIn("selectOnButton(mesh.userData.cadObject,event.button)",viewer)
+        self.assertIn("raycaster.intersectObjects(targets,false)",viewer)
+        self.assertIn("selectOnButton(mesh.userData.cadObject,button)",viewer)
         self.assertIn("drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ)",viewer)
 
 
     def test_rectangle_depth_directive_and_ellipse_lifting_are_wired(self):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
-        self.assertIn("rectangleHeight(item.text,w,h)",viewer)
-        self.assertIn("ellipseElevation(item,toWorldRect,rectangles)",viewer)
+        self.assertIn("rectangleHeight(item.alt_text,w,h)",viewer)
+        self.assertIn("ellipseElevation(item,x=>toWorldRect(x,layer),rectangles)",viewer)
         self.assertIn("circleRectangleRelation",helper if False else
                       (STATIC_DIR/"cad_geometry.mjs").read_text(encoding="utf-8"))
-        self.assertIn("const rectangles=rectangleSpecs(layerData.objects,toWorldRect)",viewer)
+        self.assertIn("const rectangles=rectangleSpecs(layer.objects,obj=>toWorldRect(obj,layer))",viewer)
         self.assertIn("depth>0",viewer)
         self.assertIn("new THREE.PlaneGeometry(w,h)",viewer)
         with open(STATIC_DIR/"cad_geometry.mjs",encoding="utf-8") as file:
             helper=file.read()
-        self.assertIn("match[1] === 'x' ? width : height",helper)
+        self.assertIn("match[2].toLowerCase()==='x' ? width : height",helper)
         self.assertIn("pointInsideRotatedRectangle",helper)
+
+    def test_xlsx_alt_svg_catalog_and_picture_aspect_pipeline_are_wired(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        service=(STATIC_DIR/"__main__.py").read_text(encoding="utf-8")
+        self.assertIn("pictureLayerScales(bounds,ratios)",viewer)
+        self.assertIn("loadCadTexture(",viewer)
+        self.assertIn("applyReferenceImage('psd'",viewer)
+        self.assertIn("applyReferenceImage('octave'",viewer)
+        self.assertIn("displayedSvgWidth",viewer)
+        self.assertIn("svgHistory.append(line)",viewer)
+        self.assertIn("EllipseSvgCatalogHandler",service)
+        self.assertIn("cad-svg-catalog",service)
+        self.assertIn("cad_svg_catalog.py",service)
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        self.assertIn('id="reference-log"',html)
+        self.assertIn("border-radius:0",html)
+        self.assertIn("cursor:grab",html)
+        self.assertNotIn("max-width:100%;max-height:100%;object-fit:contain",html)
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())
@@ -344,6 +369,11 @@ class TestHttpIntegration(unittest.TestCase):
         with self.assertRaises(HTTPError) as failure:
             urlopen(self.base + "/viewer/assets/private.xlsx", timeout=5)
         self.assertEqual(failure.exception.code, 404)
+
+    def test_invalid_ellipse_catalog_route_returns_404(self):
+        with self.assertRaises(HTTPError) as error:
+            urlopen(self.base + "/viewer/cad-svg-catalog/0/999", timeout=5)
+        self.assertEqual(error.exception.code, 404)
 
     def test_invalid_embedded_image_route_is_safe(self):
         with self.assertRaises(HTTPError) as caught:

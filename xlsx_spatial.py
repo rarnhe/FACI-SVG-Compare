@@ -314,6 +314,20 @@ def shape_kind(node: ET.Element) -> str:
     return "other"
 
 
+def shape_alternative_text(node: ET.Element) -> dict[str, str]:
+    """DrawingML Shape Format > Alt Text: cNvPr@descr/title, not visible txBody.
+
+    Excel may encode newline as _x000D_ inside OOXML attributes.
+    """
+    props = find_descendant(node, "cNvPr")
+    def clean(raw: str) -> str:
+        return raw.replace("_x000D_", "").replace("\r\n", "\n").strip()
+    return {
+        "description": clean(props.get("descr", "") if props is not None else ""),
+        "title": clean(props.get("title", "") if props is not None else ""),
+    }
+
+
 def shape_text(node: ET.Element) -> str:
     """Read visible shape text, preserving separate DrawingML paragraphs."""
     tx_body = first_child(node, "txBody")
@@ -374,6 +388,7 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
             if kind == "shape":
                 obj["shape_kind"] = shape_kind(element) if tag == "sp" else "other"
                 obj["text"] = shape_text(element)
+                obj["alt_text"] = shape_alternative_text(element)
                 props = first_child(element, "spPr")
                 if props is None:
                     props = first_child(element, "grpSpPr")
@@ -496,6 +511,14 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
             if obj["type"] == "shape":
                 if obj.get("text"):
                     lines.append("    文字: " + obj["text"].replace("\n", " / "))
+                alt = obj.get("alt_text", {})
+                if alt.get("title") or alt.get("description"):
+                    parts = []
+                    if alt.get("title"):
+                        parts.append("[标题: " + alt["title"].replace("\n", " / ") + "]")
+                    if alt.get("description"):
+                        parts.append(alt["description"].replace("\n", " / "))
+                    lines.append("    替换文字: " + " ".join(parts))
                 colors = obj["colors"]
                 lines.append(
                     f"    颜色: 背景={colors['fill']} "

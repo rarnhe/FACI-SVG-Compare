@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Two-sheet XLSX validation; white linked CAD panes; textbox display-only; right-click ellipse menu and hierarchical selection paths; constrained draggable splitters; equal-width, aspect-preserving SVG fit with 5.8:18.1 initial ratio; Bokeh/HTTP MIME regression; Node CAD geometry and UI tests.",
+        "XLSX alternative-text z=height parsing; native-picture-aspect synchronized CAD; sheet-colored textbox; mouse-hover breadcrumbs; dynamic timestamp SVG catalogs with validated pairs; right-opening X/Y/Z menu; draggable SVG history; constrained splitters; legacy Bokeh/HTTP/MIME and CAD math regressions.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

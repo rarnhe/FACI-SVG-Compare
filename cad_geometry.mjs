@@ -1,19 +1,23 @@
 /** Pure CAD spatial helpers, shared between Three.js and Node tests. */
 
-const HEIGHT_SUFFIX = /^([xy])(\d+(?:\.\d+)?|\.\d+)$/;
+const ALT_HEIGHT = /^z\s*=\s*(\d+(?:\.\d+)?|\.\d+)\s*([xy])$/i;
 const EPS = 1e-9;
 
-export function rectangleHeight(text, width, height) {
-  const value = String(text ?? '').trim();
-  const underscore = value.lastIndexOf('_');
-  if (underscore < 0) return 0;
-  const suffix = value.slice(underscore + 1);
-  const match = HEIGHT_SUFFIX.exec(suffix);
-  if (!match) return 0;
-  const ratio = Number(match[2]);
-  if (!Number.isFinite(ratio) || ratio < 0) return 0;
-  const reference = match[1] === 'x' ? width : height;
-  const depth = reference * ratio;
+/**
+ * Rectangle's alternative text (DrawingML cNvPr@descr/title) defines height.
+ * z=0.5x means half the x/width, z=0.2y means 0.2 * height.
+ * The visible shape label is never parsed as a height directive.
+ */
+export function rectangleHeight(altText, width, height) {
+  const description=typeof altText==='string'
+    ? altText : (altText?.description || altText?.title || '');
+  const clean=String(description).replaceAll('_x000D_','').trim();
+  const match=ALT_HEIGHT.exec(clean);
+  if(!match) return 0;
+  const fraction=Number(match[1]);
+  if(!Number.isFinite(fraction)||fraction<0) return 0;
+  const length=match[2].toLowerCase()==='x' ? width : height;
+  const depth=fraction*length;
   return Number.isFinite(depth) ? depth : 0;
 }
 
@@ -23,7 +27,7 @@ export function rectangleSpecs(items, toRect) {
       const rect = toRect(item);
       return {
         rect,
-        depth: rectangleHeight(item.text, rect.width, rect.height),
+        depth: rectangleHeight(item.alt_text, rect.width, rect.height),
         centerX: rect.x + rect.width / 2,
         centerY: rect.y - rect.height / 2,
         label: item.text || item.name || 'rectangle',

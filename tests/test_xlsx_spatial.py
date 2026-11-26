@@ -266,6 +266,31 @@ class TestGeometry(unittest.TestCase):
                 self.assertIn(item, output)
 
 
+    def test_alt_text_title_description_are_extracted_and_cleaned(self):
+        marked = shape(name="矩形14").replace(
+            'name="矩形14"/>',
+            'name="矩形14" descr="_x000D_z=0.5x_x000D_" title="z=0.2y"/>',
+        )
+        sheet=self.parse(one_cell(marked))[0]
+        obj=sheet["objects"][0]
+        self.assertEqual(obj["alt_text"],{
+            "description":"z=0.5x", "title":"z=0.2y",
+        })
+        self.assertNotEqual(obj["text"],"z=0.5x")
+
+    def test_empty_alt_text_remains_separate_from_visible_shape_label(self):
+        obj=self.parse(one_cell(shape(name="矩形B1_x0.5")))[0]["objects"][0]
+        self.assertEqual(obj["alt_text"],{"description":"","title":""})
+        self.assertEqual(obj["name"],"矩形B1_x0.5")
+
+    def test_console_report_lists_alt_text_without_losing_shape_text(self):
+        marked=shape(name="矩形14").replace(
+            'name="矩形14"/>','name="矩形14" descr="z=0.5x" title="Z高度"/>')
+        with TemporaryDirectory() as tmp:
+            book=fixture(Path(tmp)/"alt.xlsx",anchors=one_cell(marked))
+            report=spatial.format_spatial_report(book,spatial.parse_xlsx(book))
+        self.assertIn("替换文字: [标题: Z高度] z=0.5x",report)
+
     def test_shape_text_is_kept(self):
         rich_shape = shape(name="文本标注").replace(
             "</a:r></a:p>", "<a:t>压差 A-01</a:t></a:r></a:p>"

@@ -31,11 +31,13 @@ if __package__:
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
     )
     from .cad_service import build_cad_manifest, extract_embedded_image
+    from .cad_svg_catalog import build_ellipse_svg_catalog
 else:
     from xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
     )
     from cad_service import build_cad_manifest, extract_embedded_image
+    from cad_svg_catalog import build_ellipse_svg_catalog
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8080"))
@@ -51,6 +53,7 @@ BUILD_REVISION = sha256(
     + (STATIC_DIR / "cad_viewer.js").read_bytes()
     + (STATIC_DIR / "cad_geometry.mjs").read_bytes()
     + (STATIC_DIR / "cad_ui.mjs").read_bytes()
+    + (STATIC_DIR / "cad_svg_catalog.py").read_bytes()
     + (STATIC_DIR / "cad_validation.py").read_bytes()
 ).hexdigest()[:12]
 APP_ID = f"OneThreeOctave-SVG-Compare:Bokeh-Three.js:{BUILD_REVISION}"
@@ -82,6 +85,25 @@ class CadManifestHandler(RequestHandler):
     def get(self):
         self.set_header("Cache-Control", "no-store")
         self.write(self.state["manifest"])
+
+
+class EllipseSvgCatalogHandler(RequestHandler):
+    """On-demand SVG index for an actual XLSX ellipse and its parent textbox."""
+
+    def initialize(self, state):
+        self.state = state
+
+    def get(self, layer, object_index):
+        try:
+            payload = build_ellipse_svg_catalog(
+                STATIC_DIR / "assets", self.state["sheets"],
+                int(layer), int(object_index),
+            )
+        except (ValueError, OSError):
+            self.send_error(404)
+            return
+        self.set_header("Cache-Control", "no-store")
+        self.write(payload)
 
 
 class CadImageHandler(RequestHandler):
@@ -264,6 +286,8 @@ def main():
         "manifest": build_cad_manifest(workbook, spatial_sheets, STATIC_DIR / "assets"),
     }
 
+    # A workbook-specific tab caption, set by the HTML document after it loads
+    # the manifest. No other data source is used as an arbitrary HTML title.
     # An explicit revision in the URL defeats old HTML caches on first launch.
     url = f"http://{HOST}:{PORT}/viewer/index.html?rev={BUILD_REVISION}"
     try:
@@ -278,6 +302,8 @@ def main():
                 (r"/viewer/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/cad-layout\.json", CadManifestHandler, {"state": cad_state}),
                 (r"/viewer/cad-image/([0-9]+)/([0-9]+)", CadImageHandler, {"state": cad_state}),
+                (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)", EllipseSvgCatalogHandler,
+                 {"state": cad_state}),
                 (r"/viewer/(index\.html|cad_viewer\.js|cad_geometry\.mjs|cad_ui\.mjs)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),
                 (r"/viewer/assets/((?i:.*\.xlsx))", PrivateWorkbookHandler),
                 (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   INITIAL_REFERENCE_SPLIT, shapeLabel, selectOnButton,
   containsShape, shapeAncestors, selectionPath, fitSvgPair,
-  clampMainDivider, clampReferenceSplit,
+  clampMainDivider, clampReferenceSplit, pictureLayerScales,
 } from '../cad_ui.mjs';
 
 const shape=(kind,x,y,width,height,text,rotation=0)=>({
@@ -106,4 +106,31 @@ test('both splitter clamps keep each area visible, including narrow displays',()
     assert.ok(min>0 && max<1);
     assert.ok(max>min);
   }
+});
+
+
+test('two embedded CAD pictures preserve native aspect and share exactly one width',()=>{
+  const sizes=pictureLayerScales(
+    [{width:1400,height:500},{width:900,height:900}],
+    [0.5,0.75],
+  );
+  assert.equal(sizes[0].width,1400);
+  assert.equal(sizes[1].width,1400);
+  assert.equal(sizes[0].height,700);
+  assert.equal(sizes[1].height,1050);
+  assert.equal(sizes[0].x,1);
+  assert.ok(Math.abs(sizes[1].x-1400/900)<1e-10);
+  assert.ok(Math.abs(sizes[0].y-700/500)<1e-10);
+  assert.ok(Math.abs(sizes[1].y-1050/900)<1e-10);
+});
+
+test('divider clamps stop before any displayed SVG would need horizontal scrolling',()=>{
+  const rightWidth=485;
+  const x=clampMainDivider(9999,1500,8,rightWidth);
+  assert.ok(1500-8-x>=rightWidth);
+  const topHeight=120,bottomHeight=300;
+  const min=clampReferenceSplit(-100,700,8,topHeight,bottomHeight);
+  const max=clampReferenceSplit(9999,700,8,topHeight,bottomHeight);
+  assert.ok(min*(700-8)+1e-8>=topHeight);
+  assert.ok((1-max)*(700-8)+1e-8>=bottomHeight);
 });

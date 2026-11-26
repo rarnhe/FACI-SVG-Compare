@@ -3,8 +3,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
 import {
-  INITIAL_REFERENCE_SPLIT, selectOnButton, selectionPath, fitSvgPair,
-  clampMainDivider, clampReferenceSplit,
+  INITIAL_REFERENCE_SPLIT, selectOnButton, selectionPath, shapeAncestors, shapeLabel,
+  pictureLayerScales, fitSvgPair, clampMainDivider, clampReferenceSplit,
 } from './cad_ui.mjs';
 
 const EMU_TO_PX = 1 / 9525;
@@ -17,6 +17,8 @@ let sceneBounds = {minX:0,maxX:500,minY:0,maxY:400};
 let lastCadSize = null;
 let rightSplitRatio = INITIAL_REFERENCE_SPLIT;
 const referenceImages = new Map();
+const svgHistory = document.getElementById('reference-log');
+let displayedSvgWidth = 0;
 
 function createLayer(stageId) {
   const stage = document.getElementById(stageId);
@@ -42,8 +44,8 @@ function createLayer(stageId) {
   controls.update();
   stage.prepend(renderer.domElement);
   const layer = {
-    stage,scene,renderer,camera,controls,clickable:[],objects:[],
-    sheetName:'',selectedMesh:null,
+    stage,scene,renderer,camera,controls,clickable:[],objects:[],images:[],
+    sheetName:'',selectedMesh:null,scaleX:1,scaleY:1,layerIndex:stageId==='fab-stage'?0:1,
     selectedInfo:document.getElementById(
       stageId==='fab-stage'?'fab-selected-info':'subfab-selected-info'),
   };
@@ -71,13 +73,14 @@ function synchronizeFrom(source) {
   } finally {syncing=false;}
 }
 
-function toWorldRect(item) {
+function toWorldRect(item,layer=null) {
   const b=item.bounds_emu;
+  const sx=layer?.scaleX || 1, sy=layer?.scaleY || 1;
   return {
-    x:b.x*EMU_TO_PX,
-    y:-b.y*EMU_TO_PX,
-    width:Math.max(0.1,b.width*EMU_TO_PX),
-    height:Math.max(0.1,b.height*EMU_TO_PX),
+    x:b.x*EMU_TO_PX*sx,
+    y:-b.y*EMU_TO_PX*sy,
+    width:Math.max(0.1,b.width*EMU_TO_PX*sx),
+    height:Math.max(0.1,b.height*EMU_TO_PX*sy),
     rotation:-(item.rotation_degrees || 0)*Math.PI/180,
   };
 }
@@ -133,23 +136,26 @@ function makeOutline(points,color) {
   );
 }
 
-function kindForElevation(item, rect, rectangles) {
-  return item.shape_kind==='ellipse' ? ellipseElevation(item,toWorldRect,rectangles) : 0;
+function kindForElevation(item, rect, rectangles,layer) {
+  return item.shape_kind==='ellipse'
+    ? ellipseElevation(item,x=>toWorldRect(x,layer),rectangles) : 0;
 }
 
 function drawShape(layer,item,rectangles=[]) {
-  const r=toWorldRect(item);
+  const r=toWorldRect(item,layer);
   const w=r.width,h=r.height;
   const group=new THREE.Group();
   // The XLSX image is at Z=0; all drawing geometry starts at that plane.
-  const raisedZ=kindForElevation(item, r, rectangles);
+  const raisedZ=kindForElevation(item, r, rectangles,layer);
   group.position.set(r.x+w/2,r.y-h/2,raisedZ);
   group.rotation.z=r.rotation;
   const colors=item.colors || {};
   const kind=item.shape_kind || 'other';
-  const fillColor=kind==='textbox' ? 0x828b96 : colorValue(colors.fill,0x3599c3);
+  const fillColor=colorValue(colors.fill,kind==='textbox'?0xffffff:0x3599c3);
   const borderColor=colorValue(colors.outline,0x67dcfc);
-  const opacity=kind==='textbox' ? 0.82 : colors.fill==='无/透明' ? 0.13 : 0.68;
+  const opacity=kind==='textbox'
+    ? (colors.fill==='无/透明'?0:1)
+    : colors.fill==='无/透明' ? 0.13 : 0.68;
   const mat=new THREE.MeshBasicMaterial({
     color:fillColor,transparent:true,opacity,
     side:THREE.DoubleSide,depthWrite:false,
@@ -172,7 +178,7 @@ function drawShape(layer,item,rectangles=[]) {
     group.add(makeOutline(circumference,borderColor));
   } else if(kind==='rectangle') {
     // A CAD rectangle is a cuboid with actual +Z thickness.
-    const depth=rectangleHeight(item.text,w,h);
+    const depth=rectangleHeight(item.alt_text,w,h);
     if (depth>0) {
       const cube=new THREE.BoxGeometry(w,h,depth);
       clickTarget=new THREE.Mesh(cube,mat);
@@ -216,24 +222,32 @@ function drawShape(layer,item,rectangles=[]) {
   layer.scene.add(group);
 }
 
-function drawImage(layer,item) {
-  if(!item.image_url) return;
-  const r=toWorldRect(item);
+function drawImage(layer,item,texture) {
+  if(!texture) return;
+  const r=toWorldRect(item,layer);
   const group=new THREE.Group();
   group.position.set(r.x+r.width/2,r.y-r.height/2,0);
   group.rotation.z=r.rotation;
-  new THREE.TextureLoader().load(item.image_url,texture=>{
-    texture.colorSpace=THREE.SRGBColorSpace;
-    texture.anisotropy=Math.min(8,layer.renderer.capabilities.getMaxAnisotropy());
-    const image=new THREE.Mesh(
-      new THREE.PlaneGeometry(r.width,r.height),
-      new THREE.MeshBasicMaterial({
-        map:texture,side:THREE.DoubleSide,transparent:true,depthWrite:false,
-      }),
-    );
-    group.add(image);
-    layer.scene.add(group);
-  },undefined,error=>console.error('XLSX image could not be loaded:',error));
+  texture.colorSpace=THREE.SRGBColorSpace;
+  texture.anisotropy=Math.min(8,layer.renderer.capabilities.getMaxAnisotropy());
+  const image=new THREE.Mesh(
+    new THREE.PlaneGeometry(r.width,r.height),
+    new THREE.MeshBasicMaterial({
+      map:texture,side:THREE.DoubleSide,transparent:true,depthWrite:false,
+    }),
+  );
+  group.add(image);
+  layer.scene.add(group);
+}
+
+function loadCadTexture(url) {
+  if (!url) return Promise.resolve(null);
+  return new Promise(resolve=>{
+    new THREE.TextureLoader().load(url,texture=>resolve(texture),undefined,error=>{
+      console.error('XLSX image could not be loaded:',url,error);
+      resolve(null);
+    });
+  });
 }
 
 function createContextMenu(layer) {
@@ -241,76 +255,157 @@ function createContextMenu(layer) {
   menu.className='cad-context-menu';
   menu.hidden=true;
   menu.setAttribute('role','menu');
-  menu.setAttribute('aria-label','椭圆形状操作');
-  const year2025=document.createElement('button');
-  year2025.type='button';
-  year2025.setAttribute('role','menuitem');
-  const yearLabel=document.createElement('span');
-  yearLabel.textContent='2025';
-  const arrow=document.createElement('span');
-  arrow.className='cad-menu-arrow';
-  arrow.textContent='›';
-  year2025.append(yearLabel,arrow);
+  menu.setAttribute('aria-label','椭圆图表时间菜单');
+  menu.addEventListener('pointerdown',e=>e.stopPropagation());
   const submenu=document.createElement('div');
   submenu.className='cad-submenu';
   submenu.hidden=true;
-  submenu.setAttribute('role','group');
-  for (const entry of ['X','Y','Z']) {
-    const button=document.createElement('button');
-    button.type='button';
-    button.textContent=entry;
-    button.setAttribute('role','menuitem');
-    button.addEventListener('click',()=>{menu.hidden=true;});
-    submenu.append(button);
-  }
-  year2025.setAttribute('aria-haspopup','true');
-  year2025.setAttribute('aria-expanded','false');
-  year2025.addEventListener('click',()=>{
-    submenu.hidden=!submenu.hidden;
-    year2025.setAttribute('aria-expanded',String(!submenu.hidden));
-    keepMenuInStage(layer);
-  });
-  const year2026=document.createElement('button');
-  year2026.type='button';
-  year2026.textContent='2026';
-  year2026.setAttribute('role','menuitem');
-  year2026.addEventListener('click',()=>{menu.hidden=true;});
-  menu.addEventListener('pointerdown',event=>event.stopPropagation());
-  menu.append(year2025,submenu,year2026);
-  layer.stage.append(menu);
-  return {element:menu,submenu,year2025};
+  submenu.setAttribute('role','menu');
+  submenu.addEventListener('pointerdown',e=>e.stopPropagation());
+  layer.stage.append(menu,submenu);
+  return {element:menu,submenu,requestId:0};
 }
 
 function keepMenuInStage(layer) {
   const menu=layer.menu.element;
-  const left=Math.max(4,Math.min(
-    Number.parseFloat(menu.style.left)||4,Math.max(4,layer.stage.clientWidth-menu.offsetWidth-4)));
-  const top=Math.max(4,Math.min(
-    Number.parseFloat(menu.style.top)||4,Math.max(4,layer.stage.clientHeight-menu.offsetHeight-4)));
-  menu.style.left=left+'px';
-  menu.style.top=top+'px';
+  menu.style.left=Math.max(4,Math.min(parseFloat(menu.style.left)||4,
+    Math.max(4,layer.stage.clientWidth-menu.offsetWidth-4)))+'px';
+  menu.style.top=Math.max(4,Math.min(parseFloat(menu.style.top)||4,
+    Math.max(4,layer.stage.clientHeight-menu.offsetHeight-4)))+'px';
 }
 
 function closeContextMenus() {
-  for (const layer of layers) {
+  for(const layer of layers) {
+    layer.menu.requestId++;
     layer.menu.element.hidden=true;
     layer.menu.submenu.hidden=true;
-    layer.menu.year2025.setAttribute('aria-expanded','false');
   }
 }
 
-function openContextMenu(layer,clientX,clientY) {
+function showAxisSubmenu(layer,button,date,catalog) {
+  const pane=layer.menu.submenu;
+  pane.replaceChildren();
+  for(const axis of ['X','Y','Z']) {
+    const item=document.createElement('button');
+    item.type='button';
+    item.setAttribute('role','menuitem');
+    item.textContent=axis;
+    item.addEventListener('click',async()=>{
+      const pair=catalog.pairs?.[date]?.[axis];
+      if(!pair) {
+        item.title='没有匹配此矩形、时间及方向的成对 SVG 文件';
+        return;
+      }
+      try {
+        await switchReferencePair(pair);
+        const line=[catalog.rectangle,date,'+'+axis].join('_');
+        appendReferenceHistory(line);
+        closeContextMenus();
+      } catch(error) {
+        console.error('Unable to switch SVG pair:',error);
+        item.title='SVG 图片载入失败，原图保持不变';
+      }
+    });
+    if(!catalog.pairs?.[date]?.[axis]) {
+      item.title='当前没有匹配的 PSD 与 1-3-Octave 两张 SVG';
+    }
+    pane.append(item);
+  }
+  pane.hidden=false;
+  const stageBounds=layer.stage.getBoundingClientRect();
+  const bounds=button.getBoundingClientRect();
+  // Submenu is an independent sibling, not nested below the date. It opens
+  // to the right, with left-side fallback when close to a viewport edge.
+  const menuWidth=layer.menu.element.offsetWidth;
+  const popupWidth=Math.max(94,pane.offsetWidth);
+  const right=bounds.right-stageBounds.left+2;
+  pane.style.left=(right+popupWidth<=layer.stage.clientWidth
+    ? right : Math.max(4,bounds.left-stageBounds.left-popupWidth-2))+'px';
+  pane.style.top=Math.max(4,Math.min(bounds.top-stageBounds.top,
+    layer.stage.clientHeight-pane.offsetHeight-4))+'px';
+}
+
+async function openContextMenu(layer,clientX,clientY,selectedObject) {
   closeContextMenus();
+  const id=layer.menu.requestId;
+  const menu=layer.menu.element;
   const bounds=layer.stage.getBoundingClientRect();
-  layer.menu.element.style.left=(clientX-bounds.left)+'px';
-  layer.menu.element.style.top=(clientY-bounds.top)+'px';
-  layer.menu.element.hidden=false;
+  menu.style.left=(clientX-bounds.left)+'px';
+  menu.style.top=(clientY-bounds.top)+'px';
+  menu.replaceChildren();
+  menu.hidden=false;
+  const placeholder=document.createElement('div');
+  placeholder.textContent='查找 SVG 日期…';
+  placeholder.style.padding='7px 10px';
+  menu.append(placeholder);
   keepMenuInStage(layer);
+  try {
+    const index=layer.objects.indexOf(selectedObject);
+    const response=await fetch('./cad-svg-catalog/'+layer.layerIndex+'/'+index,
+                               {cache:'no-store'});
+    if(!response.ok) throw new Error('SVG catalog HTTP '+response.status);
+    const catalog=await response.json();
+    if(layer.menu.requestId!==id) return;
+    menu.replaceChildren();
+    if(!catalog.dates?.length) {
+      const empty=document.createElement('div');
+      empty.textContent='无可用时间标签';
+      empty.style.padding='7px 10px';
+      menu.append(empty);
+    } else {
+      for(const date of catalog.dates) {
+        const button=document.createElement('button');
+        button.type='button';
+        button.setAttribute('role','menuitem');
+        button.setAttribute('aria-haspopup','true');
+        button.setAttribute('aria-expanded','false');
+        const caption=document.createElement('span');
+        caption.textContent=date;
+        const arrow=document.createElement('span');
+        arrow.className='cad-menu-arrow';
+        arrow.textContent='›';
+        button.append(caption,arrow);
+        button.addEventListener('click',()=>{
+          for(const btn of menu.querySelectorAll('button')) {
+            btn.setAttribute('aria-expanded','false');
+          }
+          button.setAttribute('aria-expanded','true');
+          showAxisSubmenu(layer,button,date,catalog);
+        });
+        menu.append(button);
+      }
+    }
+    keepMenuInStage(layer);
+  } catch(error) {
+    if(layer.menu.requestId!==id) return;
+    console.error('SVG catalog lookup failed:',error);
+    placeholder.textContent='SVG 日期查询失败';
+  }
 }
 
 function installPicking(layer) {
   const canvas=layer.renderer.domElement;
   const raycaster=new THREE.Raycaster(), mouse=new THREE.Vector2();
+  function pick(clientX,clientY,button=null) {
+    const rect=canvas.getBoundingClientRect();
+    if(!rect.width || !rect.height) return null;
+    mouse.set((clientX-rect.left)/rect.width*2-1,
+              1-(clientY-rect.top)/rect.height*2);
+    raycaster.setFromCamera(mouse,layer.camera);
+    const targets=button===null ? layer.clickable : layer.clickable.filter(mesh=>
+      selectOnButton(mesh.userData.cadObject,button));
+    return raycaster.intersectObjects(targets,false)[0]?.object || null;
+  }
+  canvas.addEventListener('pointermove',event=>{
+    // Hover breadcrumbs are independent per pane; a drag must never select.
+    if(event.buttons!==0) return;
+    const mesh=pick(event.clientX,event.clientY);
+    layer.selectedInfo.textContent=mesh
+      ? selectionPath(workbookName,layer.sheetName,layer.objects,
+                      mesh.userData.cadObject,obj=>toWorldRect(obj,layer))
+      : '';
+  });
+  canvas.addEventListener('pointerleave',()=>{layer.selectedInfo.textContent='';});
   canvas.addEventListener('pointerdown',event=>{
     closeContextMenus();
     pointerStart.set(canvas,{x:event.clientX,y:event.clientY,button:event.button});
@@ -319,34 +414,24 @@ function installPicking(layer) {
   canvas.addEventListener('pointerup',event=>{
     const start=pointerStart.get(canvas);
     pointerStart.delete(canvas);
-    // OrbitControls owns rotation and right-drag panning. Short clicks
-    // alone select: left for regular shapes, right for ellipses.
-    if (!start || start.button!==event.button ||
-        Math.hypot(event.clientX-start.x,event.clientY-start.y)>5) return;
+    if(!start || start.button!==event.button ||
+       Math.hypot(event.clientX-start.x,event.clientY-start.y)>5) return;
     if(event.button!==0 && event.button!==2) return;
-    const rect=canvas.getBoundingClientRect();
-    mouse.set((event.clientX-rect.left)/rect.width*2-1,
-              1-(event.clientY-rect.top)/rect.height*2);
-    raycaster.setFromCamera(mouse,layer.camera);
-    const pickable=layer.clickable.filter(mesh=>
-      selectOnButton(mesh.userData.cadObject,event.button));
-    const hit=raycaster.intersectObjects(pickable,false)[0];
-    if(!hit) return;
+    const mesh=pick(event.clientX,event.clientY,event.button);
+    if(!mesh) return;
     if(layer.selectedMesh)
       layer.selectedMesh.material.opacity=layer.selectedMesh.userData.originalOpacity;
-    const mesh=hit.object;
     if(mesh.userData.originalOpacity===undefined)
       mesh.userData.originalOpacity=mesh.material.opacity;
     mesh.material.opacity=0.95;
     layer.selectedMesh=mesh;
-    layer.selectedInfo.textContent=selectionPath(
-      workbookName,layer.sheetName,layer.objects,
-      mesh.userData.cadObject,toWorldRect);
-    if(event.button===2) openContextMenu(layer,event.clientX,event.clientY);
+    if(event.button===2) void openContextMenu(layer,event.clientX,event.clientY,
+                                            mesh.userData.cadObject);
   });
 }
+
 document.addEventListener('pointerdown',event=>{
-  if(!event.target.closest?.('.cad-context-menu')) closeContextMenus();
+  if(!event.target.closest?.('.cad-context-menu,.cad-submenu')) closeContextMenus();
 });
 document.addEventListener('keydown',event=>{
   if(event.key==='Escape') closeContextMenus();
@@ -422,31 +507,28 @@ function resetTopView() {
   } finally {syncing=false;}
 }
 
-function collectPictureBounds(manifest) {
-  const boxes=manifest.layers.flatMap(layer=>layer.objects
-    .filter(item=>item.type==='image').map(item=>item.bounds_emu));
-  if(!boxes.length) return;
+function collectPictureBounds() {
+  const imageRects=layers.flatMap(layer=>layer.images.map(item=>toWorldRect(item,layer)));
+  if(!imageRects.length) return;
   sceneBounds={
-    minX:Math.min(...boxes.map(b=>b.x))*EMU_TO_PX,
-    maxX:Math.max(...boxes.map(b=>b.x+b.width))*EMU_TO_PX,
-    minY:Math.min(...boxes.map(b=>b.y))*EMU_TO_PX,
-    maxY:Math.max(...boxes.map(b=>b.y+b.height))*EMU_TO_PX,
+    minX:Math.min(...imageRects.map(b=>b.x)),
+    maxX:Math.max(...imageRects.map(b=>b.x+b.width)),
+    minY:Math.min(...imageRects.map(b=>-b.y)),
+    maxY:Math.max(...imageRects.map(b=>-b.y+b.height)),
   };
   hasGeometry=true;
 }
 
 function applySvgSplitRatio() {
   const panel=document.getElementById('reference-frames');
-  const ratio=Math.max(0.05,Math.min(0.95,rightSplitRatio));
   panel.style.gridTemplateRows=
-    'minmax(0,'+ratio+'fr) 8px minmax(0,'+(1-ratio)+'fr)';
+    'minmax(0,'+rightSplitRatio+'fr) 8px minmax(0,'+(1-rightSplitRatio)+'fr)';
 }
 
 function fitSvgHeightToPane() {
   const psd=document.getElementById('psd-frame');
   const octave=document.getElementById('octave-frame');
-  const a=referenceImages.get('psd');
-  const b=referenceImages.get('octave');
+  const a=referenceImages.get('psd'),b=referenceImages.get('octave');
   if(a && b) {
     const sizes=fitSvgPair(
       {width:psd.clientWidth,height:psd.clientHeight},
@@ -456,6 +538,7 @@ function fitSvgHeightToPane() {
     a.element.style.height=sizes.heightA+'px';
     b.element.style.width=sizes.width+'px';
     b.element.style.height=sizes.heightB+'px';
+    displayedSvgWidth=sizes.width;
   } else {
     for (const [key,entry] of referenceImages) {
       const frame=document.getElementById(key+'-frame');
@@ -467,22 +550,94 @@ function fitSvgHeightToPane() {
   }
 }
 
-function referenceImage(key,info) {
+function applyReferenceImage(key,url,width,height) {
   const image=document.getElementById(key+'-reference');
   const placeholder=document.getElementById(key+'-placeholder');
-  if(!info?.available) return;
-  image.onload=()=>{
-    const width=Math.max(1,image.naturalWidth),height=Math.max(1,image.naturalHeight);
-    referenceImages.set(key,{element:image,ratio:height/width});
-    image.style.display='block';
-    placeholder.hidden=true;
-    // Keep the requested initial height split of 5.8:18.1,
-    // regardless of the intrinsic SVG dimensions.
-    fitSvgHeightToPane();
-  };
-  image.onerror=()=>{placeholder.textContent='SVG 资源加载失败';};
-  image.src=info.url;
+  image.src=url;
+  image.style.display='block';
+  placeholder.hidden=true;
+  referenceImages.set(key,{element:image,ratio:height/width});
 }
+
+function prefetchSvg(url) {
+  return new Promise((resolve,reject)=>{
+    const probe=new Image();
+    probe.onload=()=>resolve({
+      url,width:Math.max(1,probe.naturalWidth),height:Math.max(1,probe.naturalHeight),
+    });
+    probe.onerror=()=>reject(new Error('SVG image failed: '+url));
+    probe.src=url;
+  });
+}
+
+async function switchReferencePair(pair) {
+  // Transactional change: neither pane changes unless both SVGs decoded.
+  const [psd,octave]=await Promise.all([
+    prefetchSvg(pair.psd),prefetchSvg(pair.octave),
+  ]);
+  applyReferenceImage('psd',psd.url,psd.width,psd.height);
+  applyReferenceImage('octave',octave.url,octave.width,octave.height);
+  fitSvgHeightToPane();
+}
+
+function referenceImage(key,info) {
+  const placeholder=document.getElementById(key+'-placeholder');
+  if(!info?.available) return;
+  prefetchSvg(info.url).then(image=>{
+    applyReferenceImage(key,image.url,image.width,image.height);
+    fitSvgHeightToPane();
+  }).catch(error=>{
+    placeholder.textContent='SVG 资源加载失败';
+    console.error(error);
+  });
+}
+
+function appendReferenceHistory(text) {
+  svgHistory.style.display='block';
+  const line=document.createElement('span');
+  line.className='reference-log-line';
+  line.textContent=text;
+  svgHistory.append(line);
+  clampFloatingLog();
+}
+
+function clampFloatingLog() {
+  if(svgHistory.style.display==='none') return;
+  const pane=document.getElementById('reference-pane');
+  if(!svgHistory.style.left) return;
+  svgHistory.style.left=Math.max(0,Math.min(parseFloat(svgHistory.style.left)||0,
+    pane.clientWidth-svgHistory.offsetWidth))+'px';
+  svgHistory.style.top=Math.max(0,Math.min(parseFloat(svgHistory.style.top)||0,
+    pane.clientHeight-svgHistory.offsetHeight))+'px';
+}
+
+function installFloatingLogDrag() {
+  const pane=document.getElementById('reference-pane');
+  let move=null;
+  svgHistory.addEventListener('pointerdown',event=>{
+    if(event.button!==0) return;
+    const panelRect=pane.getBoundingClientRect();
+    const box=svgHistory.getBoundingClientRect();
+    svgHistory.style.left=(box.left-panelRect.left)+'px';
+    svgHistory.style.top=(box.top-panelRect.top)+'px';
+    svgHistory.style.right='auto';
+    move={pointer:event.pointerId,x:event.clientX,y:event.clientY,
+          left:box.left-panelRect.left,top:box.top-panelRect.top};
+    svgHistory.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  svgHistory.addEventListener('pointermove',event=>{
+    if(!move || event.pointerId!==move.pointer) return;
+    const left=move.left+event.clientX-move.x;
+    const top=move.top+event.clientY-move.y;
+    svgHistory.style.left=Math.max(0,Math.min(left,pane.clientWidth-svgHistory.offsetWidth))+'px';
+    svgHistory.style.top=Math.max(0,Math.min(top,pane.clientHeight-svgHistory.offsetHeight))+'px';
+  });
+  for (const name of ['pointerup','pointercancel','lostpointercapture']) {
+    svgHistory.addEventListener(name,()=>{move=null;});
+  }
+}
+installFloatingLogDrag();
 
 function installSplitter(id,direction,callback) {
   const bar=document.getElementById(id);
@@ -522,7 +677,7 @@ function installSplitter(id,direction,callback) {
 installSplitter('main-splitter','vertical',event=>{
   const layout=document.getElementById('layout');
   const bounds=layout.getBoundingClientRect();
-  const left=clampMainDivider(event.clientX-bounds.left,bounds.width);
+  const left=clampMainDivider(event.clientX-bounds.left,bounds.width,8,displayedSvgWidth);
   layout.style.gridTemplateColumns='minmax(0,'+left+'px) 8px minmax(0,1fr)';
   resizeCadLayers();
   fitSvgHeightToPane();
@@ -531,7 +686,10 @@ installSplitter('main-splitter','vertical',event=>{
 installSplitter('reference-splitter','horizontal',event=>{
   const panel=document.getElementById('reference-frames');
   const bounds=panel.getBoundingClientRect();
-  rightSplitRatio=clampReferenceSplit(event.clientY-bounds.top,bounds.height);
+  const a=referenceImages.get('psd'),b=referenceImages.get('octave');
+  rightSplitRatio=clampReferenceSplit(
+    event.clientY-bounds.top,bounds.height,8,
+    (a?.ratio||0)*displayedSvgWidth,(b?.ratio||0)*displayedSvgWidth);
   applySvgSplitRatio();
   fitSvgHeightToPane();
 });
@@ -541,7 +699,10 @@ const subfab=createLayer('subfab-stage');
 applySvgSplitRatio();
 document.getElementById('reset-view').addEventListener('click',resetTopView);
 new ResizeObserver(()=>resizeCadLayers()).observe(document.getElementById('cad-layers'));
-new ResizeObserver(()=>fitSvgHeightToPane()).observe(document.getElementById('reference-frames'));
+new ResizeObserver(()=>{
+  fitSvgHeightToPane();
+  clampFloatingLog();
+}).observe(document.getElementById('reference-frames'));
 for(const layer of layers) {
   new ResizeObserver(()=>resizeCadLayers()).observe(layer.stage);
 }
@@ -553,19 +714,39 @@ async function initialize() {
     if(!response.ok) throw new Error('CAD layout HTTP '+response.status);
     const data=await response.json();
     workbookName=data.workbook || '';
+    document.title=workbookName.replace(/\.xlsx$/i,'') || 'Fab / Subfab CAD';
+
+    const layerImages=data.layers.map(src=>
+      src?.objects?.find(item=>item.type==='image') || null);
+    const textures=await Promise.all(layerImages.map(item=>loadCadTexture(item?.image_url)));
+    const bounds=layerImages.map(item=>({
+      width:(item?.bounds_emu?.width||9525)*EMU_TO_PX,
+      height:(item?.bounds_emu?.height||9525)*EMU_TO_PX,
+    }));
+    const ratios=textures.map((texture,i)=>{
+      const picture=texture?.image;
+      const width=picture?.naturalWidth||picture?.width;
+      const height=picture?.naturalHeight||picture?.height;
+      return width && height ? height/width : bounds[i].height/bounds[i].width;
+    });
+    const transforms=pictureLayerScales(bounds,ratios);
+
     const targets=[fab,subfab];
-    for(let i=0;i<2;i++) {
-      const layerData=data.layers[i], layer=targets[i];
+    for(let i=0;i<targets.length;i++) {
+      const layerData=data.layers[i],layer=targets[i];
       if(!layerData?.available) continue;
       layer.objects=layerData.objects;
       layer.sheetName=layerData.sheet || '';
-      const rectangles=rectangleSpecs(layerData.objects,toWorldRect);
-      for(const item of layerData.objects) {
-        if(item.type==='image') drawImage(layer,item);
+      layer.scaleX=transforms[i].x;
+      layer.scaleY=transforms[i].y;
+      layer.images=layerImages[i] ? [layerImages[i]] : [];
+      const rectangles=rectangleSpecs(layer.objects,obj=>toWorldRect(obj,layer));
+      for(const item of layer.objects) {
+        if(item.type==='image') drawImage(layer,item,textures[i]);
         if(item.type==='shape') drawShape(layer,item,rectangles);
       }
     }
-    collectPictureBounds(data);
+    collectPictureBounds();
     initialFit();
     referenceImage('psd',data.reference_svgs?.psd);
     referenceImage('octave',data.reference_svgs?.octave);
@@ -573,6 +754,7 @@ async function initialize() {
     console.error('CAD layout failed:',error);
   }
 }
+
 initialize();
 function animate() {
   requestAnimationFrame(animate);

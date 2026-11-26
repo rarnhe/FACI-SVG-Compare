@@ -91,16 +91,41 @@ export function fitSvgPair(frameA, frameB, aspectA, aspectB) {
   return {width,heightA:width*ratioA,heightB:width*ratioB};
 }
 
-/** Responsive bounds: keep both panes visible during dragging. */
-export function clampMainDivider(position,totalWidth,dividerWidth=8) {
-  const usable=Math.max(0,totalWidth-dividerWidth);
-  const minPane=Math.min(220,usable*0.35);
-  return Math.max(minPane,Math.min(usable-minPane,position));
+/**
+ * Use the embedded picture's actual pixel aspect while both CAD sheets share
+ * one world-space image width (same units/pixel across both cameras).
+ * Shape offsets follow the image axes so overlays never drift from their image.
+ */
+export function pictureLayerScales(imageBounds, naturalAspectRatios) {
+  const commonWidth=Math.max(1,...imageBounds.map(box=>box.width));
+  return imageBounds.map((box,i)=>{
+    const ratio=naturalAspectRatios[i] > 0 ? naturalAspectRatios[i] : box.height/box.width;
+    const height=commonWidth*ratio;
+    return {
+      x:commonWidth/Math.max(1,box.width),
+      y:height/Math.max(1,box.height),
+      width:commonWidth,height,
+    };
+  });
 }
 
-export function clampReferenceSplit(position,totalHeight,dividerHeight=8) {
-  const usable=Math.max(1,totalHeight-dividerHeight);
-  const minPane=Math.min(100,Math.max(usable*0.12,0));
-  const ratio=Math.max(minPane/usable,Math.min(1-minPane/usable,position/usable));
-  return ratio;
+/** Responsive divider bounds: keep left controls and the current SVG width visible. */
+export function clampMainDivider(position,totalWidth,dividerWidth=8,minimumRight=0) {
+  const usable=Math.max(0,totalWidth-dividerWidth);
+  const minLeft=Math.min(220,usable*0.35);
+  const minRight=Math.min(Math.max(220,minimumRight),usable-minLeft);
+  return Math.max(minLeft,Math.min(usable-minRight,position));
 }
+
+/** Clamp at the current picture dimensions before a height split could crop it. */
+export function clampReferenceSplit(position,totalHeight,dividerHeight=8,minTop=0,minBottom=0) {
+  const usable=Math.max(1,totalHeight-dividerHeight);
+  const defaultMin=Math.min(100,usable*0.12);
+  let top=Math.max(defaultMin,minTop),bottom=Math.max(defaultMin,minBottom);
+  if (top+bottom>usable) {
+    const scale=usable/(top+bottom);
+    top*=scale;bottom*=scale;
+  }
+  return Math.max(top/usable,Math.min(1-bottom/usable,position/usable));
+}
+
