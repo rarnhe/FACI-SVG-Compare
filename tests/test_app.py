@@ -282,6 +282,33 @@ class TestHttpIntegration(unittest.TestCase):
                 (STATIC_DIR / "assets" / filename).is_file(),
             )
 
+    def test_javascript_modules_have_browser_accepted_mime_type(self):
+        # Use the real Python -m HTTP service: Windows can otherwise send
+        # text/plain for .mjs despite successful HTTP 200 and JS syntax tests.
+        for module_path, source_marker in (
+            ("/viewer/cad_viewer.js", "OrbitControls"),
+            ("/viewer/cad_geometry.mjs", "rectangleHeight"),
+        ):
+            with self.subTest(module_path=module_path):
+                with urlopen(self.base + module_path, timeout=5) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(
+                        response.headers.get_content_type(), "text/javascript"
+                    )
+                    self.assertEqual(
+                        response.headers.get_content_charset(), "utf-8"
+                    )
+                    self.assertIn("no-store", response.headers["Cache-Control"])
+                    self.assertEqual(
+                        response.headers["X-App-Revision"], app.BUILD_REVISION
+                    )
+                    self.assertIn(source_marker, response.read().decode("utf-8"))
+
+    def test_html_still_has_html_mime_type(self):
+        with urlopen(self.base + "/viewer/index.html", timeout=5) as response:
+            self.assertEqual(response.headers.get_content_type(), "text/html")
+
+
     def test_cad_js_is_served_and_source_xlsx_is_private(self):
         with urlopen(self.base + "/viewer/cad_viewer.js", timeout=5) as response:
             self.assertEqual(response.status, 200)

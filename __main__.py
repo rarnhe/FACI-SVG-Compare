@@ -62,6 +62,10 @@ class NoCacheIndexHandler(StaticFileHandler):
         return 0
 
     def set_extra_headers(self, path):
+        # Windows may map .mjs to text/plain. ES module scripts require a
+        # JavaScript MIME type regardless of the host's MIME registry.
+        if str(path).lower().endswith((".js", ".mjs")):
+            self.set_header("Content-Type", "text/javascript; charset=utf-8")
         self.set_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.set_header("Pragma", "no-cache")
         self.set_header("Expires", "0")
