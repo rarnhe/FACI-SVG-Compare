@@ -1,68 +1,72 @@
 # Test Report
 
-- UTC: 2026-11-26 08:43:37
-- Result: **PASS**
-- Python unittest: **101 / 101 per environment**
-- Node CAD geometry / UI tests: **26 / 26 per environment**
-- Failures: 0
-- Errors: 0
+- UTC: 2026-11-26 09:07:51
+- Overall result: **PASS**
+- Python unittest cases: **95 / 95 per platform**
+- Node CAD geometry and browser-color helper cases: **28 / 28 per platform**
+- Failures: **0**
+- Errors: **0**
 
-## GitHub Actions + report dual-track verification
+## GitHub Actions + test_report.md dual-track verification
 
 | Environment | Python unittest | Node geometry/UI | JavaScript syntax | Result |
-| --- | --- | --- | --- | --- |
-| Ubuntu / Python 3.12 | **101/101** (4.202s) | **26/26** | PASS | **PASS** |
-| Windows / Python 3.14 | **101/101** (4.282s) | **26/26** | PASS | **PASS** |
+| --- | ---: | ---: | --- | --- |
+| Ubuntu / Python 3.12 | **95/95** (4.272s) | **28/28** | PASS | **PASS** |
+| Windows / Python 3.14 | **95/95** (3.857s) | **28/28** | PASS | **PASS** |
 
-- Verified commit: `b6c1ed6db81d9fef32e497081200b86fb9e6c75f`.
-- Successful Actions: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45785503605
-- Both platforms run `python tests/run_tests.py` and the Node CAD
-  geometry/UI tests; JavaScript syntax is checked separately. The Python
-  runner writes its `test_report.md` on success/failure and Actions uploads
-  the report artifact even when a test fails.
+- Verified functional commit: `583a5d6a12bef6e176565bf2cfb8104b5a02e51e`.
+- GitHub Actions: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45789030893
+- `.github/workflows/test.yml` invokes `python tests/run_tests.py`
+  and `node --test tests/test_cad_geometry.mjs tests/test_cad_ui.mjs`
+  independently on Ubuntu and Windows. GitHub Actions uploads a generated
+  `test_report.md` artifact even if tests fail. The Python test runner
+  independently writes the same report path for local use.
 
-## Features and regression tests
+## Removed code and regressions
 
-1. **Removed** the XLSX DrawingML font-size extraction function and the
-   `text_layout` field. Three.js no longer receives or interprets Excel
-   font sizes; it uses the established fixed texture font for shape text.
-2. Both CAD layer hover captions now contain only the containing textbox,
-   rectangle, and sensor: **BODYv2**·20260704_SCN_B1·测点名称. The textbox
-   segment is rendered using an actual `strong` element. Neither XLSX name
-   nor worksheet name is shown. Textboxes are hoverable but cannot be
-   selected with a mouse click.
-3. The floating legend has bold 14px text, no leading swatch/icons. New
-   overlays follow the approved 17-color palette in sequence, and the
-   PSD and 1-3-Octave files for one entry get the exact same color.
-4. The per-entry context menu has **颜色 / 线宽 / 线型 / 退出**.
-   Color opens the 17 specified choices; width offers
-   0.75/1.5/2.25/3/3.75; line style offers -· (dash-dot) and -- (dash).
-   Secondary choices are vertically stacked beside the parent menu.
-5. **Real local persistence:** the Bokeh/Tornado `cad-svg-style` POST
-   handler recomputes the catalog from the chosen XLSX ellipse. The
-   server checks the source sheet/shape indices, time, axis, allowed
-   palette, width and dash options. Only the matched two local SVGs are
-   updated. It uses temp-file replacement and paired rollback if an
-   update fails. Tests create temporary real SVG files and assert the
-   resulting XML on disk for both PSD and octave files.
-6. Source SVG elements without an explicit paint continue to be
-   transparent; explicit `none` is preserved. The browser cache is
-   bypassed when an updated SVG is reloaded.
-7. SVG fit is computed **independently for the upper and lower panes**.
-   Each takes the largest width satisfying both available pane width
-   and available height at its own intrinsic aspect ratio. Height wins
-   when width-based scaling would overflow. All overlays are considered
-   for bounds. There is no forced common pixel width across both panes.
-8. Existing MIME, HTTP, Bokeh, XLSX alt-text cuboid height, dynamic date
-   lookup, CAD camera synchronization and secure private-XLSX tests
-   are still green.
+1. Removed `drawTopLeftText`, all Three.js text meshes, their
+   `CanvasTexture` creation and font handling. Rectangle, textbox and
+   ellipse labels no longer appear as separately rendered CAD text.
+   XLSX visible text is **still parsed** only for hover breadcrumbs,
+   shape identity and associated SVG catalog folder detection.
+2. Removed unused font reference / text-color extraction from
+   `xlsx_spatial.py` and from the JSON shape's `colors` object.
+   Console output prints only fill and outline colors and does not
+   reference the removed field. Existing XLSX geometry/alt text
+   reports and startup tests pass.
+3. Removed the **line width** and **line type** legend menus,
+   options, JSON commands, server-side write endpoint, and all code in
+   `svg_styling.py`. Deleted its six obsolete persistence tests.
+4. `/viewer/cad-svg-style` is no longer exposed; its POST returns
+   HTTP 404 in the live Bokeh/Tornado integration test. No local SVG
+   mutation path remains in this application.
+5. Added browser-only `recolorSvgMarkup()`, using DOMParser and
+   XMLSerializer to recolor explicit SVG paint without inserting
+   opaque fill in unpainted regions. Original `fill="none"`,
+   `stroke="none"`, transparent regions and gradient references are
+   preserved. CSS color rules are covered by Node tests.
+6. SVG source text is fetched **once per URL** and retained in a
+   Promise cache in browser memory. A new pair is colored together
+   from immutable original sources, assigned Blob URLs, and added as
+   transparent layers. Duplicate/in-flight selections are blocked.
+   Recoloring the legend creates new in-memory Blob URLs, with previous
+   URLs revoked after successful swap; closing revokes both image URLs.
+   Original `assets/**/*.svg` files are never rewritten.
+7. Color palette contains exactly the 17 requested colors in order.
+   Consecutive pair additions advance through the palette; each
+   PSD / 1-3-Octave pair and its bold legend text use one identical
+   color. Legend right-click offers **颜色 ›** (all 17 colors in
+   a vertical submenu) and **退出** only.
+8. Prior CAD camera synchronization, textbox hover hierarchy,
+   read-only SVG catalog, independent pane aspect-fitting, MIME
+   regression, and private workbook HTTP security remain green.
 
-## Limitations
+## Visual verification limitation
 
-The user's actual XLSX, PSD and octave SVG assets are not present in
-the GitHub repository. CI covers synthetic XLSX fixtures, real temporary
-SVG file edits, Node UI/geometry calculations, and HTTP endpoint
-validation, but not Chrome visual rendering with the private inputs.
-A local visual check is still needed. Files in `assets/` are written
-in place by the new styling controls; back up the originals if their
-initial formatting must be recoverable.
+The user's real XLSX and SVG files are not in this GitHub repository.
+CI verifies the pure JS recoloring behavior with an XML DOM test double,
+read-only HTTP access, synthetic XLSX fixtures and Node geometry tests.
+The exact Chrome SVG artwork and 3D rendered appearance still require
+local visual testing. Also, if the **embedded PNG image itself** contains
+baked-in lettering, removing CAD text meshes will not erase pixels
+inside that original image.
