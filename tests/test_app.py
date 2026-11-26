@@ -114,26 +114,52 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertNotIn("GLTFLoader", viewer)
 
 
-    def test_visual_labels_removed_and_splitters_added(self):
+    def test_operation_labels_are_plain_black_and_each_layer_has_own_breadcrumb(self):
         html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
-        for absent in ("Fab / Subfab · 联动 CAD 视图", "FAB · Sheet 1",
-                       "SUBFAB · Sheet 2", "数据分析参考图",
-                       "OneThreeOctave_base.svg", "PSD_base.svg</div>"):
-            with self.subTest(absent=absent):
-                self.assertNotIn(absent,html)
+        self.assertEqual(html.count("滚轮缩放·右键拖动平移·左键拖动旋转"),2)
+        for attr in ('id="fab-selected-info"', 'id="subfab-selected-info"',
+                     'class="cad-operation"', 'class="cad-selection"'):
+            self.assertIn(attr,html)
+        self.assertIn(".cad-operation{",html)
+        self.assertIn("color:#111;background:none;border:0",html)
+        self.assertIn("bottom:12px;left:12px",html)
+        self.assertNotIn('id="selected-info"',html)
+        self.assertNotIn('id="cad-info"',html)
+        self.assertNotIn("Fab / Subfab · 联动 CAD 视图",html)
+
+    def test_white_background_and_context_menu_hierarchy(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        self.assertIn("scene.background = new THREE.Color(0xffffff)",viewer)
+        self.assertIn("background:#fff",html)
+        for marker in ("createContextMenu(", "closeContextMenus(", "openContextMenu(",
+                       "selectionPath(", "workbookName=data.workbook",
+                       "if (kind !== 'textbox') layer.clickable.push(clickTarget)",
+                       "event.button===2", "2025", "2026", "'X','Y','Z'"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker,viewer)
+        self.assertIn("selectOnButton(mesh.userData.cadObject,event.button)",viewer)
+        self.assertIn("stageId==='fab-stage'?'fab-selected-info':'subfab-selected-info'",viewer)
+
+    def test_svg_fit_is_centered_bounded_and_initial_split_ratio_fixed(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        pure=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
         self.assertIn('id="main-splitter"',html)
         self.assertIn('id="reference-splitter"',html)
-        self.assertIn('id="selected-info"',html)
-        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
-        self.assertIn("zoom intentionally untouched",viewer)
-        self.assertIn("selectedInfo.textContent=(mesh.userData.cadObject.text||'').trim()",viewer)
-        self.assertIn("entry.element.style.height=height+'px'",viewer)
-        self.assertIn("entry.element.style.width=(height/entry.ratio)+'px'",viewer)
+        self.assertIn("justify-content:center;background:#fff",html)
+        self.assertIn("overflow:hidden;display:flex",html)
+        self.assertNotIn("overflow-x:auto",html)
+        self.assertIn("minmax(0,5.8fr) 8px minmax(0,18.1fr)",html)
+        self.assertIn("let rightSplitRatio = INITIAL_REFERENCE_SPLIT",viewer)
+        self.assertIn("fitSvgPair(",viewer)
+        self.assertIn("clampMainDivider(",viewer)
+        self.assertIn("clampReferenceSplit(",viewer)
         self.assertIn("fitSvgHeightToPane()",viewer)
-        self.assertNotIn("refreshEqualSvgWidth",viewer)
-        self.assertNotIn("commonWidth",viewer)
-        self.assertIn("overflow-x:auto",html)
-        self.assertIn("flex:0 0 auto",html)
+        self.assertIn("5.8 / (5.8 + 18.1)",pure)
+        self.assertNotIn("rightSplitChangedByUser",viewer)
+        self.assertIn("a.element.style.width=sizes.width+'px'",viewer)
+        self.assertIn("b.element.style.width=sizes.width+'px'",viewer)
 
 
     def test_drawing_strategies_use_actual_meshes_and_raycaster(self):
@@ -288,6 +314,7 @@ class TestHttpIntegration(unittest.TestCase):
         for module_path, source_marker in (
             ("/viewer/cad_viewer.js", "OrbitControls"),
             ("/viewer/cad_geometry.mjs", "rectangleHeight"),
+            ("/viewer/cad_ui.mjs", "selectionPath"),
         ):
             with self.subTest(module_path=module_path):
                 with urlopen(self.base + module_path, timeout=5) as response:

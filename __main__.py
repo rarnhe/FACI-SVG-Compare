@@ -50,6 +50,7 @@ BUILD_REVISION = sha256(
     + (STATIC_DIR / "cad_service.py").read_bytes()
     + (STATIC_DIR / "cad_viewer.js").read_bytes()
     + (STATIC_DIR / "cad_geometry.mjs").read_bytes()
+    + (STATIC_DIR / "cad_ui.mjs").read_bytes()
     + (STATIC_DIR / "cad_validation.py").read_bytes()
 ).hexdigest()[:12]
 APP_ID = f"OneThreeOctave-SVG-Compare:Bokeh-Three.js:{BUILD_REVISION}"
@@ -277,7 +278,7 @@ def main():
                 (r"/viewer/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/cad-layout\.json", CadManifestHandler, {"state": cad_state}),
                 (r"/viewer/cad-image/([0-9]+)/([0-9]+)", CadImageHandler, {"state": cad_state}),
-                (r"/viewer/(index\.html|cad_viewer\.js|cad_geometry\.mjs)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),
+                (r"/viewer/(index\.html|cad_viewer\.js|cad_geometry\.mjs|cad_ui\.mjs)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),
                 (r"/viewer/assets/((?i:.*\.xlsx))", PrivateWorkbookHandler),
                 (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),
             ],

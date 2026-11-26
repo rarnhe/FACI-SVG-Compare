@@ -2,24 +2,26 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
+import {
+  INITIAL_REFERENCE_SPLIT, selectOnButton, selectionPath, fitSvgPair,
+  clampMainDivider, clampReferenceSplit,
+} from './cad_ui.mjs';
 
 const EMU_TO_PX = 1 / 9525;
 const layers = [];
 const pointerStart = new WeakMap();
-const selectedInfo = document.getElementById('selected-info');
+let workbookName = '';
 let syncing = false;
 let hasGeometry = false;
 let sceneBounds = {minX:0,maxX:500,minY:0,maxY:400};
 let lastCadSize = null;
-let selectedMesh = null;
-let rightSplitRatio = 0.5;
-let rightSplitChangedByUser = false;
+let rightSplitRatio = INITIAL_REFERENCE_SPLIT;
 const referenceImages = new Map();
 
 function createLayer(stageId) {
   const stage = document.getElementById(stageId);
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0e2231);
+  scene.background = new THREE.Color(0xffffff);
   const renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   const camera = new THREE.OrthographicCamera(-200,200,150,-150,0.1,200000);
@@ -38,8 +40,14 @@ function createLayer(stageId) {
   controls.maxZoom = 100;
   controls.target.set(0,0,0);
   controls.update();
-  stage.append(renderer.domElement);
-  const layer = {stage,scene,renderer,camera,controls,clickable:[]};
+  stage.prepend(renderer.domElement);
+  const layer = {
+    stage,scene,renderer,camera,controls,clickable:[],objects:[],
+    sheetName:'',selectedMesh:null,
+    selectedInfo:document.getElementById(
+      stageId==='fab-stage'?'fab-selected-info':'subfab-selected-info'),
+  };
+  layer.menu = createContextMenu(layer);
   controls.addEventListener('change',()=>synchronizeFrom(layer));
   renderer.domElement.addEventListener('contextmenu',e=>e.preventDefault());
   installPicking(layer);
@@ -203,7 +211,7 @@ function drawShape(layer,item,rectangles=[]) {
     group.add(makeOutline(vertices,borderColor));
   }
   clickTarget.userData.cadObject=item;
-  layer.clickable.push(clickTarget);
+  if (kind !== 'textbox') layer.clickable.push(clickTarget);
   drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ);
   layer.scene.add(group);
 }
@@ -228,32 +236,121 @@ function drawImage(layer,item) {
   },undefined,error=>console.error('XLSX image could not be loaded:',error));
 }
 
+function createContextMenu(layer) {
+  const menu=document.createElement('div');
+  menu.className='cad-context-menu';
+  menu.hidden=true;
+  menu.setAttribute('role','menu');
+  menu.setAttribute('aria-label','椭圆形状操作');
+  const year2025=document.createElement('button');
+  year2025.type='button';
+  year2025.setAttribute('role','menuitem');
+  const yearLabel=document.createElement('span');
+  yearLabel.textContent='2025';
+  const arrow=document.createElement('span');
+  arrow.className='cad-menu-arrow';
+  arrow.textContent='›';
+  year2025.append(yearLabel,arrow);
+  const submenu=document.createElement('div');
+  submenu.className='cad-submenu';
+  submenu.hidden=true;
+  submenu.setAttribute('role','group');
+  for (const entry of ['X','Y','Z']) {
+    const button=document.createElement('button');
+    button.type='button';
+    button.textContent=entry;
+    button.setAttribute('role','menuitem');
+    button.addEventListener('click',()=>{menu.hidden=true;});
+    submenu.append(button);
+  }
+  year2025.setAttribute('aria-haspopup','true');
+  year2025.setAttribute('aria-expanded','false');
+  year2025.addEventListener('click',()=>{
+    submenu.hidden=!submenu.hidden;
+    year2025.setAttribute('aria-expanded',String(!submenu.hidden));
+    keepMenuInStage(layer);
+  });
+  const year2026=document.createElement('button');
+  year2026.type='button';
+  year2026.textContent='2026';
+  year2026.setAttribute('role','menuitem');
+  year2026.addEventListener('click',()=>{menu.hidden=true;});
+  menu.addEventListener('pointerdown',event=>event.stopPropagation());
+  menu.append(year2025,submenu,year2026);
+  layer.stage.append(menu);
+  return {element:menu,submenu,year2025};
+}
+
+function keepMenuInStage(layer) {
+  const menu=layer.menu.element;
+  const left=Math.max(4,Math.min(
+    Number.parseFloat(menu.style.left)||4,Math.max(4,layer.stage.clientWidth-menu.offsetWidth-4)));
+  const top=Math.max(4,Math.min(
+    Number.parseFloat(menu.style.top)||4,Math.max(4,layer.stage.clientHeight-menu.offsetHeight-4)));
+  menu.style.left=left+'px';
+  menu.style.top=top+'px';
+}
+
+function closeContextMenus() {
+  for (const layer of layers) {
+    layer.menu.element.hidden=true;
+    layer.menu.submenu.hidden=true;
+    layer.menu.year2025.setAttribute('aria-expanded','false');
+  }
+}
+
+function openContextMenu(layer,clientX,clientY) {
+  closeContextMenus();
+  const bounds=layer.stage.getBoundingClientRect();
+  layer.menu.element.style.left=(clientX-bounds.left)+'px';
+  layer.menu.element.style.top=(clientY-bounds.top)+'px';
+  layer.menu.element.hidden=false;
+  keepMenuInStage(layer);
+}
+
 function installPicking(layer) {
   const canvas=layer.renderer.domElement;
   const raycaster=new THREE.Raycaster(), mouse=new THREE.Vector2();
   canvas.addEventListener('pointerdown',event=>{
+    closeContextMenus();
     pointerStart.set(canvas,{x:event.clientX,y:event.clientY,button:event.button});
   });
+  canvas.addEventListener('pointercancel',()=>pointerStart.delete(canvas));
   canvas.addEventListener('pointerup',event=>{
     const start=pointerStart.get(canvas);
     pointerStart.delete(canvas);
-    if(!start || start.button!==0 || Math.hypot(event.clientX-start.x,event.clientY-start.y)>5) return;
+    // OrbitControls owns rotation and right-drag panning. Short clicks
+    // alone select: left for regular shapes, right for ellipses.
+    if (!start || start.button!==event.button ||
+        Math.hypot(event.clientX-start.x,event.clientY-start.y)>5) return;
+    if(event.button!==0 && event.button!==2) return;
     const rect=canvas.getBoundingClientRect();
     mouse.set((event.clientX-rect.left)/rect.width*2-1,
               1-(event.clientY-rect.top)/rect.height*2);
     raycaster.setFromCamera(mouse,layer.camera);
-    const hit=raycaster.intersectObjects(layer.clickable,false)[0];
+    const pickable=layer.clickable.filter(mesh=>
+      selectOnButton(mesh.userData.cadObject,event.button));
+    const hit=raycaster.intersectObjects(pickable,false)[0];
     if(!hit) return;
-    if(selectedMesh) selectedMesh.material.opacity=selectedMesh.userData.originalOpacity;
+    if(layer.selectedMesh)
+      layer.selectedMesh.material.opacity=layer.selectedMesh.userData.originalOpacity;
     const mesh=hit.object;
     if(mesh.userData.originalOpacity===undefined)
       mesh.userData.originalOpacity=mesh.material.opacity;
     mesh.material.opacity=0.95;
-    selectedMesh=mesh;
-    // Only the meaningful shape text; no layer, sheet, ID or decorative label.
-    selectedInfo.textContent=(mesh.userData.cadObject.text||'').trim();
+    layer.selectedMesh=mesh;
+    layer.selectedInfo.textContent=selectionPath(
+      workbookName,layer.sheetName,layer.objects,
+      mesh.userData.cadObject,toWorldRect);
+    if(event.button===2) openContextMenu(layer,event.clientX,event.clientY);
   });
 }
+document.addEventListener('pointerdown',event=>{
+  if(!event.target.closest?.('.cad-context-menu')) closeContextMenus();
+});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape') closeContextMenus();
+});
 
 function fitScale(width,height) {
   const dw=Math.max(20,sceneBounds.maxX-sceneBounds.minX);
@@ -346,13 +443,27 @@ function applySvgSplitRatio() {
 }
 
 function fitSvgHeightToPane() {
-  // Each SVG fills its OWN pane height. Its width follows the intrinsic ratio
-  // independently of the other SVG; horizontal scrolling handles overflow.
-  for(const [key,entry] of referenceImages) {
-    const frame=document.getElementById(key+'-frame');
-    const height=Math.max(0,frame.clientHeight);
-    entry.element.style.height=height+'px';
-    entry.element.style.width=(height/entry.ratio)+'px';
+  const psd=document.getElementById('psd-frame');
+  const octave=document.getElementById('octave-frame');
+  const a=referenceImages.get('psd');
+  const b=referenceImages.get('octave');
+  if(a && b) {
+    const sizes=fitSvgPair(
+      {width:psd.clientWidth,height:psd.clientHeight},
+      {width:octave.clientWidth,height:octave.clientHeight},
+      a.ratio,b.ratio);
+    a.element.style.width=sizes.width+'px';
+    a.element.style.height=sizes.heightA+'px';
+    b.element.style.width=sizes.width+'px';
+    b.element.style.height=sizes.heightB+'px';
+  } else {
+    for (const [key,entry] of referenceImages) {
+      const frame=document.getElementById(key+'-frame');
+      const width=Math.max(0,Math.min(
+        frame.clientWidth,frame.clientHeight/entry.ratio));
+      entry.element.style.width=width+'px';
+      entry.element.style.height=(width*entry.ratio)+'px';
+    }
   }
 }
 
@@ -365,11 +476,8 @@ function referenceImage(key,info) {
     referenceImages.set(key,{element:image,ratio:height/width});
     image.style.display='block';
     placeholder.hidden=true;
-    if(referenceImages.size===2 && !rightSplitChangedByUser) {
-      const r1=referenceImages.get('psd').ratio,r2=referenceImages.get('octave').ratio;
-      rightSplitRatio=r1/(r1+r2);
-      applySvgSplitRatio();
-    }
+    // Keep the requested initial height split of 5.8:18.1,
+    // regardless of the intrinsic SVG dimensions.
     fitSvgHeightToPane();
   };
   image.onerror=()=>{placeholder.textContent='SVG 资源加载失败';};
@@ -414,7 +522,7 @@ function installSplitter(id,direction,callback) {
 installSplitter('main-splitter','vertical',event=>{
   const layout=document.getElementById('layout');
   const bounds=layout.getBoundingClientRect();
-  const left=Math.max(240,Math.min(bounds.width-248,event.clientX-bounds.left));
+  const left=clampMainDivider(event.clientX-bounds.left,bounds.width);
   layout.style.gridTemplateColumns='minmax(0,'+left+'px) 8px minmax(0,1fr)';
   resizeCadLayers();
   fitSvgHeightToPane();
@@ -423,15 +531,14 @@ installSplitter('main-splitter','vertical',event=>{
 installSplitter('reference-splitter','horizontal',event=>{
   const panel=document.getElementById('reference-frames');
   const bounds=panel.getBoundingClientRect();
-  const usable=Math.max(1,bounds.height-8);
-  rightSplitRatio=Math.min(0.95,Math.max(0.05,(event.clientY-bounds.top)/usable));
-  rightSplitChangedByUser=true;
+  rightSplitRatio=clampReferenceSplit(event.clientY-bounds.top,bounds.height);
   applySvgSplitRatio();
   fitSvgHeightToPane();
 });
 
 const fab=createLayer('fab-stage');
 const subfab=createLayer('subfab-stage');
+applySvgSplitRatio();
 document.getElementById('reset-view').addEventListener('click',resetTopView);
 new ResizeObserver(()=>resizeCadLayers()).observe(document.getElementById('cad-layers'));
 new ResizeObserver(()=>fitSvgHeightToPane()).observe(document.getElementById('reference-frames'));
@@ -445,10 +552,13 @@ async function initialize() {
     const response=await fetch('./cad-layout.json',{cache:'no-store'});
     if(!response.ok) throw new Error('CAD layout HTTP '+response.status);
     const data=await response.json();
+    workbookName=data.workbook || '';
     const targets=[fab,subfab];
     for(let i=0;i<2;i++) {
       const layerData=data.layers[i], layer=targets[i];
       if(!layerData?.available) continue;
+      layer.objects=layerData.objects;
+      layer.sheetName=layerData.sheet || '';
       const rectangles=rectangleSpecs(layerData.objects,toWorldRect);
       for(const item of layerData.objects) {
         if(item.type==='image') drawImage(layer,item);

@@ -6,43 +6,54 @@
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
 <title>Fab / Subfab CAD</title>
 <style>
-:root {font-family:"Segoe UI","Microsoft YaHei",sans-serif;color-scheme:light;}
+:root{font-family:"Segoe UI","Microsoft YaHei",sans-serif;color-scheme:light}
 *{box-sizing:border-box}
-html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#0d1b29}
-#layout{display:grid;grid-template-columns:minmax(0,58fr) 8px minmax(0,42fr);width:100vw;height:100vh;}
-#cad-pane{position:relative;min-width:0;min-height:0;overflow:hidden;background:#0d1b29}
-#cad-info{position:absolute;top:12px;left:12px;right:70px;z-index:3;max-width:470px;
-  padding:8px 11px;background:#142739e8;color:#deedf7;border:1px solid #5670897d;
-  border-radius:8px;pointer-events:none;font-size:12px;line-height:1.5;}
-#selected-info{color:#94e1fc;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-#selected-info:empty{display:none;}
-#reset-view{position:absolute;top:12px;right:13px;z-index:5;width:42px;height:42px;
-  border:1px solid #7b9fbd;background:#25547b;color:#fff;border-radius:9px;
-  font-size:27px;line-height:1;cursor:pointer;}
-#reset-view:hover,#reset-view:focus-visible{background:#387da8;outline:2px solid #a8dcff}
-#cad-layers{width:100%;height:100%;display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr);}
-.cad-layer{position:relative;min-width:0;min-height:0;overflow:hidden;border-bottom:1px solid #466075;}
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
+#layout{display:grid;grid-template-columns:minmax(0,58fr) 8px minmax(0,42fr);width:100vw;height:100vh}
+#cad-pane{position:relative;min-width:0;min-height:0;overflow:hidden;background:#fff}
+#cad-layers{width:100%;height:100%;display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
+.cad-layer{position:relative;min-width:0;min-height:0;overflow:hidden;background:#fff;border-bottom:1px solid #d1d7dc}
 .cad-layer:last-child{border-bottom:0}
-.cad-layer canvas{display:block;position:absolute;inset:0;width:100%;height:100%;}
-#reference-pane{min-width:0;min-height:0;background:#fff;overflow:hidden;}
-#reference-frames{display:grid;grid-template-rows:minmax(0,1fr) 8px minmax(0,1fr);height:100%;width:100%;}
-.reference-frame{min-height:0;min-width:0;position:relative;overflow-x:auto;overflow-y:hidden;display:flex;align-items:center;justify-content:flex-start;background:#fff;}
-.reference-frame img{display:none;flex:0 0 auto;width:auto;height:100%;object-fit:contain;max-width:none;max-height:none;}
-.reference-placeholder{padding:15px;color:#8293a4;font-size:12px;text-align:center;}
+.cad-layer canvas{display:block;position:absolute;inset:0;width:100%;height:100%}
+.cad-operation{position:absolute;top:10px;left:12px;right:65px;z-index:3;
+  color:#111;background:none;border:0;padding:0;pointer-events:none;font-size:12px;line-height:1.5}
+.cad-selection{position:absolute;bottom:12px;left:12px;right:10px;z-index:3;
+  color:#111;font-size:12px;line-height:1.5;overflow-wrap:anywhere;pointer-events:none}
+.cad-selection:empty{display:none}
+#reset-view{position:absolute;top:12px;right:13px;z-index:5;width:42px;height:42px;
+  border:1px solid #849bb1;background:#e9f2f8;color:#172f44;border-radius:9px;
+  font-size:27px;line-height:1;cursor:pointer}
+#reset-view:hover,#reset-view:focus-visible{background:#c9e3f3;outline:2px solid #7bb8e1}
+.cad-context-menu{position:absolute;z-index:9;min-width:112px;
+  padding:5px;background:#fff;border:1px solid #aab6c0;box-shadow:0 5px 17px #0002;
+  border-radius:6px;color:#111;font-size:13px}
+.cad-context-menu[hidden],.cad-submenu[hidden]{display:none}
+.cad-context-menu button{display:flex;justify-content:space-between;align-items:center;
+  gap:22px;width:100%;padding:7px 10px;color:#111;background:#fff;border:0;
+  border-radius:3px;font:inherit;text-align:left;cursor:pointer}
+.cad-context-menu button:hover,.cad-context-menu button:focus-visible{background:#eaf3fc;outline:0}
+.cad-menu-arrow{font-size:16px}
+.cad-submenu{position:relative;margin:3px 0 0;padding:2px 0 2px 11px;border-top:1px solid #e4e8eb}
+#reference-pane{min-width:0;min-height:0;background:#fff;overflow:hidden}
+#reference-frames{display:grid;grid-template-rows:minmax(0,5.8fr) 8px minmax(0,18.1fr);height:100%;width:100%}
+.reference-frame{min-height:0;min-width:0;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#fff}
+.reference-frame img{display:none;flex:0 0 auto;width:auto;height:auto;max-width:100%;max-height:100%;object-fit:contain}
+.reference-placeholder{padding:15px;color:#8293a4;font-size:12px;text-align:center}
 .splitter{z-index:7;touch-action:none;user-select:none;position:relative;
-  display:flex;align-items:center;justify-content:center;background:#c4d1da;}
-.splitter::after{content:"";background:#6a8ca5;border-radius:3px;}
-#main-splitter{cursor:col-resize;width:8px;}
-#main-splitter::after{width:3px;height:42px;}
-#reference-splitter{cursor:row-resize;height:8px;}
-#reference-splitter::after{width:44px;height:3px;}
-.splitter:hover,.splitter:focus-visible{background:#8cbad4;outline:none;}
-body.dragging-divider{cursor:col-resize;user-select:none;}
-body.dragging-divider.vertical{cursor:row-resize;}
+  display:flex;align-items:center;justify-content:center;background:#c4d1da}
+.splitter::after{content:"";background:#6a8ca5;border-radius:3px}
+#main-splitter{cursor:col-resize;width:8px}
+#main-splitter::after{width:3px;height:42px}
+#reference-splitter{cursor:row-resize;height:8px}
+#reference-splitter::after{width:44px;height:3px}
+.splitter:hover,.splitter:focus-visible{background:#8cbad4;outline:none}
+body.dragging-divider{cursor:col-resize;user-select:none}
+body.dragging-divider.vertical{cursor:row-resize}
 @media(max-width:750px){
  #layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,55%) minmax(0,45%)}
  #main-splitter{display:none}
- #cad-info{top:6px;left:6px;right:59px;padding:6px;font-size:11px}
+ .cad-operation{top:6px;left:6px;right:59px;font-size:11px}
+ .cad-selection{bottom:6px;left:6px;font-size:11px}
  #reset-view{top:6px;right:6px}
 }
 </style>
@@ -56,14 +67,16 @@ body.dragging-divider.vertical{cursor:row-resize;}
 <body>
 <div id="layout">
   <section id="cad-pane" aria-label="Fab 与 Subfab 联动 CAD">
-    <div id="cad-info">
-      滚轮缩放 · 右键拖动平移 · 左键拖动旋转 · 单击形状
-      <div id="selected-info" aria-live="polite"></div>
-    </div>
     <button type="button" id="reset-view" title="恢复平面俯视（保持当前缩放与平移）" aria-label="恢复平面俯视">↺</button>
     <div id="cad-layers">
-      <div class="cad-layer" id="fab-stage" aria-label="Fab CAD"></div>
-      <div class="cad-layer" id="subfab-stage" aria-label="Subfab CAD"></div>
+      <div class="cad-layer" id="fab-stage" aria-label="Fab CAD">
+        <div class="cad-operation">滚轮缩放·右键拖动平移·左键拖动旋转</div>
+        <div id="fab-selected-info" class="cad-selection" aria-live="polite"></div>
+      </div>
+      <div class="cad-layer" id="subfab-stage" aria-label="Subfab CAD">
+        <div class="cad-operation">滚轮缩放·右键拖动平移·左键拖动旋转</div>
+        <div id="subfab-selected-info" class="cad-selection" aria-live="polite"></div>
+      </div>
     </div>
   </section>
   <div id="main-splitter" class="splitter" role="separator" aria-label="拖动调整 CAD 与 SVG 区域宽度" aria-orientation="vertical" tabindex="0"></div>

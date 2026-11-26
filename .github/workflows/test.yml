@@ -42,7 +42,7 @@ jobs:
         id: geometry
         shell: bash
         continue-on-error: true
-        run: node --test tests/test_cad_geometry.mjs
+        run: node --test tests/test_cad_geometry.mjs tests/test_cad_ui.mjs
       - name: Execute tests and generate report
         id: tests
         if: always()

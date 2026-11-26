@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Two-sheet one-picture workbook validation; sheet image-origin coordinates; DrawingML textbox/ellipse/rectangle classification; CAD 3D shapes, linked reset, resizable panes, height-filling SVGs, rectangle suffix height, rotated rectangle overlap validation, rebuilt circle-vs-rectangle full/partial/outside relations, and HTTP/Bokeh regression including strict .js/.mjs module MIME types.",
+        "Two-sheet XLSX validation; white linked CAD panes; textbox display-only; right-click ellipse menu and hierarchical selection paths; constrained draggable splitters; equal-width, aspect-preserving SVG fit with 5.8:18.1 initial ratio; Bokeh/HTTP MIME regression; Node CAD geometry and UI tests.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]
