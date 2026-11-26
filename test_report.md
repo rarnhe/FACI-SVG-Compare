@@ -1,41 +1,46 @@
 # Test Report
 
-- UTC: 2026-11-25 15:34:36
+- UTC: 2026-11-26 01:24:32
 - Result: **PASS**
-- Python tests: **74 per environment**
-- Node geometry tests: **12 per environment**
+- Tests: **76 per environment**
+- Passed: 76
 - Failures: 0
 - Errors: 0
 - Skipped: 0
 
 ## Dual-track verification
 
-| Environment | Python unittest | Node geometry tests | Result |
-| --- | --- | --- | --- |
-| Ubuntu / Python 3.12 | 74/74 | 12/12 | PASS |
-| Windows / Python 3.14 | 74/74 | 12/12 | PASS |
+| Platform | Python | Result | Unittest cases | Duration |
+| --- | --- | --- | ---: | ---: |
+| Ubuntu (ubuntu-latest) | 3.12 | **PASS** | 76/76 | 3.208s |
+| Windows (windows-latest) | 3.14 | **PASS** | 76/76 | 4.325s |
 
-- Successful run: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45646581421
-- Both platforms check JavaScript module syntax, run `node --test tests/test_cad_geometry.mjs`, and run `python tests/run_tests.py`.
-- The CI writes and uploads test_report.md even for failures. The report here summarizes both tracks and the final verified code revision.
+- GitHub Actions: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45735475924
+- CI additionally checks JavaScript module syntax and Node CAD geometry calculations on both platforms.
+- Both platforms execute `python tests/run_tests.py`; the runner produces `test_report.md` whether tests pass or fail and the workflow uploads its report artifact.
 
-## Spatial geometry invariants
+## Fixed issue: JavaScript module MIME types
 
-- Exactly 2 sheets and 1 picture per sheet, with independent picture-origin CAD coordinates.
-- Preserve individually rotated Excel rectangles.
-- Rectangle-to-rectangle SAT: positive-area overlap **fails startup**, edge contact allowed; error identifies Sheet and both shape names.
-- Reconstructed circle uses the diagonal of the Excel ellipse bounding box as **diameter**.
-- Full-circle containment in one rotated rectangle: ellipse height = rectangle roof Z.
-- Exactly one partial circle/rectangle intersection (including edge tangency): ellipse height = half rectangle roof Z.
-- Circle completely outside all rectangles: ellipse height = 0.
-- Circle meeting **two or more** rectangles: **startup fails**, with Sheet and shape names.
-- Invalid height suffix: rectangle Z=0; valid `_x<ratio>` uses width and `_y<ratio>` uses height.
-- Cross-Sheet shapes are validated independently.
-- Python XLSX startup integration verifies that invalid geometry never opens the Bokeh server/browser.
-- Remaining Bokeh/HTTP frontend and SVG responsiveness regressions remain covered.
+The Windows HTTP static handler previously returned `text/plain` for
+`/viewer/cad_geometry.mjs`. Strict browser ES-module MIME checking prevented
+`cad_viewer.js` from evaluating, so neither the CAD images nor the SVG
+load callbacks could run.
 
-## Limitations
+The `NoCacheIndexHandler.set_extra_headers()` method now explicitly returns
+`Content-Type: text/javascript; charset=utf-8` for both `.js` and `.mjs`.
 
-Actual local XLSX/SVG assets are unavailable in CI. WebGL rendering quality,
-front-to-back appearance, and calibration against real drawings still require
-local Windows browser visual verification.
+The new **real HTTP** regression tests passed independently on both platforms:
+
+- `test_javascript_modules_have_browser_accepted_mime_type`: GET
+  `/viewer/cad_viewer.js` and `/viewer/cad_geometry.mjs`; verify 200,
+  JavaScript MIME, UTF-8 encoding, cache-control, revision header and source.
+- `test_html_still_has_html_mime_type`: GET `/viewer/index.html`;
+  verify the HTML content type remains `text/html`.
+
+## Scope and limitations
+
+No existing CAD interaction, geometry, XLSX parsing, SVG layout or frontend
+logic was changed by this fix. The user's actual SVG and XLSX assets were not
+available to CI. Automated tests confirm the MIME response and existing test
+contracts; actual Chrome WebGL rendering still requires local visual
+verification after stopping the previous server and starting the revised code.
