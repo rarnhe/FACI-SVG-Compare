@@ -106,7 +106,7 @@ class TestStaticFrontend(unittest.TestCase):
         viewer = (STATIC_DIR / "cad_viewer.js").read_text(encoding="utf-8")
         for expected in ("OrbitControls", "synchronizeFrom(", "THREE.MOUSE.ROTATE",
                          "THREE.MOUSE.PAN", "raycaster.intersectObjects",
-                         "resetTopView()", "drawTopLeftText(", "cad-layout.json",
+                         "resetTopView()", "cad-layout.json",
                          "kind==='ellipse'", "kind==='rectangle'", "kind==='textbox'",
                          "installSplitter('main-splitter'", "installSplitter('reference-splitter'"):
             with self.subTest(expected=expected):
@@ -183,11 +183,14 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("layer.clickable.push(clickTarget)",viewer)
         self.assertIn("raycaster.intersectObjects(targets,false)",viewer)
         self.assertIn("selectOnButton(mesh.userData.cadObject,button)",viewer)
-        self.assertIn("drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ)",viewer)
-        self.assertNotIn("item.text_layout",viewer)
-        self.assertNotIn("run.font_pt",viewer)
-        self.assertNotIn("shape_text_layout", (STATIC_DIR/"xlsx_spatial.py").read_text(encoding="utf-8"))
-        self.assertIn("drawTopLeftText(",viewer)
+        parser=(STATIC_DIR/"xlsx_spatial.py").read_text(encoding="utf-8")
+        self.assertNotIn("drawTopLeftText(",viewer)
+        self.assertNotIn("CanvasTexture",viewer)
+        self.assertNotIn("fillText(",viewer)
+        self.assertNotIn("frontZ",viewer)
+        self.assertNotIn("fontRef",parser)
+        self.assertNotIn('"text": style_color(',parser)
+        self.assertIn('obj["text"] = shape_text(element)',parser)
 
 
     def test_rectangle_depth_directive_and_ellipse_lifting_are_wired(self):
@@ -256,9 +259,11 @@ class TestStaticFrontend(unittest.TestCase):
                         "overlayLoads.add(label)", "overlaySelections.set(label,entry)",
                         "showLegendMenu(label,event.clientX,event.clientY)",
                         "removeReferenceOverlay(label)", "overlaySelections.delete(label)",
-                        "persistSvgStyle(selection,'color',color)",
-                        "changeLegendStyle(", "showLegendMenu(",
-                        "SVG_COLORS", "SVG_LINE_WIDTHS", "SVG_LINE_TYPES",
+                        "makeColoredPair(pair,color)",
+                        "changeLegendColor(", "showLegendMenu(",
+                        "SVG_COLORS", "recolorSvgMarkup(markup,color)",
+                        "URL.createObjectURL(new Blob([colorized]",
+                        "URL.revokeObjectURL(pair[key].blobUrl)",
                         "document.getElementById('psd-overlays').append",
                         "document.getElementById('octave-overlays').append"):
             self.assertIn(snippet,viewer)
@@ -277,13 +282,17 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("shape_kind==='textbox'",geometry)
         self.assertIn("shape_kind==='rectangle'",geometry)
 
-    def test_pair_style_http_route_is_registered_and_safe(self):
-        service=(STATIC_DIR/"__main__.py").read_text(encoding="utf-8")
-        self.assertIn("SvgStyleHandler",service)
-        self.assertIn("update_svg_pair(",service)
-        self.assertIn("cad-svg-style",service)
-        self.assertIn('startswith("application/json")',service)
-        self.assertIn('self.request.headers.get("Origin")',service)
+    def test_svg_mutation_service_removed_and_catalog_remains_readonly(self):
+        server=(STATIC_DIR/"__main__.py").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        self.assertNotIn("SvgStyleHandler",server)
+        self.assertNotIn("update_svg_pair",server)
+        self.assertNotIn("svg_styling.py",server)
+        self.assertNotIn("cad-svg-style",server+viewer)
+        self.assertNotIn("persistSvgStyle",viewer)
+        self.assertNotIn("method:'POST'",viewer)
+        self.assertFalse((STATIC_DIR/"svg_styling.py").exists())
+        self.assertIn("EllipseSvgCatalogHandler",server)
 
     def test_independent_panel_fit_and_unadorned_colored_legend(self):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
@@ -295,8 +304,9 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("line.style.color=entry.color",viewer)
         self.assertNotIn('className=\'legend-swatch\'',viewer)
         self.assertIn("SVG_COLORS=Object.freeze([",helper)
-        self.assertIn("SVG_LINE_WIDTHS=Object.freeze([",helper)
-        self.assertIn("SVG_LINE_TYPES=Object.freeze([",helper)
+        self.assertNotIn("SVG_LINE_WIDTHS",helper)
+        self.assertNotIn("SVG_LINE_TYPES",helper)
+        self.assertIn("recolorSvgMarkup(source,color)",helper)
         self.assertIn("close.textContent='退出'",viewer)
 
     def test_local_asset_directory_exists(self):
@@ -456,27 +466,14 @@ class TestHttpIntegration(unittest.TestCase):
             urlopen(self.base + "/viewer/cad-svg-catalog/0/999", timeout=5)
         self.assertEqual(error.exception.code, 404)
 
-    def test_svg_style_rejects_untrusted_http_mutations(self):
-        data=json.dumps({"layer":0,"object_index":999,"date":"20260704101627",
-                         "axis":"X","operation":"color","value":"#4F99CF"}).encode()
+    def test_removed_svg_post_route_returns_404_without_writing(self):
+        data=json.dumps({"layer":0,"object_index":0,
+                         "operation":"color","value":"#4F99CF"}).encode()
         request=Request(self.base+"/viewer/cad-svg-style",data=data,
                         method="POST",headers={"Content-Type":"application/json"})
-        with self.assertRaises(HTTPError) as bad_index:
+        with self.assertRaises(HTTPError) as removed:
             urlopen(request,timeout=5)
-        self.assertEqual(bad_index.exception.code,400)
-
-        wrong_origin=Request(self.base+"/viewer/cad-svg-style",data=data,
-            method="POST",headers={"Content-Type":"application/json",
-                                   "Origin":"https://attacker.example"})
-        with self.assertRaises(HTTPError) as forbidden:
-            urlopen(wrong_origin,timeout=5)
-        self.assertEqual(forbidden.exception.code,403)
-
-        wrong_type=Request(self.base+"/viewer/cad-svg-style",data=data,
-            method="POST",headers={"Content-Type":"text/plain"})
-        with self.assertRaises(HTTPError) as unsupported:
-            urlopen(wrong_type,timeout=5)
-        self.assertEqual(unsupported.exception.code,415)
+        self.assertEqual(removed.exception.code,404)
 
     def test_invalid_embedded_image_route_is_safe(self):
         with self.assertRaises(HTTPError) as caught:

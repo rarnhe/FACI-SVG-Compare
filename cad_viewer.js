@@ -5,8 +5,8 @@ import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometr
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
-  requiredSvgRatio, canAddOverlay, SVG_COLORS, SVG_LINE_WIDTHS, SVG_LINE_TYPES,
-  nextLegendColor,
+  requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
+  recolorSvgMarkup,
 } from './cad_ui.mjs';
 
 const EMU_TO_PX = 1 / 9525;
@@ -24,7 +24,6 @@ const legendMenu = document.getElementById('legend-context-menu');
 const overlaySelections = new Map();
 const overlayLoads = new Set();
 let colorCursor=0;
-let lastLegendIndex=-1;
 let displayedSvgWidth = 0;
 
 function createLayer(stageId) {
@@ -97,45 +96,6 @@ function colorValue(value,fallback) {
     ? parseInt(value.slice(1),16) : fallback;
 }
 
-// Text is a natural-aspect texture anchored to the upper-left of its shape.
-// Never stretch a 1024x256 text canvas to an arbitrary shape rectangle.
-function drawTopLeftText(group,label,width,height,foreground,frontZ) {
-  if(!label?.trim()) return;
-  const lines=label.split(/\r?\n/).slice(0,6);
-  const unitFont=48, pad=6, lineHeight=58;
-  const canvas=document.createElement('canvas');
-  const measure=canvas.getContext('2d');
-  measure.font='500 48px "Microsoft YaHei","Segoe UI",sans-serif';
-  const measured=Math.max(...lines.map(line=>measure.measureText(line).width),16);
-  canvas.width=Math.ceil(Math.min(4096,measured+pad*2));
-  canvas.height=Math.ceil(lines.length*lineHeight+pad*2);
-  const ctx=canvas.getContext('2d');
-  ctx.font='500 48px "Microsoft YaHei","Segoe UI",sans-serif';
-  ctx.textBaseline='top';
-  ctx.textAlign='left';
-  ctx.fillStyle=/^#[0-9a-f]{6}$/i.test(foreground||'') ? foreground : '#f4f9fd';
-  lines.forEach((line,index)=>ctx.fillText(line,pad,pad+index*lineHeight,canvas.width-pad*2));
-  const texture=new THREE.CanvasTexture(canvas);
-  texture.colorSpace=THREE.SRGBColorSpace;
-  const margin=Math.max(1,Math.min(width,height)*0.04);
-  const scale=Math.max(0.0001,Math.min(
-    0.35,
-    Math.max(0.1,width-2*margin)/canvas.width,
-    Math.max(0.1,height-2*margin)/canvas.height,
-  ));
-  const textWidth=canvas.width*scale, textHeight=canvas.height*scale;
-  const text=new THREE.Mesh(
-    new THREE.PlaneGeometry(textWidth,textHeight),
-    new THREE.MeshBasicMaterial({
-      map:texture,transparent:true,depthWrite:false,side:THREE.DoubleSide,
-      polygonOffset:true,polygonOffsetFactor:-1,
-    }),
-  );
-  text.position.set(-width/2+margin+textWidth/2,
-                    height/2-margin-textHeight/2,frontZ);
-  group.add(text);
-}
-
 function makeOutline(points,color) {
   return new THREE.LineLoop(
     new THREE.BufferGeometry().setFromPoints(points),
@@ -167,7 +127,6 @@ function drawShape(layer,item,rectangles=[]) {
     color:fillColor,transparent:true,opacity,
     side:THREE.DoubleSide,depthWrite:false,
   });
-  let frontZ=1.0;
   let clickTarget;
   if(kind==='ellipse') {
     // Per drawing requirement: the diagonals meet at the center, and
@@ -175,7 +134,6 @@ function drawShape(layer,item,rectangles=[]) {
     const radius=Math.hypot(w,h)/2;
     clickTarget=new THREE.Mesh(new THREE.CircleGeometry(radius,72),mat);
     clickTarget.position.z=0.5;
-    frontZ=1.2;
     group.add(clickTarget);
     const circumference=[];
     for(let i=0;i<72;i++) {
@@ -190,7 +148,6 @@ function drawShape(layer,item,rectangles=[]) {
       const cube=new THREE.BoxGeometry(w,h,depth);
       clickTarget=new THREE.Mesh(cube,mat);
       clickTarget.position.z=depth/2;
-      frontZ=depth+1;
       group.add(clickTarget);
       const edges=new THREE.LineSegments(
         new THREE.EdgesGeometry(cube),
@@ -202,7 +159,6 @@ function drawShape(layer,item,rectangles=[]) {
       // Missing/invalid directive: zero height, no artificial thickness.
       clickTarget=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);
       clickTarget.position.z=0;
-      frontZ=0.7;
       group.add(clickTarget);
       const hw=w/2,hh=h/2;
       group.add(makeOutline([
@@ -214,7 +170,6 @@ function drawShape(layer,item,rectangles=[]) {
     // Textboxes follow XLSX fill/outline colors; unrecognized shapes stay flat.
     clickTarget=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);
     clickTarget.position.z=0.5;
-    frontZ=1.2;
     group.add(clickTarget);
     const hw=w/2,hh=h/2;
     const vertices=[
@@ -227,7 +182,6 @@ function drawShape(layer,item,rectangles=[]) {
   clickTarget.userData.cadObject=item;
   layer.hoverable.push(clickTarget);
   if (kind !== 'textbox') layer.clickable.push(clickTarget);
-  drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ);
   layer.scene.add(group);
 }
 
@@ -307,9 +261,7 @@ function showAxisSubmenu(layer,button,date,catalog) {
       }
       try {
         const line=[catalog.rectangle,date,'+'+axis].join('_');
-        const selection={layer:layer.layerIndex,
-          object_index:layer.objects.indexOf(layer.menu.selectedObject),date,axis};
-        await switchReferencePair(pair,line,selection);
+        await switchReferencePair(pair,line);
         closeContextMenus();
       } catch(error) {
         console.error('Unable to switch SVG pair:',error);
@@ -590,44 +542,75 @@ function prefetchSvg(url) {
   });
 }
 
-function styleUrl(url) {
-  return url+(url.includes('?')?'&':'?')+'v='+Date.now();
+// Original SVG sources are immutable, fetched once per URL (including
+// concurrent requests). No SVG is ever written back to assets/ or POSTed.
+const svgSourceCache=new Map();
+function originalSvg(url) {
+  if(!svgSourceCache.has(url)) {
+    const reading=fetch(url).then(response=>{
+      if(!response.ok) throw new Error('SVG source HTTP '+response.status);
+      return response.text();
+    }).catch(error=>{
+      svgSourceCache.delete(url); // Permit a later retry.
+      throw error;
+    });
+    svgSourceCache.set(url,reading);
+  }
+  return svgSourceCache.get(url);
 }
 
-async function persistSvgStyle(selection,operation,value) {
-  const response=await fetch('./cad-svg-style',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({...selection,operation,value}),
-  });
-  if(!response.ok) throw new Error('SVG 修改未保存 (HTTP '+response.status+')');
-  const result=await response.json();
-  if(!result.saved || !result.pair?.psd || !result.pair?.octave)
-    throw new Error('SVG 修改未得到本地写入确认');
-  return result.pair;
+function releaseColoredPair(pair) {
+  for(const key of ['psd','octave']) {
+    if(pair?.[key]?.blobUrl) URL.revokeObjectURL(pair[key].blobUrl);
+  }
 }
 
-async function switchReferencePair(pair,label,selection) {
+async function makeColoredPair(sourcePair,color) {
+  const [psdMarkup,octaveMarkup]=await Promise.all([
+    originalSvg(sourcePair.psd),originalSvg(sourcePair.octave),
+  ]);
+  const result={};
+  try {
+    for(const [key,markup] of [['psd',psdMarkup],['octave',octaveMarkup]]) {
+      const colorized=recolorSvgMarkup(markup,color);
+      const blobUrl=URL.createObjectURL(new Blob([colorized],{
+        type:'image/svg+xml;charset=utf-8',
+      }));
+      result[key]={blobUrl};
+    }
+    const [psd,octave]=await Promise.all([
+      prefetchSvg(result.psd.blobUrl),prefetchSvg(result.octave.blobUrl),
+    ]);
+    Object.assign(result.psd,psd);
+    Object.assign(result.octave,octave);
+    return result;
+  } catch(error) {
+    releaseColoredPair(result);
+    throw error;
+  }
+}
+
+async function switchReferencePair(pair,label) {
+  // Reject both already-selected and in-flight selections BEFORE any fetch.
   if(!canAddOverlay(overlaySelections,overlayLoads,label)) return false;
   overlayLoads.add(label);
   try {
-    // The same palette entry is saved in BOTH SVG files before displaying
-    // either one. It cycles per successfully requested new legend item.
     const color=nextLegendColor(colorCursor++);
-    const urls=await persistSvgStyle(selection,'color',color);
-    const [psd,octave]=await Promise.all([
-      prefetchSvg(styleUrl(urls.psd)),prefetchSvg(styleUrl(urls.octave)),
-    ]);
-    if(overlaySelections.has(label)) return false;
-    const entry={selection,color,width:'1.5',dash:'--',saving:false};
-    for(const [key,image] of [['psd',psd],['octave',octave]]) {
-      const element=document.createElement('img');
+    const previews=await makeColoredPair(pair,color);
+    if(overlaySelections.has(label)) {
+      releaseColoredPair(previews);
+      return false;
+    }
+    const entry={sourcePair:{psd:pair.psd,octave:pair.octave},color,saving:false};
+    for(const key of ['psd','octave']) {
+      const preview=previews[key],element=document.createElement('img');
       element.alt='';
-      element.className='reference-overlay-image';
       element.decoding='async';
+      element.className='reference-overlay-image';
       element.style.background='transparent';
-      element.src=image.url;
-      entry[key]={element,ratio:image.height/image.width,url:urls[key]};
+      element.src=preview.url;
+      entry[key]={element,ratio:preview.height/preview.width,
+        blobUrl:preview.blobUrl};
     }
     overlaySelections.set(label,entry);
     document.getElementById('psd-overlays').append(entry.psd.element);
@@ -676,38 +659,38 @@ function removeReferenceOverlay(label) {
   entry.octave.element.remove();
   entry.legend.remove();
   overlaySelections.delete(label);
+  releaseColoredPair(entry);
   legendMenu.hidden=true;
   if(!overlaySelections.size) svgHistory.style.display='none';
   fitSvgHeightToPane();
   clampFloatingLog();
 }
 
-async function changeLegendStyle(label,operation,value) {
+async function changeLegendColor(label,color) {
   const entry=overlaySelections.get(label);
-  if(!entry || entry.saving) return;
+  if(!entry || entry.saving || entry.color===color) return;
   entry.saving=true;
   try {
-    const urls=await persistSvgStyle(entry.selection,operation,value);
-    const [psd,octave]=await Promise.all([
-      prefetchSvg(styleUrl(urls.psd)),prefetchSvg(styleUrl(urls.octave)),
-    ]);
-    if(!overlaySelections.has(label)) return;
-    for(const [key,image] of [['psd',psd],['octave',octave]]) {
-      entry[key].element.src=image.url;
-      entry[key].ratio=image.height/image.width;
-      entry[key].url=urls[key];
+    const next=await makeColoredPair(entry.sourcePair,color);
+    if(overlaySelections.get(label)!==entry) {
+      releaseColoredPair(next);
+      return;
     }
-    if(operation==='color') {
-      entry.color=value;
-      entry.legend.style.color=value;
+    const previous={psd:{blobUrl:entry.psd.blobUrl},
+      octave:{blobUrl:entry.octave.blobUrl}};
+    for(const key of ['psd','octave']) {
+      entry[key].element.src=next[key].url;
+      entry[key].ratio=next[key].height/next[key].width;
+      entry[key].blobUrl=next[key].blobUrl;
     }
-    if(operation==='width') entry.width=value;
-    if(operation==='dash') entry.dash=value;
+    entry.color=color;
+    entry.legend.style.color=color;
     fitSvgHeightToPane();
     legendMenu.hidden=true;
+    releaseColoredPair(previous);
   } catch(error) {
-    console.error('Cannot save local SVG styling:',error);
-    legendMenu.title='修改失败：'+error.message;
+    console.error('SVG color adjustment failed:',error);
+    legendMenu.title='颜色调整失败: '+error.message;
   } finally {
     entry.saving=false;
   }
@@ -724,38 +707,32 @@ function showLegendMenu(label,x,y) {
   secondary.className='legend-menu-secondary';
   secondary.hidden=true;
   legendMenu.append(primary,secondary);
-  for(const [title,kind,options] of [
-    ['颜色','color',SVG_COLORS],
-    ['线宽','width',SVG_LINE_WIDTHS],
-    ['线型','dash',SVG_LINE_TYPES],
-  ]) {
-    const button=document.createElement('button');
-    button.type='button';
-    button.setAttribute('role','menuitem');
-    button.textContent=title+' ›';
-    button.addEventListener('click',()=>{
-      secondary.replaceChildren();
-      for(const option of options) {
-        const item=document.createElement('button');
-        item.type='button';
-        item.setAttribute('role','menuitem');
-        item.textContent=option;
-        if(kind==='color') item.style.color=option;
-        item.addEventListener('click',()=>{void changeLegendStyle(label,kind,option);});
-        secondary.append(item);
-      }
-      secondary.hidden=false;
-      const primaryWidth=primary.offsetWidth;
-      const popupWidth=secondary.offsetWidth;
-      // Right-opening vertically stacked options, with edge fallback.
-      secondary.style.left=(parseFloat(legendMenu.style.left||'0')
-        +primaryWidth+popupWidth<=pane.clientWidth ? primaryWidth : -popupWidth)+'px';
-      secondary.style.top=Math.max(0,Math.min(
-        button.offsetTop,pane.clientHeight-secondary.offsetHeight-
-        parseFloat(legendMenu.style.top||'0')))+'px';
-    });
-    primary.append(button);
-  }
+  const colorButton=document.createElement('button');
+  colorButton.type='button';
+  colorButton.setAttribute('role','menuitem');
+  colorButton.textContent='颜色 ›';
+  colorButton.addEventListener('click',()=>{
+    secondary.replaceChildren();
+    for(const color of SVG_COLORS) {
+      const item=document.createElement('button');
+      item.type='button';
+      item.setAttribute('role','menuitem');
+      item.textContent=color;
+      item.style.color=color;
+      item.addEventListener('click',()=>{void changeLegendColor(label,color);});
+      secondary.append(item);
+    }
+    secondary.hidden=false;
+    const primaryWidth=primary.offsetWidth;
+    const popupWidth=secondary.offsetWidth;
+    // Vertically stacked 17-color list opens to the right when it fits.
+    secondary.style.left=(parseFloat(legendMenu.style.left||'0')
+      +primaryWidth+popupWidth<=pane.clientWidth ? primaryWidth : -popupWidth)+'px';
+    secondary.style.top=Math.max(0,Math.min(
+      colorButton.offsetTop,pane.clientHeight-secondary.offsetHeight-
+      parseFloat(legendMenu.style.top||'0')))+'px';
+  });
+  primary.append(colorButton);
   const close=document.createElement('button');
   close.type='button';
   close.setAttribute('role','menuitem');

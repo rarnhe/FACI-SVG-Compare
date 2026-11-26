@@ -211,11 +211,12 @@ class TestGeometry(unittest.TestCase):
         ])
         self.assertEqual(shape2["vertices_px"][0], {"x": 10, "y": 20})
 
-    def test_theme_color_and_text_color(self):
+    def test_theme_colors_exclude_unused_font_attributes(self):
         colors = self.parse()[0]["objects"][1]["colors"]
         self.assertEqual(colors, {
-            "fill": "#5B9BD5", "outline": "#5B9BD5", "text": "#FFFFFF"
+            "fill": "#5B9BD5", "outline": "#5B9BD5"
         })
+        self.assertNotIn("text", colors)
 
     def test_explicit_no_fill(self):
         self.assertEqual(

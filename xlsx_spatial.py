@@ -208,14 +208,8 @@ def style_color(node: ET.Element | None, style: ET.Element | None, kind: str,
         direct = get_color(solid, palette)
         if direct:
             return direct
-        if kind == "text":
-            for child in node.iter():
-                if local_name(child.tag) == "solidFill":
-                    value = get_color(child, palette)
-                    if value:
-                        return value
     if style is not None:
-        ref_tag = {"fill": "fillRef", "line": "lnRef", "text": "fontRef"}[kind]
+        ref_tag = {"fill": "fillRef", "line": "lnRef"}[kind]
         ref = first_child(style, ref_tag)
         if ref is not None:
             color = get_color(ref, palette)
@@ -226,11 +220,11 @@ def style_color(node: ET.Element | None, style: ET.Element | None, kind: str,
             except ValueError:
                 idx = 0
             style_list = fills if kind == "fill" else lines
-            if kind != "text" and 0 < idx <= len(style_list):
+            if 0 < idx <= len(style_list):
                 color = get_color(style_list[idx - 1], palette)
                 if color:
                     return color
-    return "#000000" if kind == "text" else "无/透明"
+    return "无/透明"
 
 
 def marker_xy(marker: ET.Element, metrics: SheetMetrics) -> tuple[int, int]:
@@ -394,11 +388,9 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
                     props = first_child(element, "grpSpPr")
                 outline = first_child(props, "ln")
                 style = first_child(element, "style")
-                text = first_child(element, "txBody")
                 obj["colors"] = {
                     "fill": style_color(props, style, "fill", palette, fills, lines),
                     "outline": style_color(outline, style, "line", palette, fills, lines),
-                    "text": style_color(text, style, "text", palette, fills, lines),
                 }
             objects.append(obj)
     return objects

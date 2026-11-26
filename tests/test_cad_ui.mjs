@@ -4,8 +4,8 @@ import {
   INITIAL_REFERENCE_SPLIT, shapeLabel, selectOnButton,
   containsShape, shapeAncestors, selectionParts, fitSvgPair, fitSvgPane,
   clampMainDivider, clampReferenceSplit, pictureLayerScales,
-  requiredSvgRatio,canAddOverlay,SVG_COLORS,SVG_LINE_WIDTHS,SVG_LINE_TYPES,
-  nextLegendColor,
+  requiredSvgRatio,canAddOverlay,SVG_COLORS,nextLegendColor,
+  recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
 } from '../cad_ui.mjs';
 
 const shape=(kind,x,y,width,height,text,rotation=0)=>({
@@ -142,8 +142,6 @@ test('all seventeen palette colors are unique, including rollover',()=>{
   assert.equal(nextLegendColor(0),'#4F99CF');
   assert.equal(nextLegendColor(1),'#E41A1C');
   assert.equal(nextLegendColor(17),'#4F99CF');
-  assert.deepEqual(SVG_LINE_WIDTHS,['0.75','1.5','2.25','3','3.75']);
-  assert.deepEqual(SVG_LINE_TYPES,['-·','--']);
 });
 
 test('legend deduplicates before SVG loads and also during pending loads',()=>{
@@ -172,5 +170,75 @@ test('each SVG pane maximizes width or height independently without overflow',()
     const fit=fitSvgPane(width,height,ratio);
     assert.ok(fit.width<=width && fit.height<=height);
     assert.ok(Math.abs(fit.height/fit.width-ratio)<1e-9);
+  }
+});
+
+
+test('SVG CSS recoloring preserves transparent regions and existing line geometry',()=>{
+  assert.equal(recolorablePaint('#2C3E50'),true);
+  assert.equal(recolorablePaint('currentColor'),true);
+  assert.equal(recolorablePaint('none'),false);
+  assert.equal(recolorablePaint('transparent'),false);
+  assert.equal(recolorablePaint('url(#gradient)'),false);
+  const initial='.plot{fill:none;stroke:#123456;stroke-width:2;stroke-dasharray:3 2}';
+  const colored=recolorCssDeclarations(initial,'#E41A1C');
+  assert.equal(colored,'.plot{fill:none;stroke:#E41A1C;stroke-width:2;stroke-dasharray:3 2}');
+  assert.equal(recolorCssDeclarations('fill:url(#p);stroke:transparent', '#4F99CF'),
+    'fill:url(#p);stroke:transparent');
+  assert.throws(()=>recolorCssDeclarations('stroke:red','red'),RangeError);
+});
+
+test('SVG markup recolor runs on browser XML nodes without creating painted backgrounds',()=>{
+  const beforeParser=globalThis.DOMParser,beforeSerializer=globalThis.XMLSerializer;
+  class MockNode {
+    constructor(localName,attributes={},textContent='') {
+      this.localName=localName;
+      this.attributes={...attributes};
+      this.textContent=textContent;
+    }
+    hasAttribute(key){return Object.hasOwn(this.attributes,key);}
+    getAttribute(key){return this.attributes[key]??null;}
+    setAttribute(key,value){this.attributes[key]=value;}
+  }
+  const root=new MockNode('svg',{viewBox:'0 0 40 20'});
+  const plot=new MockNode('path',{
+    stroke:'#123456',fill:'none',style:'stroke:#212121;stroke-width:1.5',
+  });
+  const blank=new MockNode('rect',{fill:'none',stroke:'none'});
+  const gradient=new MockNode('path',{fill:'url(#gradient)',stroke:'transparent'});
+  const css=new MockNode('style',{},'.line{stroke:#555555;fill:none}');
+  const nodes=[root,plot,blank,gradient,css];
+  globalThis.DOMParser=class {
+    parseFromString(){return {
+      documentElement:root,
+      getElementsByTagName:name=>{
+        if(name==='*')return nodes;
+        if(name==='style')return [css];
+        return [];
+      },
+    };}
+  };
+  globalThis.XMLSerializer=class {
+    serializeToString(){
+      return JSON.stringify({root:root.attributes,plot:plot.attributes,
+        blank:blank.attributes,gradient:gradient.attributes,css:css.textContent});
+    }
+  };
+  try {
+    const result=JSON.parse(recolorSvgMarkup('<svg/>','#4F99CF'));
+    assert.equal(result.plot.stroke,'#4F99CF');
+    assert.equal(result.plot.fill,'none');
+    assert.equal(result.plot.style,'stroke:#4F99CF;stroke-width:1.5');
+    assert.equal(result.blank.fill,'none');
+    assert.equal(result.blank.stroke,'none');
+    assert.equal(result.gradient.fill,'url(#gradient)');
+    assert.equal(result.gradient.stroke,'transparent');
+    assert.equal(result.css,'.line{stroke:#4F99CF;fill:none}');
+    assert.equal(result.root.fill,undefined);
+  } finally {
+    if(beforeParser===undefined)delete globalThis.DOMParser;
+    else globalThis.DOMParser=beforeParser;
+    if(beforeSerializer===undefined)delete globalThis.XMLSerializer;
+    else globalThis.XMLSerializer=beforeSerializer;
   }
 });

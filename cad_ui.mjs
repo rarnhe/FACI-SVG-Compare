@@ -152,42 +152,6 @@ export function requiredSvgRatio(baseRatio, entries) {
   return candidates.length ? Math.max(...candidates) : 1;
 }
 
-/** Identify actual SVG fill/stroke colors. Never fabricate background paint. */
-export function svgPaintColors(source) {
-  const text=String(source||'');
-  const candidates=[];
-  for(const match of text.matchAll(/\b(?:fill|stroke|stop-color)\s*=\s*["']([^"']+)["']/gi))
-    candidates.push(match[1]);
-  for(const match of text.matchAll(/(?:^|[;{])\s*(?:fill|stroke|stop-color)\s*:\s*([^;}"']+)/gim))
-    candidates.push(match[1]);
-  const seen=new Set(),colors=[];
-  for(const raw of candidates) {
-    const value=raw.trim().replace(/\s*!important\s*$/i,'');
-    // Safe color-only CSS values; exclude url() and unpainted regions.
-    if(!/^(?:#[0-9a-f]{3,8}|(?:rgba?|hsla?)\([\d\s.,%+\-]+\)|[a-z]{3,24})$/i.test(value) ||
-       /^(none|transparent|inherit|initial|currentcolor|unset)$/i.test(value)) continue;
-    const key=value.toLowerCase();
-    if(!seen.has(key)){seen.add(key);colors.push(value);}
-  }
-  return colors;
-}
-
-export function legendForeground(colors) {
-  return colors.find(color=>!/^(#fff(?:fff)?(?:ff)?|white)$/i.test(color)) ||
-    colors[0] || '#000000';
-}
-
-export function legendPaint(colors) {
-  if(!colors.length) return 'transparent';
-  if(colors.length===1) return colors[0];
-  const step=100/colors.length,stops=[];
-  colors.forEach((color,i)=>{
-    stops.push(color+' '+(step*i).toFixed(3)+'%');
-    stops.push(color+' '+(step*(i+1)).toFixed(3)+'%');
-  });
-  return 'linear-gradient(90deg,'+stops.join(',')+')';
-}
-
 /** Duplicate guard for both completed and concurrent menu selections. */
 export function canAddOverlay(active,loading,label) {
   return Boolean(label) && !active.has(label) && !loading.has(label);
@@ -207,9 +171,52 @@ export const SVG_COLORS=Object.freeze([
   '#3C5488','#E64B35','#00A087','#3A3935','#1F77B4',
   '#FF7F0E','#2CA02C','#9A8B7A','#7E8B96','#A6998A','#D1C7BD',
 ]);
-export const SVG_LINE_WIDTHS=Object.freeze(['0.75','1.5','2.25','3','3.75']);
-export const SVG_LINE_TYPES=Object.freeze(['-·','--']);
-
 export function nextLegendColor(index) {
   return SVG_COLORS[Math.abs(Math.trunc(index))%SVG_COLORS.length];
+}
+
+
+/**
+ * Browser-only, in-memory SVG recoloring. Never alter unpainted geometry,
+ * transparent fills, paint servers (url(...)), or SVG attributes other
+ * than already-explicit stroke/fill paint values. Keep styles and defs.
+ */
+export function recolorablePaint(value) {
+  const paint=String(value??'').trim();
+  return Boolean(paint) &&
+    !/^(none|transparent|inherit|initial|unset)$/i.test(paint) &&
+    !/^url\(/i.test(paint);
+}
+
+export function recolorCssDeclarations(css,color) {
+  if(!SVG_COLORS.includes(color)) throw new RangeError('Unsupported SVG color');
+  return String(css).replace(/(^|[;{\s])(\b(?:fill|stroke))\s*:\s*([^;{}]+)/gim,
+    (whole,prefix,property,paint)=>
+      prefix+property+':'+(recolorablePaint(paint) ? color : paint));
+}
+
+export function recolorSvgMarkup(source,color) {
+  if(!SVG_COLORS.includes(color)) throw new RangeError('Unsupported SVG color');
+  const documentXml=new DOMParser().parseFromString(source,'image/svg+xml');
+  if(documentXml.getElementsByTagName('parsererror').length ||
+     documentXml.documentElement?.localName!=='svg') {
+    throw new Error('Cannot parse original SVG source');
+  }
+  // CSS selectors sometimes define plot colors rather than attributes.
+  for(const sheet of documentXml.getElementsByTagName('style')) {
+    sheet.textContent=recolorCssDeclarations(sheet.textContent||'',color);
+  }
+  for(const node of documentXml.getElementsByTagName('*')) {
+    // Preserve SVG's background, masks, gradients and definitions.
+    if(['style','defs','metadata','title','desc','mask','clippath','filter',
+        'lineargradient','radialgradient','stop'].includes(node.localName?.toLowerCase()))
+      continue;
+    for(const attr of ['fill','stroke']) {
+      if(node.hasAttribute(attr) && recolorablePaint(node.getAttribute(attr)))
+        node.setAttribute(attr,color);
+    }
+    if(node.hasAttribute('style'))
+      node.setAttribute('style',recolorCssDeclarations(node.getAttribute('style'),color));
+  }
+  return new XMLSerializer().serializeToString(documentXml);
 }
