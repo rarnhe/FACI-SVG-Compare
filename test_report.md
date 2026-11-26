@@ -1,46 +1,49 @@
 # Test Report
 
-- UTC: 2026-11-26 01:24:32
+- UTC: 2026-11-26 03:32:50
 - Result: **PASS**
-- Tests: **76 per environment**
-- Passed: 76
-- Failures: 0
-- Errors: 0
-- Skipped: 0
+- Python unittest cases: **78 per platform**
+- Node CAD geometry + UI tests: **22 per platform**
+- Python failures: 0
+- Python errors: 0
+- Node failures: 0
 
-## Dual-track verification
+## GitHub Actions dual-track verification
 
-| Platform | Python | Result | Unittest cases | Duration |
-| --- | --- | --- | ---: | ---: |
-| Ubuntu (ubuntu-latest) | 3.12 | **PASS** | 76/76 | 3.208s |
-| Windows (windows-latest) | 3.14 | **PASS** | 76/76 | 4.325s |
+| Environment | Python unittest | Node geometry/UI tests | JavaScript syntax | Result |
+| --- | ---: | ---: | --- | --- |
+| Ubuntu / Python 3.12 | 78 / 78 | 22 / 22 | PASS | **PASS** |
+| Windows / Python 3.14 | 78 / 78 | 22 / 22 | PASS | **PASS** |
 
-- GitHub Actions: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45735475924
-- CI additionally checks JavaScript module syntax and Node CAD geometry calculations on both platforms.
-- Both platforms execute `python tests/run_tests.py`; the runner produces `test_report.md` whether tests pass or fail and the workflow uploads its report artifact.
+- Successful workflow: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45749533390
+- Ubuntu Python test time: 3.082s; Windows Python test time: 5.601s.
+- Existing `.github/workflows/test.yml` runs `python tests/run_tests.py` plus
+  `node --test tests/test_cad_geometry.mjs tests/test_cad_ui.mjs`; it uploads a
+  `test_report.md` artifact on both runners even on failure.
+- The Python runner itself also writes `test_report.md` during test execution.
+  This file records the combined GitHub Actions checks observed after the run.
 
-## Fixed issue: JavaScript module MIME types
+## Changes verified
 
-The Windows HTTP static handler previously returned `text/plain` for
-`/viewer/cad_geometry.mjs`. Strict browser ES-module MIME checking prevented
-`cad_viewer.js` from evaluating, so neither the CAD images nor the SVG
-load callbacks could run.
+1. Both CAD Three.js backgrounds are white; unobtrusive black operation instructions
+   appear in each layer without a colored box.
+2. Selected-shape breadcrumbs appear at the lower left of the **respective** Fab
+   or Subfab pane: workbook stem, real worksheet name, strict geometry-based
+   containment ancestors (e.g. `BODYv2`), and selected shape text.
+3. Textboxes are visible but never selectable; ellipses are right-click only.
+   A short right click opens placeholder actions `2025 ›` (nested `X / Y / Z`)
+   and `2026`; right-drag panning remains bound to OrbitControls.
+4. Right-side PSD and 1/3-octave SVGs are centered and scaled to a *common*
+   display width, constrained to fit the available width and height, with no
+   horizontal scrolling; initial vertical split is 5.8:18.1.
+5. Both splitter ranges are bounded and all SVG dimensions remain
+   aspect-ratio-preserving. Node tests cover geometry, hierarchy and layout limits.
+6. Existing XLSX parse, MIME type, HTTP security, CAD shapes, and Bokeh endpoint
+   regression tests remain green.
 
-The `NoCacheIndexHandler.set_extra_headers()` method now explicitly returns
-`Content-Type: text/javascript; charset=utf-8` for both `.js` and `.mjs`.
+## Limitations
 
-The new **real HTTP** regression tests passed independently on both platforms:
-
-- `test_javascript_modules_have_browser_accepted_mime_type`: GET
-  `/viewer/cad_viewer.js` and `/viewer/cad_geometry.mjs`; verify 200,
-  JavaScript MIME, UTF-8 encoding, cache-control, revision header and source.
-- `test_html_still_has_html_mime_type`: GET `/viewer/index.html`;
-  verify the HTML content type remains `text/html`.
-
-## Scope and limitations
-
-No existing CAD interaction, geometry, XLSX parsing, SVG layout or frontend
-logic was changed by this fix. The user's actual SVG and XLSX assets were not
-available to CI. Automated tests confirm the MIME response and existing test
-contracts; actual Chrome WebGL rendering still requires local visual
-verification after stopping the previous server and starting the revised code.
+The original local `luoD.xlsx`, `PSD_base.svg`, and `1-3-Octave_base.svg`
+were not available to CI. Real Windows browser, WebGL rendering, interactive
+pointer behavior, and appearance of the actual SVGs still require the user's
+local visual verification.
