@@ -266,6 +266,15 @@ class TestGeometry(unittest.TestCase):
                 self.assertIn(item, output)
 
 
+    def test_textbox_no_outline_from_drawingml_is_not_recolored(self):
+        original=shape(name="文本框10").replace(
+            '<a:ln><a:solidFill><a:srgbClr val="5B9BD5"/></a:solidFill></a:ln>',
+            '<a:ln><a:noFill/></a:ln>',
+        )
+        obj=self.parse(one_cell(original))[0]["objects"][0]
+        self.assertEqual(obj["shape_kind"],"textbox")
+        self.assertEqual(obj["colors"]["outline"],"无/透明")
+
     def test_alt_text_title_description_are_extracted_and_cleaned(self):
         marked = shape(name="矩形14").replace(
             'name="矩形14"/>',

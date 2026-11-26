@@ -200,6 +200,15 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("match[2].toLowerCase()==='x' ? width : height",helper)
         self.assertIn("pointInsideRotatedRectangle",helper)
 
+    def test_textbox_transparent_fill_and_outline_are_respected(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        self.assertIn("const fillColor=colorValue(colors.fill",viewer)
+        self.assertIn("colors.fill==='无/透明'?0:1",viewer)
+        self.assertIn("if(kind!=='textbox' || colors.outline!=='无/透明')",viewer)
+        self.assertNotIn("A textbox always has gray background",viewer)
+        self.assertIn("border-radius:8px",html)
+
     def test_xlsx_alt_svg_catalog_and_picture_aspect_pipeline_are_wired(self):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
         service=(STATIC_DIR/"__main__.py").read_text(encoding="utf-8")
