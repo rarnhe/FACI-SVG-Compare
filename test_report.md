@@ -1,8 +1,8 @@
 # Test Report
 
-- UTC: 2026-11-26 06:51:57
+- UTC: 2026-11-26 06:54:29
 - Result: **PASS**
-- Python unittest cases: **87 per platform**
+- Python unittest cases: **89 per platform**
 - Node CAD geometry + UI tests: **24 per platform**
 - Failures: **0**
 - Errors: **0**
@@ -11,11 +11,11 @@
 
 | Environment | Python unittest | Node CAD tests | JS syntax | Result |
 | --- | ---: | ---: | --- | --- |
-| Ubuntu / Python 3.12 | **87/87** (4.196s) | **24/24** | PASS | **PASS** |
-| Windows / Python 3.14 | **87/87** (4.335s) | **24/24** | PASS | **PASS** |
+| Ubuntu / Python 3.12 | **89/89** (3.625s) | **24/24** | PASS | **PASS** |
+| Windows / Python 3.14 | **89/89** (4.322s) | **24/24** | PASS | **PASS** |
 
-Successful CI run for commit `51ee8836d11f9a856f900500a0602b1d0e850a93`:
-https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45771094030
+Successful CI run for commit `34259227e1370c328df3726c099aa44e22326959`:
+https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45771384769
 
 The workflow runs `python tests/run_tests.py`, checks `cad_viewer.js` module
 syntax, and runs `node --test tests/test_cad_geometry.mjs tests/test_cad_ui.mjs`.
@@ -28,6 +28,8 @@ uploads the independent per-platform report artifact even when tests fail.
    cleans Excel `_x000D_` newline escapes. `z=0.5x` and `z=0.2y` set
    cuboid height; old visible suffix `B1_x0.5` no longer changes height.
    Empty or invalid alt text yields no 3D box.
+   Textbox fill and stroke follow XLSX styles, including explicitly
+   transparent fill and no-outline settings (no synthetic blue border).
 2. Textboxes use XLSX fill/outline/text color instead of forced gray.
    Fab-only top-left operation hint has a rounded border; both CAD panes
    show rounded lower-left breadcrumbs only while hovering a selectable shape.
