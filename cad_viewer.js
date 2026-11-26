@@ -204,7 +204,7 @@ function drawShape(layer,item,rectangles=[]) {
       ],borderColor));
     }
   } else {
-    // A textbox always has gray background; unrecognized shapes stay flat.
+    // Textboxes follow XLSX fill/outline colors; unrecognized shapes stay flat.
     clickTarget=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);
     clickTarget.position.z=0.5;
     frontZ=1.2;
@@ -214,7 +214,8 @@ function drawShape(layer,item,rectangles=[]) {
       new THREE.Vector3(-hw,hh,0.8),new THREE.Vector3(hw,hh,0.8),
       new THREE.Vector3(hw,-hh,0.8),new THREE.Vector3(-hw,-hh,0.8),
     ];
-    group.add(makeOutline(vertices,borderColor));
+    if(kind!=='textbox' || colors.outline!=='无/透明')
+      group.add(makeOutline(vertices,borderColor));
   }
   clickTarget.userData.cadObject=item;
   if (kind !== 'textbox') layer.clickable.push(clickTarget);
