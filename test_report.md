@@ -1,72 +1,72 @@
 # Test Report
 
-- UTC: 2026-11-26 09:07:51
+- UTC: 2026-11-26 12:13:36
 - Overall result: **PASS**
-- Python unittest cases: **95 / 95 per platform**
-- Node CAD geometry and browser-color helper cases: **28 / 28 per platform**
+- Python unittest cases: **99 / 99 per platform**
+- Node CAD geometry / UI tests: **30 / 30 per platform**
 - Failures: **0**
 - Errors: **0**
 
-## GitHub Actions + test_report.md dual-track verification
+## GitHub Actions and test_report.md dual-track verification
 
-| Environment | Python unittest | Node geometry/UI | JavaScript syntax | Result |
+| Environment | Python unittest | Node geometry/UI | JavaScript module syntax | Result |
 | --- | ---: | ---: | --- | --- |
-| Ubuntu / Python 3.12 | **95/95** (4.272s) | **28/28** | PASS | **PASS** |
-| Windows / Python 3.14 | **95/95** (3.857s) | **28/28** | PASS | **PASS** |
+| Ubuntu / Python 3.12 | **99/99** (3.232s) | **30/30** | PASS | **PASS** |
+| Windows / Python 3.14 | **99/99** (4.304s) | **30/30** | PASS | **PASS** |
 
-- Verified functional commit: `583a5d6a12bef6e176565bf2cfb8104b5a02e51e`.
-- GitHub Actions: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45789030893
-- `.github/workflows/test.yml` invokes `python tests/run_tests.py`
-  and `node --test tests/test_cad_geometry.mjs tests/test_cad_ui.mjs`
-  independently on Ubuntu and Windows. GitHub Actions uploads a generated
-  `test_report.md` artifact even if tests fail. The Python test runner
-  independently writes the same report path for local use.
+- Verified functional commit: `54d5b469701c534dffa7738764df3afaf4502f56`.
+- Successful GitHub Actions run:
+  https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/45817579092
+- `.github/workflows/test.yml` executes `python tests/run_tests.py`,
+  Node CAD geometry/UI tests and a separate JavaScript syntax check
+  on both operating systems. The Python runner writes
+  `test_report.md` for both success and failure; GitHub Actions uploads
+  a platform-specific report artifact even on failure.
 
-## Removed code and regressions
+## Implemented and verified changes
 
-1. Removed `drawTopLeftText`, all Three.js text meshes, their
-   `CanvasTexture` creation and font handling. Rectangle, textbox and
-   ellipse labels no longer appear as separately rendered CAD text.
-   XLSX visible text is **still parsed** only for hover breadcrumbs,
-   shape identity and associated SVG catalog folder detection.
-2. Removed unused font reference / text-color extraction from
-   `xlsx_spatial.py` and from the JSON shape's `colors` object.
-   Console output prints only fill and outline colors and does not
-   reference the removed field. Existing XLSX geometry/alt text
-   reports and startup tests pass.
-3. Removed the **line width** and **line type** legend menus,
-   options, JSON commands, server-side write endpoint, and all code in
-   `svg_styling.py`. Deleted its six obsolete persistence tests.
-4. `/viewer/cad-svg-style` is no longer exposed; its POST returns
-   HTTP 404 in the live Bokeh/Tornado integration test. No local SVG
-   mutation path remains in this application.
-5. Added browser-only `recolorSvgMarkup()`, using DOMParser and
-   XMLSerializer to recolor explicit SVG paint without inserting
-   opaque fill in unpainted regions. Original `fill="none"`,
-   `stroke="none"`, transparent regions and gradient references are
-   preserved. CSS color rules are covered by Node tests.
-6. SVG source text is fetched **once per URL** and retained in a
-   Promise cache in browser memory. A new pair is colored together
-   from immutable original sources, assigned Blob URLs, and added as
-   transparent layers. Duplicate/in-flight selections are blocked.
-   Recoloring the legend creates new in-memory Blob URLs, with previous
-   URLs revoked after successful swap; closing revokes both image URLs.
-   Original `assets/**/*.svg` files are never rewritten.
-7. Color palette contains exactly the 17 requested colors in order.
-   Consecutive pair additions advance through the palette; each
-   PSD / 1-3-Octave pair and its bold legend text use one identical
-   color. Legend right-click offers **颜色 ›** (all 17 colors in
-   a vertical submenu) and **退出** only.
-8. Prior CAD camera synchronization, textbox hover hierarchy,
-   read-only SVG catalog, independent pane aspect-fitting, MIME
-   regression, and private workbook HTTP security remain green.
+1. **Strict SVG date discovery for a rectangle-contained ellipse.**
+   First identify the containing textbox and search
+   `assets/<textbox text>/*.svg`. A timestamp matching
+   `_(\\d{14})_` is added to the first-level menu ONLY if the **same
+   filename** also matches the containing rectangle's visible text,
+   with literal token boundaries. Deduplicate and sort dates ascending;
+   unrelated filenames and similarly named neighboring rectangles
+   cannot contribute dates.
+2. **Ellipse outside rectangles but inside a textbox.**
+   If no rectangle fully contains the reconstructed circle, the
+   same folder search requires the ellipse's visible text and the
+   timestamp in the same SVG filename. An ellipse partially crossing a
+   rectangle boundary also follows this non-contained case. The
+   second-level X/Y/Z menu is displayed vertically, opening to the
+   right with a left fallback when the viewport edge is near.
+3. **Exact legend name and separate internal identity.**
+   Display format: `<textbox>_<sheet>_<rectangle-or-ellipse>_+<axis>`,
+   e.g. `BODYv2_fab_20260704_SCN_B1_+Y` or
+   `BODYv2_subfab_Other_+Z`. The filename timestamp is intentionally
+   omitted from the visible legend text; the internal unique key
+   includes it so that different timepoints cannot overwrite each
+   other's color, SVG overlay, or close button behavior.
+4. **Visible translucent cuboid geometry instead of wireframe.**
+   Positive-height rectangles now use an actual
+   `THREE.BoxGeometry` with solid faces and a transparent
+   `MeshBasicMaterial` at **0.23** opacity, `FrontSide`,
+   `wireframe:false`, `depthTest:true` and
+   `depthWrite:false`. Removed the bright `EdgesGeometry`
+   line overlay responsible for the wireframe appearance. On mouse
+   selection the cuboid remains translucent (0.30 opacity) rather
+   than jumping to 0.95 opacity. Elevated ellipse shapes render
+   above translucent roofs to remain visible when rotating.
+5. Previous camera synchronization, XLSX alternative-text height
+   rules, textbox hover information, embedded image aspect scaling,
+   right-side SVG independent fitting, 17-color browser-only SVG
+   recoloring, private XLSX protection, read-only asset behavior
+   and HTTP/MIME regressions all remain green.
 
-## Visual verification limitation
+## Limitations
 
-The user's real XLSX and SVG files are not in this GitHub repository.
-CI verifies the pure JS recoloring behavior with an XML DOM test double,
-read-only HTTP access, synthetic XLSX fixtures and Node geometry tests.
-The exact Chrome SVG artwork and 3D rendered appearance still require
-local visual testing. Also, if the **embedded PNG image itself** contains
-baked-in lettering, removing CAD text meshes will not erase pixels
-inside that original image.
+The user's actual XLSX, PSD and octave SVG assets are not in the
+repository. CI uses temporary SVG folders and synthetic XLSX shapes
+to exercise the exact time/identifier constraints, plus Node UI and
+geometry tests. Chrome WebGL transparency and overlay appearance with
+the user's real drawings still require local visual confirmation.
