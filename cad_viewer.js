@@ -692,7 +692,7 @@ async function changeLegendStyle(label,operation,value) {
       prefetchSvg(styleUrl(urls.psd)),prefetchSvg(styleUrl(urls.octave)),
     ]);
     if(!overlaySelections.has(label)) return;
-    for(const [key,image] of [['psd',psd],['octave',octave']]) {
+    for(const [key,image] of [['psd',psd],['octave',octave]]) {
       entry[key].element.src=image.url;
       entry[key].ratio=image.height/image.width;
       entry[key].url=urls[key];

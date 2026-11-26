@@ -166,7 +166,7 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("INITIAL_REFERENCE_SPLIT = 0.5",pure)
         self.assertNotIn("rightSplitChangedByUser",viewer)
         self.assertIn("base.element.style.width=width+'px'",viewer)
-        self.assertIn("overlay.element.style.width=width+'px'",viewer)
+        self.assertIn("layer.element.style.width=width+'px'",viewer)
 
 
     def test_drawing_strategies_use_actual_meshes_and_raycaster(self):
@@ -421,7 +421,7 @@ class TestHttpIntegration(unittest.TestCase):
         for module_path, source_marker in (
             ("/viewer/cad_viewer.js", "OrbitControls"),
             ("/viewer/cad_geometry.mjs", "rectangleHeight"),
-            ("/viewer/cad_ui.mjs", "selectionPath"),
+            ("/viewer/cad_ui.mjs", "selectionParts"),
         ):
             with self.subTest(module_path=module_path):
                 with urlopen(self.base + module_path, timeout=5) as response:
