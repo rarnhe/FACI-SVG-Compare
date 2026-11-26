@@ -8,6 +8,7 @@ import {
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
   recolorSvgMarkup, svgLegendName, svgSelectionKey,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
+  CAD_DRAW_ORDER, cadShapeRenderOrder, cadShapeZOffset,
 } from './cad_ui.mjs';
 
 const EMU_TO_PX = 1 / 9525;
@@ -113,12 +114,15 @@ function drawShape(layer,item,rectangles=[]) {
   const r=toWorldRect(item,layer);
   const w=r.width,h=r.height;
   const group=new THREE.Group();
-  // The XLSX image is at Z=0; all drawing geometry starts at that plane.
-  const raisedZ=kindForElevation(item, r, rectangles,layer);
-  group.position.set(r.x+w/2,r.y-h/2,raisedZ);
-  group.rotation.z=r.rotation;
-  const colors=item.colors || {};
   const kind=item.shape_kind || 'other';
+  const priority=cadShapeRenderOrder(kind);
+  // Keep the real rectangle height/ellipse elevation while making the
+  // textbox a true bottom layer and ellipses the topmost shape layer.
+  const raisedZ=kindForElevation(item, r, rectangles,layer);
+  group.position.set(r.x+w/2,r.y-h/2,raisedZ+cadShapeZOffset(kind));
+  group.rotation.z=r.rotation;
+  group.renderOrder=priority;
+  const colors=item.colors || {};
   const fillColor=colorValue(colors.fill,kind==='textbox'?0xffffff:0x3599c3);
   const borderColor=colorValue(colors.outline,0x67dcfc);
   const opacity=kind==='textbox'
@@ -182,6 +186,14 @@ function drawShape(layer,item,rectangles=[]) {
     if(kind!=='textbox' || colors.outline!=='无/透明')
       group.add(makeOutline(vertices,borderColor));
   }
+  // Explicit render order overrides the reversed transparent-object
+  // distance sort during rotation. All materials are transparent and
+  // depthWrite:false; outlines remain above their own filled surfaces.
+  group.traverse(node=>{
+    if(node.isMesh || node.isLine || node.isLineSegments) {
+      node.renderOrder=priority+(node.isLine || node.isLineSegments ? 0.25 : 0);
+    }
+  });
   clickTarget.userData.cadObject=item;
   layer.hoverable.push(clickTarget);
   if (kind !== 'textbox') layer.clickable.push(clickTarget);
@@ -194,6 +206,7 @@ function drawImage(layer,item,texture) {
   const group=new THREE.Group();
   group.position.set(r.x+r.width/2,r.y-r.height/2,0);
   group.rotation.z=r.rotation;
+  group.renderOrder=CAD_DRAW_ORDER.image;
   texture.colorSpace=THREE.SRGBColorSpace;
   texture.anisotropy=Math.min(8,layer.renderer.capabilities.getMaxAnisotropy());
   const image=new THREE.Mesh(
@@ -202,6 +215,7 @@ function drawImage(layer,item,texture) {
       map:texture,side:THREE.DoubleSide,transparent:true,depthWrite:false,
     }),
   );
+  image.renderOrder=CAD_DRAW_ORDER.image;
   group.add(image);
   layer.scene.add(group);
 }
@@ -361,7 +375,15 @@ function installPicking(layer) {
     raycaster.setFromCamera(mouse,layer.camera);
     const targets=button===null ? layer.hoverable : layer.clickable.filter(mesh=>
       selectOnButton(mesh.userData.cadObject,button));
-    return raycaster.intersectObjects(targets,false)[0]?.object || null;
+    const hits=raycaster.intersectObjects(targets,false);
+    if(button===null) {
+      // Hover follows the same semantic layering as the visible drawings,
+      // not the ray's nearest hit from an oblique camera angle.
+      hits.sort((a,b)=>cadShapeRenderOrder(b.object.userData.cadObject?.shape_kind)
+        -cadShapeRenderOrder(a.object.userData.cadObject?.shape_kind)
+        || a.distance-b.distance);
+    }
+    return hits[0]?.object || null;
   }
   canvas.addEventListener('pointermove',event=>{
     // Hover breadcrumbs are independent per pane; a drag must never select.

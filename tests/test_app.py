@@ -333,6 +333,33 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("isTransparentCuboid=true",viewer)
         self.assertNotIn("new THREE.EdgesGeometry(",viewer)
 
+    def test_semantic_threejs_layer_order_and_legend_first_level_alignment(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        ui=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        for expected in (
+            "CAD_DRAW_ORDER = Object.freeze({",
+            "image: 0", "textbox: 10", "rectangle: 20", "ellipse: 30",
+            "export function cadShapeRenderOrder(kind)",
+            "export function cadShapeZOffset(kind)",
+            "kind === 'textbox' ? -1 : kind === 'ellipse' ? 1 : 0",
+        ):
+            self.assertIn(expected, ui)
+        for expected in (
+            "group.position.set(r.x+w/2,r.y-h/2,raisedZ+cadShapeZOffset(kind))",
+            "group.renderOrder=priority",
+            "node.renderOrder=priority+(node.isLine || node.isLineSegments ? 0.25 : 0)",
+            "image.renderOrder=CAD_DRAW_ORDER.image",
+            "group.renderOrder=CAD_DRAW_ORDER.image",
+            "cadShapeRenderOrder(b.object.userData.cadObject?.shape_kind)",
+            "depthWrite:false",
+        ):
+            self.assertIn(expected, viewer)
+        self.assertIn("white-space:nowrap;text-align:left;cursor:grab", html)
+        self.assertIn("#reference-log .reference-log-line{display:block;line-height:1.7;text-align:left", html)
+        self.assertIn(".legend-menu-primary button{display:block;width:100%;text-align:left}", html)
+        self.assertNotIn("new THREE.EdgesGeometry(", viewer)
+
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())
 

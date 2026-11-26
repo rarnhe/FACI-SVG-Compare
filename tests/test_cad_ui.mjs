@@ -6,6 +6,7 @@ import {
   clampMainDivider, clampReferenceSplit, pictureLayerScales,
   requiredSvgRatio,canAddOverlay,SVG_COLORS,nextLegendColor,
   svgLegendName,svgSelectionKey,CUBOID_FACE_OPACITY,CUBOID_SELECTED_OPACITY,
+  CAD_DRAW_ORDER,cadShapeRenderOrder,cadShapeZOffset,
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
 } from '../cad_ui.mjs';
 
@@ -265,4 +266,26 @@ test('cuboid has translucent face and never becomes opaque on selection',()=>{
   assert.ok(CUBOID_FACE_OPACITY>0 && CUBOID_FACE_OPACITY<0.5);
   assert.ok(CUBOID_SELECTED_OPACITY>CUBOID_FACE_OPACITY);
   assert.ok(CUBOID_SELECTED_OPACITY<0.5);
+});
+
+
+test('CAD shape Z offsets keep textbox behind flat rectangles and ellipses',()=>{
+  assert.equal(cadShapeZOffset('textbox'),-1);
+  assert.equal(cadShapeZOffset('rectangle'),0);
+  assert.equal(cadShapeZOffset('ellipse'),1);
+  assert.equal(cadShapeZOffset('other'),0);
+  // Existing local heights remain valid, including lifted sensors.
+  assert.ok(cadShapeZOffset('textbox')+0.5 < cadShapeZOffset('rectangle'));
+  assert.ok(cadShapeZOffset('ellipse')+0.5 > cadShapeZOffset('rectangle'));
+});
+
+test('CAD transparent render order is stable for any XLSX enumeration order',()=>{
+  assert.ok(CAD_DRAW_ORDER.image<CAD_DRAW_ORDER.textbox);
+  assert.ok(CAD_DRAW_ORDER.textbox<CAD_DRAW_ORDER.rectangle);
+  assert.ok(CAD_DRAW_ORDER.rectangle<CAD_DRAW_ORDER.ellipse);
+  assert.ok(CAD_DRAW_ORDER.textbox<CAD_DRAW_ORDER.other);
+  const names=['ellipse','textbox','rectangle','textbox','ellipse','other'];
+  assert.deepEqual(names.slice().sort((a,b)=>cadShapeRenderOrder(a)-cadShapeRenderOrder(b)),
+    ['textbox','textbox','other','rectangle','ellipse','ellipse']);
+  assert.equal(cadShapeRenderOrder('shape-unknown'),CAD_DRAW_ORDER.other);
 });

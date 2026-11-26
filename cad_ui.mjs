@@ -7,6 +7,29 @@ export const INITIAL_REFERENCE_SPLIT = 0.5;
 export const CUBOID_FACE_OPACITY = 0.23;
 export const CUBOID_SELECTED_OPACITY = 0.30;
 
+/**
+ * Stable visual stacking order, independent of XLSX object enumeration or
+ * the observer's camera angle. The workbook background renders first,
+ * textboxes next, rectangles above, and ellipses last.
+ */
+export const CAD_DRAW_ORDER = Object.freeze({
+  image: 0,
+  textbox: 10,
+  other: 15,
+  rectangle: 20,
+  ellipse: 30,
+});
+
+export function cadShapeRenderOrder(kind) {
+  return CAD_DRAW_ORDER[kind] ?? CAD_DRAW_ORDER.other;
+}
+
+/** Keep textbox geometry physically below the XY rectangle roof and sensors. */
+export function cadShapeZOffset(kind) {
+  return kind === 'textbox' ? -1 : kind === 'ellipse' ? 1 : 0;
+}
+
+
 export function shapeLabel(shape) {
   return String(shape?.text || shape?.name || '').trim().replace(/\s*\n\s*/g, ' ');
 }

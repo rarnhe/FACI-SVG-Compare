@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Filtered date menus by exact current rectangle-or-ellipse text plus timestamp; right-opening vertically stacked X/Y/Z; date-independent BODYv2_sheet_identifier_+axis legend labels with date-specific internal keys; translucent cuboid faces without EdgesGeometry wireframe; read-only SVG recoloring, XLSX/HTTP and Node geometry/UI regressions.",
+        "Stable Three.js image/textbox/rectangle/ellipse transparent render order and Z separation under camera rotation and arbitrary XLSX object ordering; hover priority follows shape stacking; legend entries and first-level menu buttons left-aligned; existing color-only SVG overlay, geometry, MIME/HTTP and CAD regression tests.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]
