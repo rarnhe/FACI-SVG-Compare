@@ -174,7 +174,8 @@ class TestStaticFrontend(unittest.TestCase):
                 for snippet in snippets:
                     self.assertIn(snippet,viewer)
         self.assertIn("layer.clickable.push(clickTarget)",viewer)
-        self.assertIn("raycaster.intersectObjects(layer.clickable,false)",viewer)
+        self.assertIn("raycaster.intersectObjects(pickable,false)",viewer)
+        self.assertIn("selectOnButton(mesh.userData.cadObject,event.button)",viewer)
         self.assertIn("drawTopLeftText(group,item.text||'',w,h,colors.text,frontZ)",viewer)
 
 
