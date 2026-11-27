@@ -39,6 +39,9 @@ assets/
 
 ## CAD 坐标与联动
 
+- 对顶层 DrawingML 图片、文本框及形状，`twoCellAnchor` 优先读取有效的 `a:xfrm/a:ext` 保存尺寸与 `a:off` 坐标，避免字体相关的列宽推算改变宽高比；缺失或无效尺寸时使用单元格锚点。零偏移占位值（与非零单元格锚点冲突）及缺失偏移时使用单元格起点但保留有效尺寸。直接 `oneCellAnchor` / `absoluteAnchor` 的 EMU 尺寸仍以锚点为准。终端输出 `geometry_source`（anchor / xfrm / xfrm_size）便于核对。
+- 存储的 OOXML 列宽使用 ISO 29500 的像素换算公式，不再重复添加 5px 边距；仍以常见 Calibri 11 的 MDW=7 作为回退估计。此为保存时几何快照策略，不模拟打开 Excel 后的自动调整单元格/形状尺寸、字体差异或陈旧变换同步。
+
 `xlsx_spatial.py` 仍返回以 A1 左上角为原点的 `bounds_emu` 和 `vertices_px`；`cad_service.py` 再将**每个 Sheet 的底图左上角移到局部 (0,0)**，所有形状同步减去该 Sheet 图片的坐标偏移。这样 Fab 和 Subfab 通过各自的图纸原点使用统一的相机位置、朝向和缩放，不受原始单元格排版起点影响。
 
 - 滚轮：两层同步缩放。

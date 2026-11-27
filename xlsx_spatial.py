@@ -17,7 +17,9 @@ from zipfile import BadZipFile, ZipFile
 EMUS_PER_PIXEL = 9525
 EMUS_PER_POINT = 12700
 EMUS_PER_MM = 360000
-DEFAULT_COL_WIDTH = 8.43
+# Without a stored defaultColWidth, Excel's conventional Calibri 11
+# default is 64 reference pixels (8.43 characters in the Excel UI).
+DEFAULT_COL_WIDTH = 64 / 7
 DEFAULT_ROW_HEIGHT_PT = 15.0
 DEFAULT_THEME = {
     "dk1": "000000", "lt1": "FFFFFF", "dk2": "1F497D", "lt2": "EEECE1",
@@ -60,12 +62,16 @@ def child_int(parent: ET.Element, name: str, default: int = 0) -> int:
 
 
 def pixels_from_column_width(width: float) -> int:
-    """Excel column characters -> reference pixels; assumes MDW=7 (Calibri 11)."""
+    """Stored OOXML column width -> pixels, with MDW=7 (Calibri 11).
+
+    The stored width already includes padding; do not add it again.
+    ISO 29500 18.3.1.13 specifies floor(((256*w+floor(128/MDW))/256)*MDW).
+    The same formula applies to fractional widths below one character.
+    """
     if width <= 0:
         return 0
-    if width < 1:
-        return floor(width * 12 + 0.5)
-    return floor(width * 7 + 5)
+    mdw = 7
+    return floor((256 * width + floor(128 / mdw)) / 256 * mdw)
 
 
 def resolve_part(source_part: str, target: str) -> str:
@@ -349,6 +355,44 @@ def anchor_rect(anchor: ET.Element, metrics: SheetMetrics) -> tuple[int, int, in
     return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
 
 
+def drawing_rect(anchor: ET.Element, node: ET.Element,
+                 rect: tuple[int, int, int, int]) -> tuple[tuple[int, int, int, int], str]:
+    """Prefer saved object geometry for a read-only CAD snapshot.
+
+    A two-cell anchor can only reconstruct a size through spreadsheet
+    font/column metrics. Excel also saves the object's exact unrotated
+    DrawingML extents in EMU. Prefer the positive extent pair for top-level
+    pictures/shapes (not group-child transforms). Use its absolute offset
+    when available, except the common zero-offset placeholder at a nonzero
+    cell anchor. Keep oneCell/absolute anchor geometry authoritative since
+    those already specify exact EMU dimensions. Missing/zero/malformed
+    extents fall back to the complete cell-anchor rectangle.
+    """
+    if local_name(anchor.tag) != "twoCellAnchor" or local_name(node.tag) not in {"pic", "sp", "cxnSp"}:
+        return rect, "anchor"
+    xfrm = first_child(first_child(node, "spPr"), "xfrm")
+    ext = first_child(xfrm, "ext")
+    if ext is None:
+        return rect, "anchor"
+    try:
+        width, height = int(ext.attrib["cx"]), int(ext.attrib["cy"])
+    except (KeyError, ValueError):
+        return rect, "anchor"
+    if width <= 0 or height <= 0:
+        return rect, "anchor"
+    x, y = rect[:2]
+    off = first_child(xfrm, "off")
+    if off is not None:
+        try:
+            ox, oy = int(off.attrib["x"]), int(off.attrib["y"])
+            if (ox, oy) != (0, 0) or (x, y) == (0, 0):
+                x, y = ox, oy
+                return (x, y, x + width, y + height), "xfrm"
+        except (KeyError, ValueError):
+            pass
+    return (x, y, x + width, y + height), "xfrm_size"
+
+
 def rotation_degrees(node: ET.Element) -> float:
     props = first_child(node, "spPr")
     if props is None:
@@ -554,7 +598,7 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
     for anchor in root:
         if local_name(anchor.tag) not in {"oneCellAnchor", "twoCellAnchor", "absoluteAnchor"}:
             continue
-        rect = anchor_rect(anchor, metrics)
+        cell_rect = anchor_rect(anchor, metrics)
         for element in anchor:
             tag = local_name(element.tag)
             if tag not in {"pic", "sp", "cxnSp", "grpSp", "graphicFrame"}:
@@ -562,11 +606,13 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
             nv = find_descendant(element, "cNvPr")
             kind = "image" if tag == "pic" else "shape"
             angle = rotation_degrees(element)
+            rect, geometry_source = drawing_rect(anchor, element, cell_rect)
             x1, y1, x2, y2 = rect
             obj = {
                 "type": kind,
                 "name": nv.get("name", "未命名对象") if nv is not None else "未命名对象",
                 "anchor": local_name(anchor.tag),
+                "geometry_source": geometry_source,
                 "bounds_emu": {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1},
                 "width_px": round((x2 - x1) / EMUS_PER_PIXEL, 3),
                 "height_px": round((y2 - y1) / EMUS_PER_PIXEL, 3),
@@ -715,6 +761,7 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                 f"  {obj['type'].upper()}: {obj['name']}  "
                 f"宽={obj['width_px']:.3f}px 高={obj['height_px']:.3f}px"
             )
+            lines.append(f"    几何来源: {obj.get('geometry_source', 'anchor')}")
             for title, point in zip(("左上", "右上", "右下", "左下"), obj["vertices_px"]):
                 lines.append(f"    {title}: ({point['x']:.3f}, {point['y']:.3f}) px")
             if obj["rotation_degrees"]:

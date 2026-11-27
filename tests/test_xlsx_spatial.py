@@ -201,10 +201,10 @@ class TestGeometry(unittest.TestCase):
         pic, shape1, shape2 = sheet["objects"]
         self.assertEqual((pic["type"], pic["name"]), ("image", "图片12"))
         self.assertEqual(pic["vertices_px"], [
-            {"x": 85, "y": 42}, {"x": 225, "y": 42},
-            {"x": 225, "y": 70}, {"x": 85, "y": 70},
+            {"x": 80, "y": 42}, {"x": 215, "y": 42},
+            {"x": 215, "y": 70}, {"x": 80, "y": 70},
         ])
-        self.assertEqual((pic["width_px"], pic["height_px"]), (140, 28))
+        self.assertEqual((pic["width_px"], pic["height_px"]), (135, 28))
         self.assertEqual(shape1["vertices_px"], [
             {"x": 0, "y": 0}, {"x": 20, "y": 0},
             {"x": 20, "y": 30}, {"x": 0, "y": 30},
@@ -353,6 +353,68 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(pic["vertices_px"][0]["x"], 10)
         self.assertAlmostEqual(pic["vertices_px"][0]["y"], 55.333, places=3)
 
+    def test_stored_column_width_has_no_duplicate_padding(self):
+        self.assertEqual(spatial.pixels_from_column_width(8.7109375),61)
+        self.assertEqual(spatial.pixels_from_column_width(10),70)
+        self.assertEqual(spatial.pixels_from_column_width(0.5),3)
+        self.assertEqual(spatial.pixels_from_column_width(0),0)
+        self.assertEqual(spatial.SheetMetrics().column_width_emu,64*9525)
+
+    def test_two_cell_saved_shape_geometry_beats_estimated_columns(self):
+        def transformed(child, x, y, w, h):
+            return child.replace('<a:xfrm rot="0"/>',
+                f'<a:xfrm rot="0"><a:off x="{x*9525}" y="{y*9525}"/>'
+                f'<a:ext cx="{w*9525}" cy="{h*9525}"/></a:xfrm>')
+        box=shape("文本框").replace('</xdr:nvSpPr>',
+                '<xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>')
+        anchors=two_cell(transformed(box,80,42,120,60))+two_cell(
+                transformed(shape(),200,90,40,40))
+        objects=self.parse(anchors)[0]["objects"]
+        for obj,expected in zip(objects,[(80,42,120,60),(200,90,40,40)]):
+            self.assertEqual(obj["geometry_source"],"xfrm")
+            self.assertEqual(tuple(obj["bounds_emu"].values()),tuple(v*9525 for v in expected))
+        self.assertEqual(objects[1]["vertices_px"],[
+            {"x":200,"y":90},{"x":240,"y":90},{"x":240,"y":130},{"x":200,"y":130}])
+
+    def test_two_cell_transform_offset_placeholder_uses_anchor_position(self):
+        child=shape().replace('<a:xfrm rot="0"/>',
+            '<a:xfrm><a:off x="0" y="0"/><a:ext cx="381000" cy="381000"/></a:xfrm>')
+        obj=self.parse(two_cell(child))[0]["objects"][0]
+        self.assertEqual(obj["geometry_source"],"xfrm_size")
+        self.assertEqual(obj["bounds_emu"],{"x":80*9525,"y":42*9525,"width":381000,"height":381000})
+
+    def test_invalid_transform_extent_and_exact_anchors_fall_back(self):
+        for ext in ('cx="0" cy="381000"', 'cx="381000"', 'cx="bad" cy="381000"'):
+            child=shape().replace('<a:xfrm rot="0"/>',f'<a:xfrm><a:ext {ext}/></a:xfrm>')
+            obj=self.parse(two_cell(child))[0]["objects"][0]
+            self.assertEqual((obj["geometry_source"],obj["width_px"],obj["height_px"]),("anchor",135,28))
+        valid=shape().replace('<a:xfrm rot="0"/>',
+            '<a:xfrm><a:off x="952500" y="952500"/><a:ext cx="381000" cy="381000"/></a:xfrm>')
+        for anchor in (one_cell,absolute):
+            obj=self.parse(anchor(valid))[0]["objects"][0]
+            self.assertEqual((obj["geometry_source"],obj["width_px"],obj["height_px"]),("anchor",20,30))
+
+    def test_image_and_rotated_shape_use_same_saved_emu_coordinates(self):
+        pic=image().replace('<xdr:spPr/>',
+            '<xdr:spPr><a:xfrm><a:off x="952500" y="190500"/>'
+            '<a:ext cx="3810000" cy="1905000"/></a:xfrm></xdr:spPr>')
+        child=shape(rot=90*60000).replace('<a:xfrm rot="5400000"/>',
+            '<a:xfrm rot="5400000"><a:off x="1143000" y="381000"/>'
+            '<a:ext cx="381000" cy="190500"/></a:xfrm>')
+        with TemporaryDirectory() as tmp:
+            path=fixture(Path(tmp)/"saved.xlsx",two_cell(pic)+two_cell(child))
+            sheets=spatial.parse_xlsx(path)
+            from importlib import import_module
+            service=import_module(f"{ROOT.name}.cad_service")
+            layer=service.build_cad_manifest(path,sheets,Path(tmp))["layers"][0]
+            self.assertEqual(layer["image_origin_emu"],{"x":952500,"y":190500})
+            self.assertEqual(layer["objects"][0]["bounds_emu"],
+                {"x":0,"y":0,"width":3810000,"height":1905000})
+            self.assertEqual(layer["objects"][1]["bounds_emu"],
+                {"x":190500,"y":190500,"width":381000,"height":190500})
+            self.assertEqual(layer["objects"][1]["vertices_px"],[
+                {"x":50,"y":10},{"x":50,"y":50},{"x":30,"y":50},{"x":30,"y":10}])
+
     def test_emu_preserves_geometry(self):
         item = self.parse(one_cell())[0]["objects"][0]
         self.assertEqual(item["bounds_emu"], {
@@ -374,7 +436,7 @@ class TestGeometry(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             book = fixture(Path(tmp) / "luoD.xlsx")
             output = spatial.format_spatial_report(book, spatial.parse_xlsx(book))
-        for item in ("A1", "左上: (85.000, 42.000)", "右下: (225.000, 70.000)",
+        for item in ("A1", "左上: (80.000, 42.000)", "右下: (215.000, 70.000)",
                      "矩形14", "#5B9BD5"):
             with self.subTest(item=item):
                 self.assertIn(item, output)

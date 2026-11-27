@@ -2,6 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {readFile} from 'node:fs/promises';
 import {resolve,dirname,extname} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -184,7 +186,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         shape('Outside','ellipse',220,125,12,12,''),
       ],
     }))};
-  const server=await startViewerServer(data);
+  const fixture=await startXlsxGeometryFixture();
   let browser;
   try {
     browser=await chromium.launch({channel:'chrome',headless:true,args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
@@ -192,7 +194,12 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     const errors=[];
     page.on('pageerror',e=>errors.push(e.message));
     page.on('console',m=>{if(m.type()==='error'&&/CAD layout failed|embedded picture could not|WebGLProgram/.test(m.text())) errors.push(m.text());});
-    await page.goto('http://127.0.0.1:'+server.address().port+'/viewer/index.html');
+    await page.route('https://unpkg.com/three@0.160.0/**',async route=>{
+      const rel=new URL(route.request().url()).pathname.split('/three@0.160.0/')[1];
+      await route.fulfill({body:await readFile(resolve(threeRoot,rel)),contentType:'text/javascript',
+        headers:{'access-control-allow-origin':'*'}});
+    });
+    await page.goto(fixture.base+'/viewer/index.html');
     await page.waitForFunction(async()=>{
       const {layers}=await import('/viewer/cad_viewer.js');
       return layers.length===2 && layers.every(l=>l.clickable.length===6 && l.hoverable.length===7);
@@ -221,7 +228,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
             [-width/2,height/2],[width/2,height/2],
             [width/2,-height/2],[-width/2,-height/2],
           ].map(([x,y])=>mesh.localToWorld(new THREE.Vector3(x,y,0))):[];
-          return {name:item.name,width,height,depth,radius,center:center.toArray(),
+          return {name:item.name,source:item.geometry_source,width,height,depth,radius,center:center.toArray(),
             corners:corners.map(p=>p.toArray()),
             screen:corners.map(p=>project(p,viewport.x,viewport.y)),
             cssScreen:corners.map(p=>project(p,rect.width,rect.height)),
@@ -251,6 +258,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       near(m.raster.center[1],-h*s/2,'background center Y');
       for(const actual of m.shapes){
         const item=data.layers[i].objects.find(o=>o.name===actual.name), b=item.bounds_emu;
+        assert.equal(actual.source,'xfrm','real XLSX transform must be selected');
         const width=b.width/emu,height=b.height/emu, cx=(b.x/emu+width/2)*s,cy=-(b.y/emu+height/2)*s;
         near(actual.center[0],cx,actual.name+' center X');
         near(actual.center[1],cy,actual.name+' center Y');
@@ -293,6 +301,29 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     assert.deepEqual(errors,[]);
   }finally{
     await browser?.close();
-    await new Promise(ok=>server.close(ok));
+    if(fixture.child.exitCode===null){
+      const exited=once(fixture.child,'exit');fixture.child.kill();await exited;
+    }
   }
 });
+
+
+async function startXlsxGeometryFixture(){
+  const child=spawn(process.env.PYTHON||'python',['-u',resolve(root,'tests','xlsx_geometry_browser_fixture.py')],
+    {cwd:root,stdio:['ignore','pipe','pipe'],windowsHide:true});
+  let output='',errors='';
+  child.stderr.on('data',data=>errors+=data);
+  try{
+    const port=await new Promise((ok,bad)=>{
+      const timer=setTimeout(()=>bad(new Error('XLSX fixture startup timeout: '+errors)),25000);
+      child.on('error',e=>{clearTimeout(timer);bad(e);});
+      child.on('exit',code=>{clearTimeout(timer);bad(new Error('XLSX fixture exited '+code+': '+errors));});
+      child.stdout.on('data',data=>{
+        output+=data;
+        const match=/GEOMETRY_PORT=(\d+)/.exec(output);
+        if(match){clearTimeout(timer);ok(Number(match[1]));}
+      });
+    });
+    return {child,base:'http://127.0.0.1:'+port};
+  }catch(error){child.kill();throw error;}
+}
