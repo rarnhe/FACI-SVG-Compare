@@ -1,7 +1,7 @@
 """Extract Excel DrawingML objects as 2D positions relative to A1.
 
 X increases to the right, Y downwards. Read saved absolute DrawingML
-geometry; corroborate Y with explicit worksheet row anchors, never use column metrics. Geometry is kept in
+X and extents from saved transforms; Y independently from worksheet row anchors. Never use column metrics. Geometry is kept in
 integer EMU and reported in reference pixels at 96 DPI (9525 EMU / pixel).
 """
 
@@ -302,7 +302,7 @@ class VerticalRowMetrics:
         return round(value * EMUS_PER_POINT)
 
     def marker_y(self, marker: ET.Element | None) -> int | None:
-        if self.default is None or marker is None:
+        if marker is None:
             return None
         row, offset = first_child(marker, "row"), first_child(marker, "rowOff")
         if row is None or offset is None:
@@ -313,62 +313,50 @@ class VerticalRowMetrics:
             return None
         if not 0 <= index < 1048576:
             return None
+        if index == 0:
+            return off
+        if self.default is None:
+            return None
         return index * self.default + self.prefix[bisect_left(self.indices, index)] + off
 
 
-def vertical_rect(anchor: ET.Element, rect: tuple[int, int, int, int], angle: float,
-                  rows: VerticalRowMetrics | None) -> tuple[tuple[int, int, int, int], dict]:
-    """Only revise the Y translation when the saved anchor corroborates size.
+def anchor_y(anchor: ET.Element, width: int, height: int, angle: float,
+             rows: VerticalRowMetrics | None) -> tuple[int, dict]:
+    """Resolve vertical position independently of a:xfrm/a:off@y.
 
-    Two-cell anchors can describe an unrotated or rotated outer rectangle.
-    Match their vertical span to the saved extents before using their center.
-    A one-cell anchor has an explicit unrotated extent. Absolute anchors
-    already have exact coordinates. No arbitrary offset or Y-only scaling.
+    For cell anchors the start row and offset determine the Y position,
+    even if the end span differs from the saved height. An unambiguous
+    rotated outer span can locate the center of the unrotated box.
+    Absolute anchors use their own y. Never read or fall back to saved off@y.
     """
-    x1, y1, x2, y2 = rect
-    info = {"saved_y_emu": y1, "resolved_y_emu": y1, "source": "drawingml"}
     kind = local_name(anchor.tag)
-    if kind == "absoluteAnchor" or rows is None:
-        return rect, info
+    if kind == "absoluteAnchor":
+        y = emu_attribute(first_child(anchor, "pos"), "y", "xdr:pos")
+        return y, {"source": "absoluteAnchor", "resolved_y_emu": y}
+    if rows is None:
+        raise SpatialXlsxError("missing worksheet row geometry for Y")
     start = rows.marker_y(first_child(anchor, "from"))
     if start is None:
-        info["reason"] = "row geometry unavailable"
-        return rect, info
-    info["anchor_y_emu"] = start
-    h, w = y2 - y1, x2 - x1
-    # Saved row heights can be rounded to display pixels by Excel.
-    # Only accept a corroborating span within one reference pixel.
-    tolerance = EMUS_PER_PIXEL
+        raise SpatialXlsxError("cannot resolve Y from row/rowOff and saved row heights")
+    y = start
+    info = {"source": "row_anchor", "anchor_y_emu": start}
     if kind == "twoCellAnchor":
         end = rows.marker_y(first_child(anchor, "to"))
-        if end is None or end <= start:
-            info["reason"] = "missing or invalid end row anchor"
-            return rect, info
-        span = end - start
-        info["anchor_span_emu"] = span
-        rotated_span = abs(w * sin(radians(angle))) + abs(h * cos(radians(angle)))
-        # Prefer the unrotated interpretation when both fits are possible.
-        if abs(span - h) <= tolerance:
-            candidate = start
-        elif abs(span - rotated_span) <= tolerance:
-            candidate = round((start + end - h) / 2)
+        if end is not None and end > start:
+            span = end - start
+            info["anchor_span_emu"] = span
+            rotated_span = abs(width * sin(radians(angle))) + abs(height * cos(radians(angle)))
+            # The start marker is authoritative. Only shift by half the
+            # difference when the markers clearly describe a rotated AABB.
+            if abs(span - height) > EMUS_PER_PIXEL and abs(span - rotated_span) <= EMUS_PER_PIXEL:
+                y = round((start + end - height) / 2)
+                info["source"] = "rotated_row_anchor"
+            elif abs(span - height) > EMUS_PER_PIXEL:
+                info["reason"] = "row span differs from saved height; start marker retained"
         else:
-            info["reason"] = "row anchor span disagrees with saved extent"
-            return rect, info
-    elif kind == "oneCellAnchor":
-        ext = first_child(anchor, "ext")
-        try:
-            anchor_h = int(ext.attrib["cy"]) if ext is not None else 0
-        except (KeyError, ValueError):
-            anchor_h = 0
-        if anchor_h <= 0 or abs(anchor_h - h) > tolerance:
-            info["reason"] = "one-cell extent disagrees with saved extent"
-            return rect, info
-        candidate = start
-    else:
-        return rect, info
-    info.update(resolved_y_emu=candidate, source="row_anchor")
-    return (x1, candidate, x2, candidate + h), info
+            info["reason"] = "end marker unavailable or invalid; start marker retained"
+    info["resolved_y_emu"] = y
+    return y, info
 
 
 def object_transform(node: ET.Element) -> ET.Element | None:
@@ -390,17 +378,12 @@ def emu_attribute(node: ET.Element | None, key: str, label: str) -> int:
         raise SpatialXlsxError(f"invalid integer {label}@{key}: {node.attrib[key]!r}") from error
 
 
-def drawing_rect(anchor: ET.Element, node: ET.Element) -> tuple[tuple[int, int, int, int], str]:
-    """Strict saved DrawingML geometry, independent of worksheet cell metrics.
+def saved_horizontal_geometry(anchor: ET.Element, node: ET.Element) -> tuple[int, int, int, str]:
+    """Read X and original width/height, independently of vertical position.
 
-    An absolute anchor already specifies the complete absolute EMU rectangle.
-    For either cell-anchor type use the object's own complete saved transform.
-    Never derive a coordinate from column widths, row heights or font metrics.
-    Do not silently interpret a non-origin cell marker plus all-zero off as
-    a real absolute origin: that common placeholder is ambiguous.
+    Zero X is valid. No Y field or column-width estimate is used here.
     """
-    kind = local_name(anchor.tag)
-    if kind == "absoluteAnchor":
+    if local_name(anchor.tag) == "absoluteAnchor":
         off, ext = first_child(anchor, "pos"), first_child(anchor, "ext")
         off_label, ext_label, source = "xdr:pos", "xdr:ext", "absoluteAnchor"
     else:
@@ -410,28 +393,11 @@ def drawing_rect(anchor: ET.Element, node: ET.Element) -> tuple[tuple[int, int, 
         off, ext = first_child(xfrm, "off"), first_child(xfrm, "ext")
         off_label, ext_label, source = "xfrm/off", "xfrm/ext", "xfrm"
     x = emu_attribute(off, "x", off_label)
-    y = emu_attribute(off, "y", off_label)
     width = emu_attribute(ext, "cx", ext_label)
     height = emu_attribute(ext, "cy", ext_label)
     if width <= 0 or height <= 0:
         raise SpatialXlsxError(f"{ext_label} must have positive cx and cy")
-    if source == "xfrm" and (x, y) == (0, 0):
-        # Marker indices/offsets are inspected ONLY as a placeholder check;
-        # they are never converted to coordinates or used to recover geometry.
-        marker = first_child(anchor, "from")
-        if marker is not None:
-            for key in ("col", "row", "colOff", "rowOff"):
-                part = first_child(marker, key)
-                if part is not None and part.text is not None:
-                    try:
-                        value = int(part.text)
-                    except ValueError as error:
-                        raise SpatialXlsxError(f"invalid origin marker {key}") from error
-                    if value != 0:
-                        raise SpatialXlsxError(
-                            "ambiguous zero xfrm/off with nonzero cell marker; "
-                            "save a complete absolute transform in Excel")
-    return (x, y, x + width, y + height), source
+    return x, width, height, source
 
 
 def rotation_degrees(node: ET.Element) -> float:
@@ -648,14 +614,15 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
             name = nv.get("name", "未命名对象") if nv is not None else "未命名对象"
             kind = "image" if tag == "pic" else "shape"
             try:
-                rect, geometry_source = drawing_rect(anchor, element)
+                x, width, height, geometry_source = saved_horizontal_geometry(anchor, element)
                 angle = rotation_degrees(element)
-                rect, vertical = vertical_rect(anchor, rect, angle, row_metrics)
+                y, vertical = anchor_y(anchor, width, height, angle, row_metrics)
+                rect = (x, y, x + width, y + height)
             except SpatialXlsxError as error:
                 raise SpatialXlsxError(
                     f"Sheet '{sheet_name}', object '{name}' ({local_name(anchor.tag)}, "
-                    f"{drawing_part}): {error}; strict DrawingML mode does not infer "
-                    "geometry from worksheet columns or rows."
+                    f"{drawing_part}): {error}; X uses saved geometry, "
+                    "Y requires a resolvable row or absolute anchor."
                 ) from error
             x1, y1, x2, y2 = rect
             obj = {
@@ -733,8 +700,8 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                 if rel is None or "worksheet" not in rel[0]:
                     raise SpatialXlsxError(f"Missing worksheet relationship for {name}")
                 sheet_part = resolve_part("xl/workbook.xml", rel[1])
-                # Row heights are explicit point measurements; use only
-                # these for Y corroboration, never column width/font metrics.
+                # Only explicit row geometry is used for Y; never read
+                # column width or font metrics.
                 if sheet_part not in z.namelist():
                     raise SpatialXlsxError(f"Missing worksheet part for {name}: {sheet_part}")
                 row_metrics = VerticalRowMetrics(ET.fromstring(z.read(sheet_part)))
@@ -820,11 +787,11 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
             lines.append(f"    几何来源: {obj.get('geometry_source', 'unknown')}")
             vertical = obj.get("vertical_geometry", {})
             if vertical:
-                saved = vertical["saved_y_emu"]
                 resolved = vertical["resolved_y_emu"]
+                start = vertical.get("anchor_y_emu", resolved)
                 reason = vertical.get("reason", "")
-                lines.append(f"    Y校核: {vertical['source']} "
-                             f"saved={saved} resolved={resolved} delta={resolved-saved} EMU"
+                lines.append(f"    Y来源: {vertical['source']} "
+                             f"anchor={start} resolved={resolved} EMU"
                              + (f" ({reason})" if reason else ""))
             for title, point in zip(("左上", "右上", "右下", "左下"), obj["vertices_px"]):
                 lines.append(f"    {title}: ({point['x']:.3f}, {point['y']:.3f}) px")

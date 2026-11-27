@@ -260,7 +260,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       for(const actual of m.shapes){
         const item=data.layers[i].objects.find(o=>o.name===actual.name), b=item.bounds_emu;
         assert.equal(actual.source,'xfrm','real XLSX transform must be selected');
-        assert.equal(actual.verticalSource,'row_anchor','stale saved Y must be corrected before rendering');
+        assert.equal(actual.verticalSource,'row_anchor','Y must come from the start row even with malformed/missing off@y and mismatched span');
         const width=b.width/emu,height=b.height/emu, cx=(b.x/emu+width/2)*s,cy=-(b.y/emu+height/2)*s;
         near(actual.center[0],cx,actual.name+' center X');
         near(actual.center[1],cy,actual.name+' center Y');

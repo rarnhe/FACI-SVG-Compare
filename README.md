@@ -39,9 +39,8 @@ assets/
 
 ## CAD 坐标与联动
 
-- **DrawingML 几何模式与垂直校核**：X、宽、高、旋转仍直接使用保存的绝对 EMU；不读取列宽或估算字体。仅读取 worksheet 的显式行高（pt→EMU）、隐藏行和 row/rowOff 校核 Y。两单元格锚点的垂直跨度须与保存高度或旋转外框高度在 1px 内一致；单单元格锚点的直接高度须与保存高度一致。满足条件时使用行锚点的 Y（旋转外框取中心再还原未旋转顶边），背景和所有形状一致处理。缺失或冲突时保留 DrawingML Y，终端记录原因；绝对锚点保持不变。
-- 对 `oneCellAnchor` / `twoCellAnchor`，读取顶层对象自身的 `xfrm/off@x,y` 与 `xfrm/ext@cx,cy`，四个属性必须是有效整数 EMU，宽高必须为正；`absoluteAnchor` 直接使用其 `pos/ext`。零偏移且起始单元格标记非零的情况视作有歧义的占位值并报错（不转换标记为坐标），合法原点零偏移保留。旋转仍来自对象自身的 xfrm。
-- 缺失或无效几何不猜测、不降级、不静默跳过：启动时停止，报告 Sheet 名称、对象名称、锚点类型、drawing 路径及缺失/无效属性。终端和 manifest 的 `geometry_source` 仍为 `xfrm` 或 `absoluteAnchor`；`vertical_geometry` 另记录原始 Y、校核后的 Y、来源及不一致原因。需要在 Excel 中重新保存具备完整绝对几何的图纸；不模拟 Excel 打开后重新布局或陈旧变换同步。组合图形仍只读取顶层外框，不展开组内图元。
+- **独立 X/Y 定位**：移除 `drawing_rect()` 与 `vertical_rect()`。X、宽、高由 `saved_horizontal_geometry()` 直接读取顶层 DrawingML 保存的 EMU；不读取列宽或估算字体。Y 由 `anchor_y()` 独立确定，不读取 `a:off@y`（即使缺失或非法也不影响）。两种 cell anchor 均使用 `from/row` + `from/rowOff`，累计显式行高（1pt=12700 EMU），计入隐藏行、自定义行高与 zeroHeight。末端跨度冲突不再回退到保存 Y；若跨度唯一明确匹配旋转外框，则取中心还原未旋转顶边。绝对锚点直接使用 `pos@y`。宽高及旋转保持原逻辑，不引入 Y 缩放。
+- X、宽、高必须为有效整数 EMU，宽高为正，合法零 X 不因 Y 或单元格标记被拒绝。缺失或无法解析必要的起始行标记/行高时停止并报告 Sheet 名称、对象名称及 drawing 路径，不猜测 Y。终端 `Y来源` 与 manifest `vertical_geometry` 记录锚点及解析 Y、来源和可用诊断。背景图与全部形状采用相同 Y 规则；组合图形仍只读取顶层外框。
 
 `xlsx_spatial.py` 仍返回以 A1 左上角为原点的 `bounds_emu` 和 `vertices_px`；`cad_service.py` 再将**每个 Sheet 的底图左上角移到局部 (0,0)**，所有形状同步减去该 Sheet 图片的坐标偏移。这样 Fab 和 Subfab 通过各自的图纸原点使用统一的相机位置、朝向和缩放，不受原始单元格排版起点影响。
 

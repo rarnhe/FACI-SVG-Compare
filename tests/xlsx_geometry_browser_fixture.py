@@ -27,10 +27,10 @@ PNG=[
 
 
 def transform(x,y,w,h,rotation=0):
-    # Deliberately stale saved Y: picture has +23px, other objects have
-    # object-dependent shifts. X and both extents remain authoritative.
-    stale_y=y+40+(23 if x==0 and y==0 else 9+(x%17))
-    return (f'<a:xfrm rot="{rotation*60000}"><a:off x="{(x+80)*EMU}" y="{stale_y*EMU}"/>'
+    # Independent vertical anchors must work even without a parseable off@y.
+    # Picture lacks Y, shapes have stale or malformed Y values.
+    y_attr='' if x==0 and y==0 else (' y="invalid"' if x==30 else f' y="{(y+49+x%17)*EMU}"')
+    return (f'<a:xfrm rot="{rotation*60000}"><a:off x="{(x+80)*EMU}"{y_attr}/>'
             f'<a:ext cx="{w*EMU}" cy="{h*EMU}"/></a:xfrm>')
 
 
@@ -40,7 +40,8 @@ def anchored(x,y,w,h,child):
     left=x+80
     top=y+40
     right=left+w
-    bottom=top+h
+    # Deliberately disagree with saved height: Y must still use from.
+    bottom=top+h+7
     def mark(tag,px,py):
         col,dx=divmod(px,55)
         row,dy=divmod(py,20)
