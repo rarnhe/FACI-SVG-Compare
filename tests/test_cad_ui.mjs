@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   INITIAL_REFERENCE_SPLIT, shapeLabel, selectOnButton,
   containsShape, shapeAncestors, selectionParts, fitSvgPair, fitSvgPane,
-  clampMainDivider, clampReferenceSplit, pictureLayerScales, imageAspectRatio,
+  clampMainDivider, clampReferenceSplit, pictureLayerScales,
   requiredSvgRatio,canAddOverlay,SVG_COLORS,nextLegendColor,
   svgLegendName,svgSelectionKey,CUBOID_FACE_OPACITY,CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER,cadShapeRenderOrder,cadShapeZOffset,
@@ -115,19 +115,15 @@ test('both splitter clamps keep each area visible, including narrow displays',()
 });
 
 
-test('two XLSX images preserve native ratios and share one CAD world width',()=>{
-  const sizes=pictureLayerScales(
-    [{width:1400,height:500},{width:900,height:900}],
-    [0.5,0.75],
-  );
+test('two XLSX images preserve anchor ratios and share one CAD world width',()=>{
+  const sizes=pictureLayerScales([{width:1400,height:500},{width:900,height:900}]);
   assert.equal(sizes[0].width,1400);
   assert.equal(sizes[1].width,1400);
-  assert.equal(sizes[0].height,700);
-  assert.equal(sizes[1].height,1050);
+  assert.equal(sizes[0].height,500);
+  assert.equal(sizes[1].height,1400);
   assert.equal(sizes[0].x,1);
   assert.ok(Math.abs(sizes[1].x-1400/900)<1e-10);
-  assert.ok(Math.abs(sizes[0].y-700/500)<1e-10);
-  assert.ok(Math.abs(sizes[1].y-1050/900)<1e-10);
+  for(const size of sizes) assert.equal(size.x,size.y);
 });
 
 test('divider clamps stop before any displayed SVG would need horizontal scrolling',()=>{
@@ -296,21 +292,14 @@ test('CAD transparent render order is stable for any XLSX enumeration order',()=
 });
 
 
-test('embedded PNG/JPEG backgrounds and XLSX shapes use identical x/y scale factors',()=>{
-  // XLSX image anchors define the local origin; decoded raster dimensions
-  // determine the picture's display aspect ratio.
+test('uniform scaling preserves XLSX shapes, relative offsets and original aspect',()=>{
   const bounds=[{width:1200,height:480},{width:600,height:300}];
-  const decodedImages=[{naturalWidth:2000,naturalHeight:1200},
-    {naturalWidth:600,naturalHeight:900}];
-  const aspects=decodedImages.map((image,i)=>imageAspectRatio(image,bounds[i]));
-  assert.deepEqual(aspects,[0.6,1.5]); // NOT the XLSX anchors' ratios.
-  const scales=pictureLayerScales(bounds,aspects);
+  const scales=pictureLayerScales(bounds);
   assert.deepEqual(scales.map(s=>s.width),[1200,1200]);
-  assert.deepEqual(scales.map(s=>s.height),[720,1800]);
+  assert.deepEqual(scales.map(s=>s.height),[480,600]);
   for(let i=0;i<2;i++){
     const pic=bounds[i],display=scales[i];
-    // Any shape's local offset transforms in exactly the same coordinate
-    // system as its SVG background, so relative placements never drift.
+    assert.equal(display.x,display.y);
     const x=pic.width/4,y=pic.height/3;
     const shape={x:x*display.x,y:y*display.y,
                  width:pic.width/8*display.x,height:pic.height/8*display.y};
@@ -318,36 +307,26 @@ test('embedded PNG/JPEG backgrounds and XLSX shapes use identical x/y scale fact
     assert.ok(Math.abs(shape.y/display.height-1/3)<1e-9);
     assert.ok(Math.abs(shape.width/display.width-1/8)<1e-9);
     assert.ok(Math.abs(shape.height/display.height-1/8)<1e-9);
-    assert.ok(Math.abs(display.height/display.width-aspects[i])<1e-9);
+    assert.ok(Math.abs(shape.width/shape.height-pic.width/pic.height)<1e-9);
+    assert.ok(Math.abs(display.height/display.width-pic.height/pic.width)<1e-9);
   }
 });
 
-
-test('imageAspectRatio selects decoded XLSX picture rather than drawing anchor size',()=>{
-  const anchor={width:1400,height:700}; // anchor ratio=0.5
-  assert.equal(imageAspectRatio({naturalWidth:1920,naturalHeight:1080},anchor),1080/1920);
-  assert.equal(imageAspectRatio({width:640,height:480},anchor),480/640);
-  assert.equal(imageAspectRatio({naturalWidth:0,naturalHeight:0},anchor),0.5);
-  assert.equal(imageAspectRatio(null,anchor),0.5);
-  assert.equal(imageAspectRatio(null,{width:0,height:100}),1);
-  assert.equal(imageAspectRatio({naturalWidth:NaN,naturalHeight:20},anchor),0.5);
+test('raster dimensions cannot change CAD geometry even when aspect is different',()=>{
+  const anchors=[{width:1600,height:900},{width:800,height:800}];
+  const expected=pictureLayerScales(anchors);
+  // An accidental legacy second argument must not distort any shape.
+  assert.deepEqual(pictureLayerScales(anchors,[600/1600,1800/1200]),expected);
+  assert.deepEqual(pictureLayerScales(anchors,[1,1]),expected);
+  assert.deepEqual(expected,[{x:1,y:1,width:1600,height:900},
+    {x:2,y:2,width:1600,height:1600}]);
 });
 
-test('shape and raster background share exact corner alignment at different aspect ratios',()=>{
+test('shape and raster background share exact corners and rotated vectors under uniform scaling',()=>{
   const anchors=[{width:1600,height:900},{width:800,height:800}];
-  const decoded=[{naturalWidth:1600,naturalHeight:600},
-                 {naturalWidth:1200,naturalHeight:1800}];
-  const scales=pictureLayerScales(anchors,
-    decoded.map((im,i)=>imageAspectRatio(im,anchors[i])));
-  // Two pictures maintain a common displayed width without squashing pixels.
-  assert.equal(scales[0].width,1600);
-  assert.equal(scales[1].width,1600);
-  assert.equal(scales[0].height,600);
-  assert.equal(scales[1].height,2400);
+  const scales=pictureLayerScales(anchors);
   for(let i=0;i<2;i++){
     const {width:w,height:h}=anchors[i],factor=scales[i];
-    // A rectangle exactly matching the XLSX picture anchor must match
-    // all four displayed raster corners, not just its top-left.
     const corners=[[0,0],[w,0],[w,h],[0,h]];
     const scaled=corners.map(([x,y])=>[x*factor.x,y*factor.y]);
     assert.deepEqual(scaled,[[0,0],[factor.width,0],
@@ -356,9 +335,11 @@ test('shape and raster background share exact corner alignment at different aspe
     const aligned=[point.x*factor.x,point.y*factor.y];
     assert.ok(Math.abs(aligned[0]/factor.width-0.6)<1e-9);
     assert.ok(Math.abs(aligned[1]/factor.height-0.4)<1e-9);
+    const theta=0.63,dx=40*Math.cos(theta),dy=40*Math.sin(theta);
+    assert.ok(Math.abs(Math.atan2(dy*factor.y,dx*factor.x)-theta)<1e-9);
+    assert.ok(Math.abs(Math.hypot(dx*factor.x,dy*factor.y)-40*factor.x)<1e-9);
   }
 });
-
 
 test('textbox font maps DrawingML point sizes and styles into canvas CSS',()=>{
   const font=textboxFont({

@@ -230,32 +230,18 @@ export function layoutTextboxText(layout,width,height,measure) {
   return commands;
 }
 
-/** Prefer the actual decoded XLSX picture dimensions, not the cell anchor ratio. */
-export function imageAspectRatio(image, anchor) {
-  const width=Number(image?.naturalWidth || image?.width);
-  const height=Number(image?.naturalHeight || image?.height);
-  if(Number.isFinite(width) && width>0 && Number.isFinite(height) && height>0)
-    return height/width;
-  const fallbackWidth=Number(anchor?.width),fallbackHeight=Number(anchor?.height);
-  return Number.isFinite(fallbackWidth) && fallbackWidth>0 &&
-         Number.isFinite(fallbackHeight) && fallbackHeight>0
-    ? fallbackHeight/fallbackWidth : 1;
-}
-
 /**
- * Use the embedded picture's actual pixel aspect while both CAD sheets share
- * one world-space image width (same units/pixel across both cameras).
- * Shape offsets follow the image axes so overlays never drift from their image.
+ * XLSX anchors are the sole geometric reference. A sheet's image and
+ * shapes share a single uniform scale, regardless of raster pixel aspect.
+ * Retain the common displayed image width and synchronized cameras.
  */
-export function pictureLayerScales(imageBounds, naturalAspectRatios) {
+export function pictureLayerScales(imageBounds) {
   const commonWidth=Math.max(1,...imageBounds.map(box=>box.width));
-  return imageBounds.map((box,i)=>{
-    const ratio=naturalAspectRatios[i] > 0 ? naturalAspectRatios[i] : box.height/box.width;
-    const height=commonWidth*ratio;
+  return imageBounds.map(box=>{
+    const scale=commonWidth/Math.max(1,box.width);
     return {
-      x:commonWidth/Math.max(1,box.width),
-      y:height/Math.max(1,box.height),
-      width:commonWidth,height,
+      x:scale,y:scale,
+      width:box.width*scale,height:box.height*scale,
     };
   });
 }

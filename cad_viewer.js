@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
-  pictureLayerScales, imageAspectRatio, fitSvgPane, clampMainDivider, clampReferenceSplit,
+  pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
   restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
   cadOutlineSpec, cadOutlineSegments,
@@ -1033,9 +1033,8 @@ async function initialize() {
     workbookName=data.workbook || '';
     document.title=workbookName.replace(/\.xlsx$/i,'') || 'Fab / Subfab CAD';
 
-    // XLSX image anchors supply the origin and coordinate reference while
-    // the actual embedded raster image supplies the displayed aspect ratio.
-    // The same scale factors transform each shape AND its picture.
+    // XLSX image anchors supply the origin, size and displayed aspect.
+    // Decoded pixels are texture data only; never use them to rescale geometry.
     const layerImages=data.layers.map(src=>
       src?.objects?.find(item=>item.type==='image') || null);
     const textures=await Promise.all(layerImages.map(item=>
@@ -1044,12 +1043,9 @@ async function initialize() {
       width:(item?.bounds_emu?.width||9525)*EMU_TO_PX,
       height:(item?.bounds_emu?.height||9525)*EMU_TO_PX,
     }));
-    const ratios=textures.map((texture,i)=>
-      imageAspectRatio(texture?.image,bounds[i]));
-    // Shared world-space image width synchronizes both linked CAD cameras.
-    // Each sheet's image height is nativeAspect*sharedWidth; textboxes,
-    // rectangles and ellipses receive the EXACT SAME X/Y transforms.
-    const transforms=pictureLayerScales(bounds,ratios);
+    // Keep shared world-space image width, but apply one uniform scale
+    // per sheet to the picture, shapes, and all XY offsets.
+    const transforms=pictureLayerScales(bounds);
 
     const targets=[fab,subfab];
     for(let i=0;i<targets.length;i++) {
