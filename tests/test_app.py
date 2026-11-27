@@ -333,7 +333,8 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("SVG_LINE_WIDTHS",helper)
         self.assertIn("SVG_LINE_TYPES",helper)
         self.assertIn("submenu('线型','lineStyle',SVG_LINE_TYPES)",viewer)
-        self.assertIn("submenu('线宽','lineWidth'",viewer)
+        self.assertIn("submenu('线宽','lineWidth',SVG_LINE_WIDTHS.map",viewer)
+        self.assertNotIn("label:'原始线宽'",viewer)
         self.assertIn("mergeSvgStyle(entry.style,patch)",viewer)
         self.assertIn("entry.style=style",viewer)
         self.assertIn("recolorSvgMarkup(source,color)",helper)
@@ -420,8 +421,10 @@ class TestStaticFrontend(unittest.TestCase):
             "new THREE.InstancedMesh(outlineCylinder,material,segments.length)",
             "mesh.frustumCulled=false",
             "const outline=cadOutlineSpec(item)",
-            "if(outline) group.add(...makeOutline(circumference,outline,layer))",
-            "if(outline) group.add(...makeOutline([",
+            "if(outline) group.add(...makePlanarOutline('ellipse',w,h,outline,layer))",
+            "!rectangleHasAltText(item.alt_text)",
+            "borderGroup.renderOrder=priority+0.75",
+            "borderGroup.add(...makePlanarOutline('rectangle',w,h,outline,layer))",
             "group.add(...edges)",
             "updateLayerOutlines(layer)",
             "layer.outlineMeshes.push(mesh)",

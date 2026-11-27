@@ -364,7 +364,7 @@ export function recolorSvgMarkup(source,color) {
 
 
 // Legend styles are independent; null restores the original width/dash pattern.
-export const SVG_LINE_WIDTHS=Object.freeze([3,4,5]);
+export const SVG_LINE_WIDTHS=Object.freeze([2,2.5,3,3.5,4]);
 export const SVG_LINE_TYPES=Object.freeze([
   {label:'实线',value:'none'},
   {label:'虚线',value:'8 5'},
@@ -650,4 +650,24 @@ export function cadOutlineSegments(positions) {
 export function cadOutlineHaloColor(color) {
   const rgb=[1,3,5].map(i=>parseInt(color.slice(i,i+2),16));
   return (rgb[0]*0.299+rgb[1]*0.587+rgb[2]*0.114)>145?'#202020':'#f5f5f5';
+}
+
+
+// Excel may omit alt text, or encode an empty description/title. Only
+// those rectangles take the shared planar sensor-outline route.
+export function rectangleHasAltText(altText) {
+  const clean=value=>String(value??'').replaceAll('_x000D_','').trim();
+  return typeof altText==='string'?Boolean(clean(altText)):
+    Boolean(clean(altText?.description)||clean(altText?.title));
+}
+export function planarOutlineVertices(kind,width,height,z=0.7) {
+  if(kind==='ellipse') {
+    const radius=Math.hypot(width,height)/2;
+    return Array.from({length:72},(_,i)=>{
+      const t=2*Math.PI*i/72;
+      return [radius*Math.cos(t),radius*Math.sin(t),z];
+    });
+  }
+  const hw=width/2,hh=height/2;
+  return [[-hw,hh,z],[hw,hh,z],[hw,-hh,z],[-hw,-hh,z]];
 }

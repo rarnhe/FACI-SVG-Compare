@@ -11,7 +11,7 @@ import {
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
   SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
   cadOutlineSpec,recolorOctaveGeometry,octavePointScale,octavePointNodes,octaveLineNodes,
-  cadOutlineSegments,cadOutlineHaloColor,
+  cadOutlineSegments,cadOutlineHaloColor,rectangleHasAltText,planarOutlineVertices,
 } from '../cad_ui.mjs';
 
 const shape=(kind,x,y,width,height,text,rotation=0)=>({
@@ -413,18 +413,20 @@ test('textbox explicit newline and bottom anchor preserve original position',()=
 test('SVG legend independent styles, original restoration and strict validation',()=>{
   const base=mergeSvgStyle({color:'#4F99CF'});
   assert.deepEqual(base,{color:'#4F99CF',lineWidth:null,lineStyle:null});
-  const width=mergeSvgStyle(base,{lineWidth:5});
+  const width=mergeSvgStyle(base,{lineWidth:3.5});
   const dash=mergeSvgStyle(width,{lineStyle:'8 5'});
   assert.deepEqual(mergeSvgStyle(dash,{color:'#E41A1C'}),
-    {color:'#E41A1C',lineWidth:5,lineStyle:'8 5'});
+    {color:'#E41A1C',lineWidth:3.5,lineStyle:'8 5'});
   assert.deepEqual(mergeSvgStyle(dash,{lineWidth:null,lineStyle:null}),base);
-  assert.deepEqual(SVG_LINE_WIDTHS,[3,4,5]);
+  assert.deepEqual(SVG_LINE_WIDTHS,[2,2.5,3,3.5,4]);
   assert.equal(SVG_LINE_TYPES.length,4);
   assert.ok(!SVG_LINE_TYPES.some(t=>t.label==='原始线型'));
   assert.throws(()=>mergeSvgStyle(base,{lineWidth:6}),RangeError);
   assert.throws(()=>mergeSvgStyle(base,{lineWidth:7}),RangeError);
   assert.ok(!SVG_LINE_TYPES.some(t=>t.label==='点线'));
-  assert.throws(()=>mergeSvgStyle(base,{lineWidth:2}),RangeError);
+  for(const lineWidth of SVG_LINE_WIDTHS) assert.equal(mergeSvgStyle(base,{lineWidth}).lineWidth,lineWidth);
+  assert.throws(()=>mergeSvgStyle(base,{lineWidth:5}),RangeError);
+  assert.throws(()=>mergeSvgStyle(base,{lineWidth:1.5}),RangeError);
   assert.throws(()=>mergeSvgStyle(base,{lineStyle:'1 5'}),RangeError);
   assert.throws(()=>mergeSvgStyle(base,{lineWidth:-1}),RangeError);
   assert.throws(()=>mergeSvgStyle(base,{lineStyle:'bad'}),RangeError);
@@ -565,4 +567,18 @@ test('all independent CAD segment buffers preserve centers, directions and lengt
   assert.deepEqual(cadOutlineSegments([0,0,0,0,0,0]),[]);
   assert.equal(cadOutlineHaloColor('#FFFFFF'),'#202020');
   assert.equal(cadOutlineHaloColor('#000000'),'#f5f5f5');
+});
+
+
+test('empty alternative text uses same planar outline coordinates as sensor geometry',()=>{
+  for(const value of [null,undefined,'','  ',{}, {description:'',title:''},{description:'_x000D_ ',title:' '}])
+    assert.equal(rectangleHasAltText(value),false);
+  for(const value of ['z=0.5x',{title:'z=0x'},{description:'invalid'}])
+    assert.equal(rectangleHasAltText(value),true);
+  const vertices=planarOutlineVertices('rectangle',80,40);
+  assert.deepEqual(vertices,[[-40,20,0.7],[40,20,0.7],[40,-20,0.7],[-40,-20,0.7]]);
+  const circle=planarOutlineVertices('ellipse',80,40);
+  assert.equal(circle.length,72);
+  assert.equal(circle[0][2],vertices[0][2]);
+  assert.equal(circle[0][0],Math.hypot(80,40)/2);
 });

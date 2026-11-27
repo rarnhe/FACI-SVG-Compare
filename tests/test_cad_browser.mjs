@@ -23,7 +23,8 @@ function objects() {
     shape('Cube A','rectangle',30,35,70,45,'z=0.5x'),
     shape('Cube B','rectangle',155,35,70,45,'z=0.5x','#204060'),
     shape('Flat A','rectangle',30,135,70,45,''),
-    shape('Flat B','rectangle',155,135,70,45,'','#204060'),
+    {...shape('Flat B','rectangle',155,135,70,45,'','#204060'),alt_text:undefined,
+      rotation_degrees:12,outline_width_px:4},
     shape('Dot','ellipse',310,100,22,22,''),
   ];
 }
@@ -72,7 +73,8 @@ test('Chromium renders every CAD outline and scales octave points around their c
           const gl=layer.renderer.getContext(),W=gl.drawingBufferWidth,H=gl.drawingBufferHeight;
           for(const body of layer.clickable) {
             const item=body.userData.cadObject,group=body.parent;
-            const edges=group.children.filter(m=>m.userData.isCadOutline);
+            const edges=[];
+            group.traverse(m=>{if(m.userData.isCadOutline) edges.push(m);});
             const foreground=edges.find(m=>!m.userData.isCadOutlineHalo);
             if(!foreground){result.push({name:item.name,missing:true});continue;}
             const spec=foreground.userData.outlineSegments;
@@ -91,7 +93,10 @@ test('Chromium renders every CAD outline and scales octave points around their c
               hit=rgb.every((v,j)=>Math.abs(v-p[j])<=25);
             }
             result.push({name:item.name,tilted,hit,count:foreground.count,meshes:edges.length,
-              culled:foreground.frustumCulled,allInstances:spec.length});
+              culled:foreground.frustumCulled,allInstances:spec.length,
+              flatGroup:foreground.parent.userData.isFlatRectangleOutline===true,
+              outlineWidth:foreground.userData.outlineWidth,
+              localZ:segment.center[2]});
           }
         }
       }
@@ -105,6 +110,9 @@ test('Chromium renders every CAD outline and scales octave points around their c
       assert.equal(r.allInstances,r.count);
       assert.equal(r.culled,false);
       assert.equal(r.hit,true,'Missing rendered outline pixel '+JSON.stringify(r));
+      assert.equal(r.flatGroup,r.name.startsWith('Flat'),JSON.stringify(r));
+      assert.equal(r.outlineWidth,r.name==='Flat B'?4:3);
+      if(r.name.startsWith('Flat')||r.name==='Dot') assert.equal(r.localZ,0.7);
     }
     const markers=await page.evaluate(async()=>{
       const {restyleSvgMarkup}=await import('/viewer/cad_ui.mjs');
@@ -121,17 +129,21 @@ test('Chromium renders every CAD outline and scales octave points around their c
         div.remove();return values;
       }
       const original=measure(source);
-      const styled=measure(restyleSvgMarkup(source,{color:'#E41A1C',lineWidth:4},'octave'));
-      const restored=measure(restyleSvgMarkup(source,{color:'#E41A1C',lineWidth:null},'octave'));
+      const widths=[2,2.5,3,3.5,4];
+      const styled=Object.fromEntries(widths.map(lineWidth=>[lineWidth,
+        measure(restyleSvgMarkup(source,{color:'#E41A1C',lineWidth},'octave'))]));
+      const restored=measure(restyleSvgMarkup(source,{color:'#E41A1C'},'octave'));
       return {original,styled,restored};
     });
     for(const id of ['pt','usePt','pathPt','tick']){
-      const before=markers.original[id],after=markers.styled[id],reset=markers.restored[id];
+      const before=markers.original[id],reset=markers.restored[id];
       assert.ok(before[0]>0,id);
-      const factor=id==='tick'?1:2;
-      assert.ok(Math.abs(after[0]-before[0]*factor)<0.3,JSON.stringify({id,before,after}));
-      assert.ok(Math.abs(after[1]-before[1]*factor)<0.3,JSON.stringify({id,before,after}));
-      assert.ok(Math.abs(after[2]-before[2])<0.3 && Math.abs(after[3]-before[3])<0.3,'Point moved: '+id);
+      for(const width of [2,2.5,3,3.5,4]){
+        const after=markers.styled[width][id],factor=id==='tick'?1:width/2;
+        assert.ok(Math.abs(after[0]-before[0]*factor)<0.3,JSON.stringify({id,width,before,after}));
+        assert.ok(Math.abs(after[1]-before[1]*factor)<0.3,JSON.stringify({id,width,before,after}));
+        assert.ok(Math.abs(after[2]-before[2])<0.3 && Math.abs(after[3]-before[3])<0.3,'Point moved: '+id);
+      }
       assert.deepEqual(reset,before);
     }
     assert.deepEqual(errors,[]);

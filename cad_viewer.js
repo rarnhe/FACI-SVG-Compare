@@ -8,6 +8,7 @@ import {
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
   restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
   cadOutlineSpec, cadOutlineSegments, cadOutlineHaloColor,
+  rectangleHasAltText, planarOutlineVertices,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER, cadShapeRenderOrder, cadShapeZOffset,
   textboxFont, layoutTextboxText,
@@ -156,6 +157,12 @@ function makeOutline(points,outline,layer,halo=true) {
   return makeThickSegments(positions,outline,layer,halo);
 }
 
+// Both sensor circles and rectangles without alternative text use the
+// same closed-loop renderer and DrawingML-derived outline specification.
+function makePlanarOutline(kind,w,h,outline,layer) {
+  return makeOutline(planarOutlineVertices(kind,w,h).map(p=>new THREE.Vector3(...p)),outline,layer);
+}
+
 function drawTextboxText(group,item,worldRect) {
   if(!item.text) return;
   const w=Math.max(1,item.bounds_emu.width*EMU_TO_PX);
@@ -249,12 +256,7 @@ function drawShape(layer,item,rectangles=[]) {
     clickTarget.position.z=0.5;
     clickTarget.renderOrder=2;
     group.add(clickTarget);
-    const circumference=[];
-    for(let i=0;i<72;i++) {
-      const t=2*Math.PI*i/72;
-      circumference.push(new THREE.Vector3(radius*Math.cos(t),radius*Math.sin(t),0.7));
-    }
-    if(outline) group.add(...makeOutline(circumference,outline,layer));
+    if(outline) group.add(...makePlanarOutline('ellipse',w,h,outline,layer));
   } else if(kind==='rectangle') {
     // Translucent solid (NOT a wireframe): both roof and side faces remain
     // visible while allowing elevated ellipse measurement points to show.
@@ -285,11 +287,23 @@ function drawShape(layer,item,rectangles=[]) {
       clickTarget=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);
       clickTarget.position.z=0;
       group.add(clickTarget);
-      const hw=w/2,hh=h/2;
-      if(outline) group.add(...makeOutline([
-        new THREE.Vector3(-hw,hh,0.2),new THREE.Vector3(hw,hh,0.2),
-        new THREE.Vector3(hw,-hh,0.2),new THREE.Vector3(-hw,-hh,0.2),
-      ],outline,layer));
+      if(outline && !rectangleHasAltText(item.alt_text)) {
+        // Same planar boundary routine as ellipse. A nested group with a
+        // later group order keeps every flat border above rectangle fills,
+        // but below the existing ellipse layer, even after tilting.
+        const borderGroup=new THREE.Group();
+        borderGroup.renderOrder=priority+0.75;
+        borderGroup.userData.isFlatRectangleOutline=true;
+        borderGroup.add(...makePlanarOutline('rectangle',w,h,outline,layer));
+        group.add(borderGroup);
+      } else if(outline) {
+        // A nonempty but invalid/zero height directive retains old behavior.
+        const hw=w/2,hh=h/2;
+        group.add(...makeOutline([
+          new THREE.Vector3(-hw,hh,0.2),new THREE.Vector3(hw,hh,0.2),
+          new THREE.Vector3(hw,-hh,0.2),new THREE.Vector3(-hw,-hh,0.2),
+        ],outline,layer));
+      }
     }
   } else {
     // Textboxes follow XLSX fill/outline colors; unrecognized shapes stay flat.
@@ -890,8 +904,7 @@ function showLegendMenu(key,x,y) {
   }
   submenu('颜色','color',SVG_COLOR_CHOICES);
   submenu('线型','lineStyle',SVG_LINE_TYPES);
-  submenu('线宽','lineWidth',[{label:'原始线宽',value:null},
-    ...SVG_LINE_WIDTHS.map(value=>({label:String(value),value}))]);
+  submenu('线宽','lineWidth',SVG_LINE_WIDTHS.map(value=>({label:String(value),value})));
   const close=document.createElement('button');
   close.type='button';
   close.setAttribute('role','menuitem');
