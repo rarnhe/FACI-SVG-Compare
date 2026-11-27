@@ -1,12 +1,16 @@
 // Linked Fab/Subfab Excel CAD viewer. Each picture starts at (0,0) in local XY.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, imageAspectRatio, fitSvgPane, clampMainDivider, clampReferenceSplit,
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
-  restyleSvgMarkup, mergeSvgStyle, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
+  restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
+  cadOutlineSpec,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER, cadShapeRenderOrder, cadShapeZOffset,
   textboxFont, layoutTextboxText,
@@ -99,11 +103,25 @@ function colorValue(value,fallback) {
     ? parseInt(value.slice(1),16) : fallback;
 }
 
-function makeOutline(points,color) {
-  return new THREE.LineLoop(
-    new THREE.BufferGeometry().setFromPoints(points),
-    new THREE.LineBasicMaterial({color,transparent:true,opacity:0.95,depthTest:false}),
-  );
+function makeThickSegments(positions,outline,layer) {
+  const geometry=new LineSegmentsGeometry();
+  geometry.setPositions(positions);
+  const material=new LineMaterial({
+    color:colorValue(outline.color,0x334455),linewidth:outline.width,
+    worldUnits:false,transparent:true,opacity:1,depthTest:false,depthWrite:false,
+  });
+  material.resolution.set(Math.max(1,layer.stage.clientWidth),Math.max(1,layer.stage.clientHeight));
+  const line=new LineSegments2(geometry,material);
+  line.userData.isCadOutline=true;
+  return line;
+}
+function makeOutline(points,outline,layer) {
+  const positions=[];
+  for(let i=0;i<points.length;i++) {
+    const a=points[i],b=points[(i+1)%points.length];
+    positions.push(a.x,a.y,a.z,b.x,b.y,b.z);
+  }
+  return makeThickSegments(positions,outline,layer);
 }
 
 function drawTextboxText(group,item,worldRect) {
@@ -182,7 +200,7 @@ function drawShape(layer,item,rectangles=[]) {
   group.renderOrder=priority;
   const colors=item.colors || {};
   const fillColor=colorValue(colors.fill,kind==='textbox'?0xffffff:0x3599c3);
-  const borderColor=colorValue(colors.outline,0x67dcfc);
+  const outline=cadOutlineSpec(item);
   const opacity=kind==='textbox'
     ? (colors.fill==='无/透明'?0:1)
     : colors.fill==='无/透明' ? 0.13 : 0.68;
@@ -204,7 +222,7 @@ function drawShape(layer,item,rectangles=[]) {
       const t=2*Math.PI*i/72;
       circumference.push(new THREE.Vector3(radius*Math.cos(t),radius*Math.sin(t),0.7));
     }
-    group.add(makeOutline(circumference,borderColor));
+    if(outline) group.add(makeOutline(circumference,outline,layer));
   } else if(kind==='rectangle') {
     // Translucent solid (NOT a wireframe): both roof and side faces remain
     // visible while allowing elevated ellipse measurement points to show.
@@ -223,14 +241,10 @@ function drawShape(layer,item,rectangles=[]) {
       // Outline all 12 edges using the original DrawingML line color.
       // Draw after the solid faces so the cuboid remains readable on
       // rotation, including near-parallel views.
-      if(colors.outline!=='无/透明') {
-        const edges=new THREE.LineSegments(
-          new THREE.EdgesGeometry(cube),
-          new THREE.LineBasicMaterial({
-            color:borderColor,transparent:true,opacity:1,
-            depthWrite:false,depthTest:false,
-          }),
-        );
+      if(outline) {
+        const geometry=new THREE.EdgesGeometry(cube);
+        const edges=makeThickSegments(geometry.attributes.position.array,outline,layer);
+        geometry.dispose();
         edges.position.copy(clickTarget.position);
         group.add(edges);
       }
@@ -240,10 +254,10 @@ function drawShape(layer,item,rectangles=[]) {
       clickTarget.position.z=0;
       group.add(clickTarget);
       const hw=w/2,hh=h/2;
-      group.add(makeOutline([
+      if(outline) group.add(makeOutline([
         new THREE.Vector3(-hw,hh,0.2),new THREE.Vector3(hw,hh,0.2),
         new THREE.Vector3(hw,-hh,0.2),new THREE.Vector3(-hw,-hh,0.2),
-      ],borderColor));
+      ],outline,layer));
     }
   } else {
     // Textboxes follow XLSX fill/outline colors; unrecognized shapes stay flat.
@@ -255,8 +269,7 @@ function drawShape(layer,item,rectangles=[]) {
       new THREE.Vector3(-hw,hh,0.8),new THREE.Vector3(hw,hh,0.8),
       new THREE.Vector3(hw,-hh,0.8),new THREE.Vector3(-hw,-hh,0.8),
     ];
-    if(kind!=='textbox' || colors.outline!=='无/透明')
-      group.add(makeOutline(vertices,borderColor));
+    if(outline) group.add(makeOutline(vertices,outline,layer));
     if(kind==='textbox') drawTextboxText(group,item,r);
   }
   // Explicit render order overrides the reversed transparent-object
@@ -264,7 +277,7 @@ function drawShape(layer,item,rectangles=[]) {
   // depthWrite:false; outlines remain above their own filled surfaces.
   group.traverse(node=>{
     if(node.isMesh || node.isLine || node.isLineSegments) {
-      node.renderOrder=priority+(node.isLine || node.isLineSegments ? 0.25
+      node.renderOrder=priority+(node.userData.isCadOutline || node.isLine || node.isLineSegments ? 0.25
         : node.userData.isTextboxText ? 0.1 : 0);
     }
   });
@@ -525,6 +538,9 @@ function resizeCadLayers() {
       const width=Math.max(1,layer.stage.clientWidth);
       const height=Math.max(1,layer.stage.clientHeight);
       layer.renderer.setSize(width,height,false);
+      layer.scene.traverse(node=>{
+        if(node.userData.isCadOutline) node.material.resolution.set(width,height);
+      });
       layer.camera.left=-width/2;layer.camera.right=width/2;
       layer.camera.top=height/2;layer.camera.bottom=-height/2;
       layer.camera.zoom=Math.max(0.01,Math.min(100,layer.camera.zoom*factor));
@@ -673,7 +689,7 @@ async function makeColoredPair(sourcePair,style) {
   const result={};
   try {
     for(const [key,markup] of [['psd',psdMarkup],['octave',octaveMarkup]]) {
-      const colorized=restyleSvgMarkup(markup,style);
+      const colorized=restyleSvgMarkup(markup,style,key);
       const blobUrl=URL.createObjectURL(new Blob([colorized],{
         type:'image/svg+xml;charset=utf-8',
       }));
@@ -842,7 +858,7 @@ function showLegendMenu(key,x,y) {
     });
     primary.append(button);
   }
-  submenu('颜色','color',SVG_COLORS.map(value=>({label:value,value})));
+  submenu('颜色','color',SVG_COLOR_CHOICES);
   submenu('线型','lineStyle',SVG_LINE_TYPES);
   submenu('线宽','lineWidth',[{label:'原始线宽',value:null},
     ...SVG_LINE_WIDTHS.map(value=>({label:String(value),value}))]);

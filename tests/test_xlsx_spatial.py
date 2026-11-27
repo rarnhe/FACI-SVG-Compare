@@ -439,3 +439,14 @@ class TestGeometry(unittest.TestCase):
     def test_invalid_relationship_escape_is_rejected(self):
         with self.assertRaises(spatial.SpatialXlsxError):
             spatial.resolve_part("xl/workbook.xml", "../../../outside")
+
+
+class OutlineWidthTests(unittest.TestCase):
+    def test_direct_and_theme_line_width(self):
+        import xml.etree.ElementTree as ET
+        direct = ET.fromstring('<ln w="28575"/>')
+        theme = [ET.fromstring('<ln w="38100"/>')]
+        style = ET.fromstring('<style><lnRef idx="1"/></style>')
+        self.assertEqual(spatial.outline_width_px(direct, style, theme), 3)
+        self.assertEqual(spatial.outline_width_px(None, style, theme), 4)
+        self.assertIsNone(spatial.outline_width_px(None, None, []))

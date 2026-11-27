@@ -212,7 +212,7 @@ class TestStaticFrontend(unittest.TestCase):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
         self.assertIn("const fillColor=colorValue(colors.fill",viewer)
         self.assertIn("colors.fill==='无/透明'?0:1",viewer)
-        self.assertIn("if(kind!=='textbox' || colors.outline!=='无/透明')",viewer)
+        self.assertIn("const outline=cadOutlineSpec(item)",viewer)
         self.assertNotIn("A textbox always has gray background",viewer)
         self.assertIn("border-radius:8px",html)
 
@@ -287,7 +287,7 @@ class TestStaticFrontend(unittest.TestCase):
                         "removeReferenceOverlay(key)", "overlaySelections.delete(key)",
                         "makeColoredPair(pair,style)",
                         "changeLegendStyle(", "showLegendMenu(",
-                        "SVG_COLORS", "restyleSvgMarkup(markup,style)",
+                        "SVG_COLOR_CHOICES", "restyleSvgMarkup(markup,style,key)",
                         "URL.createObjectURL(new Blob([colorized]",
                         "URL.revokeObjectURL(pair[key].blobUrl)",
                         "document.getElementById('psd-overlays').append",
@@ -329,7 +329,7 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("line.textContent=label",viewer)
         self.assertIn("line.style.color=entry.color",viewer)
         self.assertNotIn('className=\'legend-swatch\'',viewer)
-        self.assertIn("SVG_COLORS=Object.freeze([",helper)
+        self.assertIn("SVG_COLOR_CHOICES=Object.freeze([",helper)
         self.assertIn("SVG_LINE_WIDTHS",helper)
         self.assertIn("SVG_LINE_TYPES",helper)
         self.assertIn("submenu('线型','lineStyle',SVG_LINE_TYPES)",viewer)
@@ -379,7 +379,7 @@ class TestStaticFrontend(unittest.TestCase):
         for expected in (
             "group.position.set(r.x+w/2,r.y-h/2,raisedZ+cadShapeZOffset(kind))",
             "group.renderOrder=priority",
-            "node.renderOrder=priority+(node.isLine || node.isLineSegments ? 0.25",
+            "node.renderOrder=priority+(node.userData.isCadOutline || node.isLine || node.isLineSegments ? 0.25",
             "image.renderOrder=CAD_DRAW_ORDER.image",
             "group.renderOrder=CAD_DRAW_ORDER.image",
             "cadShapeRenderOrder(b.object.userData.cadObject?.shape_kind)",
@@ -417,8 +417,12 @@ class TestStaticFrontend(unittest.TestCase):
             "textMesh.userData.isTextboxText=true",
             "if(kind==='textbox') drawTextboxText(group,item,r)",
             "new THREE.EdgesGeometry(cube)",
-            "color:borderColor,transparent:true,opacity:1",
-            "if(colors.outline!=='无/透明')",
+            "new LineSegments2(geometry,material)",
+            "linewidth:outline.width",
+            "const outline=cadOutlineSpec(item)",
+            "if(outline) group.add(makeOutline(circumference,outline,layer))",
+            "if(outline) group.add(makeOutline([",
+            "node.material.resolution.set(width,height)",
             "mesh.userData.isTransparentCuboid",
         ):
             self.assertIn(expected,viewer)

@@ -9,7 +9,8 @@ import {
   CAD_DRAW_ORDER,cadShapeRenderOrder,cadShapeZOffset,
   textboxFont,layoutTextboxText,
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
-  SVG_LINE_WIDTHS,SVG_LINE_TYPES,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
+  SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
+  cadOutlineSpec,recolorOctaveGeometry,
 } from '../cad_ui.mjs';
 
 const shape=(kind,x,y,width,height,text,rotation=0)=>({
@@ -140,12 +141,13 @@ test('divider clamps stop before any displayed SVG would need horizontal scrolli
 });
 
 
-test('all seventeen palette colors are unique, including rollover',()=>{
-  assert.equal(SVG_COLORS.length,17);
-  assert.equal(new Set(SVG_COLORS).size,17);
-  assert.equal(nextLegendColor(0),'#4F99CF');
-  assert.equal(nextLegendColor(1),'#E41A1C');
-  assert.equal(nextLegendColor(17),'#4F99CF');
+test('seven named palette colors are unique, including rollover',()=>{
+  assert.deepEqual(SVG_COLOR_CHOICES.map(c=>c.label),['红色','橙色','黄色','绿色','蓝色','紫色','灰色']);
+  assert.equal(SVG_COLORS.length,7);
+  assert.equal(new Set(SVG_COLORS).size,7);
+  assert.equal(nextLegendColor(0),'#E41A1C');
+  assert.equal(nextLegendColor(1),'#FF7F00');
+  assert.equal(nextLegendColor(7),'#E41A1C');
 });
 
 test('legend deduplicates before SVG loads and also during pending loads',()=>{
@@ -410,13 +412,16 @@ test('textbox explicit newline and bottom anchor preserve original position',()=
 test('SVG legend independent styles, original restoration and strict validation',()=>{
   const base=mergeSvgStyle({color:'#4F99CF'});
   assert.deepEqual(base,{color:'#4F99CF',lineWidth:null,lineStyle:null});
-  const width=mergeSvgStyle(base,{lineWidth:2.5});
+  const width=mergeSvgStyle(base,{lineWidth:5});
   const dash=mergeSvgStyle(width,{lineStyle:'8 5'});
   assert.deepEqual(mergeSvgStyle(dash,{color:'#E41A1C'}),
-    {color:'#E41A1C',lineWidth:2.5,lineStyle:'8 5'});
+    {color:'#E41A1C',lineWidth:5,lineStyle:'8 5'});
   assert.deepEqual(mergeSvgStyle(dash,{lineWidth:null,lineStyle:null}),base);
-  assert.deepEqual(SVG_LINE_WIDTHS,[0.5,0.75,1,1.5,2,2.5,3]);
-  assert.equal(SVG_LINE_TYPES.length,6);
+  assert.deepEqual(SVG_LINE_WIDTHS,[3,4,5,6,7]);
+  assert.equal(SVG_LINE_TYPES.length,5);
+  assert.ok(!SVG_LINE_TYPES.some(t=>t.label==='点线'));
+  assert.throws(()=>mergeSvgStyle(base,{lineWidth:2}),RangeError);
+  assert.throws(()=>mergeSvgStyle(base,{lineStyle:'1 5'}),RangeError);
   assert.throws(()=>mergeSvgStyle(base,{lineWidth:-1}),RangeError);
   assert.throws(()=>mergeSvgStyle(base,{lineStyle:'bad'}),RangeError);
   assert.throws(()=>mergeSvgStyle(base,{color:'red'}),RangeError);
@@ -460,10 +465,10 @@ test('restyle sets inline overrides on curves, preserves auxiliary geometry and 
   globalThis.XMLSerializer=class {serializeToString(){return JSON.stringify(
     Object.fromEntries(['curve','cssCurve','none','axisPath','protectedPath'].map(key=>[key,fixture[key].attrs])));}};
   try {
-    const style=mergeSvgStyle({color:'#4F99CF'},{lineWidth:2,lineStyle:'8 5'});
+    const style=mergeSvgStyle({color:'#4F99CF'},{lineWidth:4,lineStyle:'8 5'});
     const out=JSON.parse(restyleSvgMarkup('<svg/>',style));
-    assert.match(out.curve.style,/stroke-width:2 !important/);
-    assert.match(out.cssCurve.style,/stroke-dasharray:16 10 !important/);
+    assert.match(out.curve.style,/stroke-width:4 !important/);
+    assert.match(out.cssCurve.style,/stroke-dasharray:32 20 !important/);
     assert.equal(out.curve.d,'M0 0 L5 8 L9 3');
     assert.equal(out.curve.fill,'none');
     assert.equal(out.axisPath.style,undefined);
@@ -486,4 +491,46 @@ test('unmarked open polyline/path fallback avoids single segments and closed pat
   }));
   const xml={getElementsByTagName:name=>name==='*'?nodes:[]};
   assert.deepEqual(svgCurveNodes(xml),[nodes[0]]);
+});
+
+
+test('octave recolors all separate lines and filled points without changing unpainted channels',()=>{
+  const {xml,curve,cssCurve,axisPath,protectedPath}=svgFixture();
+  class Node {
+    constructor(localName,attrs={},parentElement=null){Object.assign(this,{localName,attrs:{...attrs},parentElement});}
+    getAttribute(key){return this.attrs[key]??null;}
+    hasAttribute(key){return Object.hasOwn(this.attrs,key);}
+    setAttribute(key,value){this.attrs[key]=value;}
+    matches(selector){return selector==='.dot' && this.attrs.class==='dot';}
+  }
+  const root=xml.documentElement, defs=new Node('defs',{},root);
+  const glyph=new Node('path',{id:'dotshape',d:'M0 0 L1 0 L1 1 Z',fill:'black'},defs);
+  const point=new Node('circle',{fill:'#123456',stroke:'none'},root);
+  const ellipse=new Node('ellipse',{},root);
+  const poly=new Node('polygon',{fill:'none',stroke:'black'},root);
+  const separate=new Node('line',{stroke:'black'},root);
+  const use=new Node('use',{'xlink:href':'#dotshape',fill:'black'},root);
+  const background=new Node('rect',{fill:'white'},root);
+  const text=new Node('g',{id:'text_1'},root);
+  const textUse=new Node('use',{fill:'black'},text);
+  const clip=new Node('clipPath',{},defs);
+  const clipPath=new Node('path',{fill:'black',d:'M0 0 L2 2 Z'},clip);
+  const css=new Node('style',{},root);css.textContent='.dot {fill:#222222; stroke:none}';
+  const cssPoint=new Node('circle',{class:'dot'},root);
+  const base=xml.getElementsByTagName;
+  xml.getElementsByTagName=name=>name==='*'?[...base(name),defs,glyph,point,ellipse,poly,separate,use,background,text,textUse,clip,clipPath,cssPoint,css]:name==='style'?[...base(name),css]:[];
+  recolorOctaveGeometry(xml,'#E41A1C');
+  for(const n of [curve,cssCurve,axisPath,separate,poly]) assert.match(n.attrs.style,/stroke:#E41A1C !important/);
+  for(const n of [point,ellipse,use,glyph,cssPoint]) assert.match(n.attrs.style,/fill:#E41A1C !important/);
+  assert.doesNotMatch(point.attrs.style,/stroke:/);
+  assert.doesNotMatch(poly.attrs.style,/fill:/);
+  for(const n of [background,textUse,clipPath,protectedPath]) assert.equal(n.attrs.style,undefined);
+});
+
+test('outline uses Excel color and width; equipment without border still has a visible contrast outline',()=>{
+  assert.deepEqual(cadOutlineSpec({shape_kind:'rectangle',colors:{outline:'#5B9BD5'},outline_width_px:3}),{color:'#5B9BD5',width:3});
+  assert.deepEqual(cadOutlineSpec({shape_kind:'ellipse',colors:{outline:'#123456'},outline_width_px:0.5}),{color:'#123456',width:2});
+  assert.deepEqual(cadOutlineSpec({shape_kind:'rectangle',colors:{outline:'无/透明',fill:'#FFFFFF'}}),{color:'#7a7a7a',width:2});
+  assert.equal(cadOutlineSpec({shape_kind:'textbox',colors:{outline:'无/透明'}}),null);
+  assert.equal(cadOutlineSpec({shape_kind:'rectangle',colors:{outline:'#123456'},outline_width_px:10}).width,5);
 });

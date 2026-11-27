@@ -302,11 +302,16 @@ export function fitSvgPane(width,height,maxHeightOverWidth) {
   return {width:fittedWidth,height:fittedWidth*ratio};
 }
 
-export const SVG_COLORS=Object.freeze([
-  '#4F99CF','#E41A1C','#4DAF4A','#FF7F00','#2C3E50','#333333',
-  '#3C5488','#E64B35','#00A087','#3A3935','#1F77B4',
-  '#FF7F0E','#2CA02C','#9A8B7A','#7E8B96','#A6998A','#D1C7BD',
-]);
+export const SVG_COLOR_CHOICES=Object.freeze([
+  {label:'红色',value:'#E41A1C'},
+  {label:'橙色',value:'#FF7F00'},
+  {label:'黄色',value:'#D6A800'},
+  {label:'绿色',value:'#4DAF4A'},
+  {label:'蓝色',value:'#4F99CF'},
+  {label:'紫色',value:'#984EA3'},
+  {label:'灰色',value:'#7E8B96'},
+].map(Object.freeze));
+export const SVG_COLORS=Object.freeze(SVG_COLOR_CHOICES.map(choice=>choice.value));
 export function nextLegendColor(index) {
   return SVG_COLORS[Math.abs(Math.trunc(index))%SVG_COLORS.length];
 }
@@ -359,12 +364,11 @@ export function recolorSvgMarkup(source,color) {
 
 
 // Legend styles are independent; null restores the original width/dash pattern.
-export const SVG_LINE_WIDTHS=Object.freeze([0.5,0.75,1,1.5,2,2.5,3]);
+export const SVG_LINE_WIDTHS=Object.freeze([3,4,5,6,7]);
 export const SVG_LINE_TYPES=Object.freeze([
   {label:'原始线型',value:null},
   {label:'实线',value:'none'},
   {label:'虚线',value:'8 5'},
-  {label:'点线',value:'1 5'},
   {label:'点划线',value:'10 4 1 4'},
   {label:'双点划线',value:'10 4 1 4 1 4'},
 ].map(Object.freeze));
@@ -397,19 +401,20 @@ function svgLineRole(node) {
 
 // Resolve common SVG presentation attributes, CSS selectors and inherited
 // stroke without inserting potentially active SVG markup into the live page.
-function strokeDeclaration(css) {
-  const values=[...String(css??'').matchAll(/(?:^|;)\s*stroke\s*:\s*([^;]+?)(?:\s*!important)?\s*(?=;|$)/gi)];
+function paintDeclaration(css,property='stroke') {
+  const pattern=new RegExp('(?:^|;)\\s*'+property+'\\s*:\\s*([^;]+?)(?:\\s*!important)?\\s*(?=;|$)','gi');
+  const values=[...String(css??'').matchAll(pattern)];
   if(!values.length) return null;
   const important=values.filter(v=>/!important\s*$/i.test(v[0]));
   const last=(important.length?important:values).at(-1);
   return {value:last[1].trim(),important:/!important\s*$/i.test(last[0])};
 }
-function strokeRules(xml) {
+function paintRules(xml,property='stroke') {
   const result=[];
   for(const sheet of xml.getElementsByTagName('style')) {
     const css=String(sheet.textContent||'').replace(/\/\*[\s\S]*?\*\//g,'');
     for(const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const decl=strokeDeclaration(match[2]);
+      const decl=paintDeclaration(match[2],property);
       if(!decl || match[1].trim().startsWith('@')) continue;
       for(const raw of match[1].split(',')) {
         const selector=raw.trim();
@@ -424,29 +429,29 @@ function strokeRules(xml) {
   }
   return result;
 }
-function resolvedStroke(node,rules) {
+function resolvedPaint(node,rules,property='stroke') {
   for(let current=node;current;current=current.parentElement) {
-    let winner=current.hasAttribute('stroke')
-      ? {value:current.getAttribute('stroke'),rank:-1,important:false}:null;
+    let winner=current.hasAttribute(property)
+      ? {value:current.getAttribute(property),rank:-1,important:false}:null;
     for(const rule of rules) {
       let matched=false;
       try {matched=current.matches?.(rule.selector)??false;} catch {continue;}
       if(matched && (!winner || Number(rule.important)>Number(winner.important) ||
         (rule.important===winner.important && rule.rank>=winner.rank))) winner=rule;
     }
-    const inline=strokeDeclaration(current.getAttribute('style'));
+    const inline=paintDeclaration(current.getAttribute('style'),property);
     if(inline && (!winner?.important || inline.important)) winner=inline;
     if(winner && !/^inherit$/i.test(winner.value)) return winner.value;
   }
   return null;
 }
 export function svgCurveNodes(xml) {
-  const rules=strokeRules(xml), marked=[], fallback=[];
+  const rules=paintRules(xml), marked=[], fallback=[];
   for(const node of xml.getElementsByTagName('*')) {
     const kind=(node.localName||'').toLowerCase();
     if(!['path','polyline','line','polygon','rect','use'].includes(kind)) continue;
     const role=svgLineRole(node);
-    if(role==='protected' || !recolorablePaint(resolvedStroke(node,rules))) continue;
+    if(role==='protected' || !recolorablePaint(resolvedPaint(node,rules))) continue;
     if(role==='marked') marked.push(node);
     // Untagged SVG: use open paths / polylines, not lines, bars or frames.
     else if(kind==='polyline' || (kind==='path' &&
@@ -457,17 +462,84 @@ export function svgCurveNodes(xml) {
   return marked.length?marked:fallback;
 }
 
-export function restyleSvgMarkup(source,requested) {
+// Octave plots may draw each measurement as a separate line and a filled
+// circle, polygon or symbol (<use>). Color ALL visible line/point geometry,
+// not just the PSD-style continuous curve. Keep transparent paint and
+// background fills, labels, clipping geometry and gradient definitions.
+const OCTAVE_GEOMETRY=/^(?:path|line|polyline|polygon|circle|ellipse|rect|use)$/i;
+const NON_DATA_CONTAINER=/^(?:mask|clippath|filter|pattern|lineargradient|radialgradient|metadata|title|desc|text|tspan)$/i;
+const LABEL_CONTAINER=/(?:^|[\s_.-])(?:text|labels?|background)(?=$|[\s_.-]|\d)/i;
+function octavePaintable(node,definition=false) {
+  for(let p=node;p;p=p.parentElement) {
+    if(NON_DATA_CONTAINER.test(p.localName||'')) return false;
+    if(!definition && /^(?:defs|marker|symbol)$/i.test(p.localName||'')) return false;
+    if(LABEL_CONTAINER.test([p.getAttribute('id'),p.getAttribute('class')].join(' '))) return false;
+  }
+  return true;
+}
+function applySvgPaint(node,properties) {
+  if(!properties.length) return;
+  const old=node.getAttribute('style')||'';
+  const suffix=properties.map(([key,value])=>key+':'+value+' !important').join(';');
+  node.setAttribute('style',old.replace(/;+\s*$/,'')+(old.trim()?';':'')+suffix);
+}
+export function recolorOctaveGeometry(xml,color) {
+  const stroke=paintRules(xml),fill=paintRules(xml,'fill');
+  const nodes=Array.from(xml.getElementsByTagName('*'));
+  const byId=new Map(nodes.filter(n=>n.getAttribute('id')).map(n=>[n.getAttribute('id'),n]));
+  const processed=new Set();
+  function visit(node,definition=false) {
+    if(!node || processed.has(node) || !octavePaintable(node,definition)) return;
+    processed.add(node);
+    const kind=(node.localName||'').toLowerCase();
+    if(OCTAVE_GEOMETRY.test(kind)) {
+      const props=[];
+      const line=resolvedPaint(node,stroke);
+      const inside=resolvedPaint(node,fill,'fill');
+      if(recolorablePaint(line)) props.push(['stroke',color]);
+      // No new fill on open paths or lines. Filled point symbols (including
+      // implicit SVG default black) and closed paths are recolored.
+      const point=/^(?:circle|ellipse|polygon|use)$/.test(kind) ||
+        (kind==='path' && /[zZ]\s*$/.test(node.getAttribute('d')||''));
+      if(point && (inside===null || recolorablePaint(inside))) props.push(['fill',color]);
+      else if(kind==='path' && recolorablePaint(inside) && svgLineRole(node)==='marked')
+        props.push(['fill',color]);
+      applySvgPaint(node,props);
+      if(kind==='use') {
+        const href=node.getAttribute('href')||node.getAttribute('xlink:href');
+        if(href?.startsWith('#')) visit(byId.get(href.slice(1)),true);
+      }
+    }
+    if(definition) for(const child of Array.from(node.children||[])) visit(child,true);
+  }
+  for(const node of nodes) {
+    if(OCTAVE_GEOMETRY.test(node.localName||'')) visit(node);
+    if(node.localName?.toLowerCase()==='marker') visit(node,true);
+  }
+}
+export function restyleSvgMarkup(source,requested,kind='psd') {
   const style=mergeSvgStyle(requested);
   const xml=new DOMParser().parseFromString(source,'image/svg+xml');
   if(xml.getElementsByTagName('parsererror').length ||
      xml.documentElement?.localName!=='svg') throw new Error('Cannot parse original SVG source');
-  const curves=svgCurveNodes(xml);
+  let curves=svgCurveNodes(xml);
+  if(kind==='octave' && !curves.length) {
+    const rules=paintRules(xml);
+    curves=Array.from(xml.getElementsByTagName('*')).filter(node=>
+      /^(?:line|path|polyline)$/i.test(node.localName||'') &&
+      svgLineRole(node)!=='protected' &&
+      recolorablePaint(resolvedPaint(node,rules)) &&
+      !/[zZ]\s*$/.test(node.getAttribute('d')||''));
+  }
   // The original color-only fallback is retained for legacy SVGs lacking
   // recognizable curves; never guess which auxiliary lines to resize.
   if(!curves.length) {
     if(style.lineWidth!==null || style.lineStyle!==null)
       throw new Error('未识别到可修改线型或线宽的频谱曲线');
+    if(kind==='octave') {
+      recolorOctaveGeometry(xml,style.color);
+      return new XMLSerializer().serializeToString(xml);
+    }
     return recolorSvgMarkup(source,style.color);
   }
   for(const node of curves) {
@@ -482,9 +554,26 @@ export function restyleSvgMarkup(source,requested) {
     }
     // An inline important declaration overrides author CSS, including class
     // rules. Original attributes/geometry/fill remain intact.
-    const old=node.getAttribute('style')||'';
-    const suffix=properties.map(([key,value])=>key+':'+value+' !important').join(';');
-    node.setAttribute('style',old.replace(/;+\s*$/,'')+(old.trim()?';':'')+suffix);
+    applySvgPaint(node,properties);
   }
+  if(kind==='octave') recolorOctaveGeometry(xml,style.color);
   return new XMLSerializer().serializeToString(xml);
+}
+
+
+// Thick screen-space borders for all equipment/sensor geometry. Keep the
+// actual DrawingML RGB when present. If it has no outline, derive a darker
+// fill-based contrast outline for equipment/sensors, but not textboxes.
+export function cadOutlineSpec(item) {
+  const colors=item.colors||{};
+  const valid=value=>typeof value==='string' && /^#[0-9a-f]{6}$/i.test(value);
+  const original=valid(colors.outline);
+  const equipment=['rectangle','ellipse'].includes(item.shape_kind);
+  if(!original && !equipment) return null;
+  const fill=valid(colors.fill)?colors.fill:'#607080';
+  const dark='#'+[1,3,5].map(i=>Math.round(parseInt(fill.slice(i,i+2),16)*0.48)
+    .toString(16).padStart(2,'0')).join('');
+  const width=Number(item.outline_width_px);
+  return {color:original?colors.outline:dark,
+    width:Math.min(5,Math.max(2,Number.isFinite(width)?width:2))};
 }

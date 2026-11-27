@@ -227,6 +227,24 @@ def style_color(node: ET.Element | None, style: ET.Element | None, kind: str,
     return "无/透明"
 
 
+def outline_width_px(outline: ET.Element | None, style: ET.Element | None,
+                     lines: list[ET.Element]) -> float | None:
+    """DrawingML line width in 96-DPI pixels, direct then theme reference."""
+    value = outline.get("w") if outline is not None else None
+    if value is None and style is not None:
+        ref = first_child(style, "lnRef")
+        try:
+            index = int(ref.get("idx", "0")) if ref is not None else 0
+            if 0 < index <= len(lines):
+                value = lines[index - 1].get("w")
+        except ValueError:
+            pass
+    try:
+        return max(0, int(value)) / EMUS_PER_PIXEL if value is not None else None
+    except ValueError:
+        return None
+
+
 def marker_xy(marker: ET.Element, metrics: SheetMetrics) -> tuple[int, int]:
     return metrics.xy(child_int(marker, "col"), child_int(marker, "row"),
                       child_int(marker, "colOff"), child_int(marker, "rowOff"))
@@ -509,6 +527,7 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
                     props = first_child(element, "grpSpPr")
                 outline = first_child(props, "ln")
                 style = first_child(element, "style")
+                obj["outline_width_px"] = outline_width_px(outline, style, lines)
                 obj["colors"] = {
                     "fill": style_color(props, style, "fill", palette, fills, lines),
                     "outline": style_color(outline, style, "line", palette, fills, lines),
