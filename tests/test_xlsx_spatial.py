@@ -287,7 +287,7 @@ class TestGeometry(unittest.TestCase):
         styled=(
             '<xdr:txBody><a:bodyPr anchor="b"/>'
             '<a:p><a:r><a:rPr sz="2400">'
-            '<a:solidFill><a:srgbClr val="DD00AA"/></a:solidFill>'
+            '<a:solidFill><a:srgbClr val="DD00AA"/></a:solidFill></a:rPr>'
             '<a:t>上</a:t></a:r><a:br/><a:r><a:rPr/>'
             '<a:t>下</a:t></a:r></a:p></xdr:txBody>')
         textbox=textbox[:start]+styled+textbox[end:]
