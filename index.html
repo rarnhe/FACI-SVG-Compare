@@ -1,183 +1,137 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Fab / Subfab · Three.js + Bokeh</title>
-<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<title>Fab / Subfab CAD</title>
 <style>
-  * { box-sizing:border-box; }
-  html, body { margin:0; width:100%; height:100%; font-family:Arial,"Microsoft YaHei",sans-serif; }
-  #layout { display:grid; grid-template-columns:minmax(0, 2fr) minmax(330px, 1fr); width:100%; height:100%; }
-  #scene { position:relative; overflow:hidden; background:#17202b; }
-  #scene canvas { display:block; width:100%; height:100%; }
-  #legend { position:absolute; left:16px; top:16px; color:#f2f6fb; background:#1c2a3ec7; padding:10px 13px; border-radius:8px; pointer-events:none; }
-  #legend small { color:#bed0dd; }
-  #panel { display:flex; flex-direction:column; min-width:0; background:white; }
-  #panel header { padding:15px 18px; border-bottom:1px solid #dfe6ed; }
-  #panel header p { margin:7px 0 0; color:#63707e; font-size:12px; }
-  iframe { border:0; flex:1; width:100%; }
-  @media(max-width:760px) { #layout { grid-template-columns:1fr; grid-template-rows:52% 48%; } }
+:root{font-family:"Segoe UI","Microsoft YaHei",sans-serif;color-scheme:light}
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
+#layout{display:grid;grid-template-columns:minmax(0,58fr) 8px minmax(0,42fr);width:100vw;height:100vh}
+#cad-pane{position:relative;min-width:0;min-height:0;overflow:hidden;background:#fff}
+#cad-layers{width:100%;height:100%;display:grid;grid-template-rows:minmax(0,1fr) 8px minmax(0,1fr)}
+#cad-fixed-divider{width:100%;height:8px;background:#c4d1da;pointer-events:none;user-select:none}
+.cad-layer{position:relative;min-width:0;min-height:0;overflow:hidden;background:#fff}
+.cad-layer canvas{display:block;position:absolute;inset:0;width:100%;height:100%}
+.cad-operation{position:absolute;top:10px;left:12px;z-index:3;max-width:calc(100% - 80px);
+  display:flex;align-items:center;height:36px;color:#111;background:#fff;
+  border:1px solid #bfc8cf;border-radius:8px;padding:0 10px;
+  pointer-events:none;font-size:14px;line-height:1}
+.cad-selection{position:absolute;bottom:12px;left:12px;right:auto;z-index:3;
+  max-width:calc(100% - 24px);color:#111;background:#fffffff2;border:1px solid #bbc6d0;
+  border-radius:8px;padding:5px 9px;font-size:12px;line-height:1.5;
+  overflow-wrap:anywhere;pointer-events:none}
+.cad-selection:empty{display:none}
+#reset-view{position:absolute;top:10px;right:12px;z-index:5;width:36px;height:36px;
+  border:1px solid #bfc8cf;background:#fff;color:#111;border-radius:8px;
+  font-size:14px;line-height:1;cursor:pointer}
+#reset-view:hover,#reset-view:focus-visible{background:#c9e3f3;outline:2px solid #7bb8e1}
+.cad-context-menu{position:absolute;z-index:9;min-width:112px;
+  padding:5px;background:#fff;border:1px solid #aab6c0;box-shadow:0 5px 17px #0002;
+  border-radius:6px;color:#111;font-size:13px}
+.cad-context-menu[hidden],.cad-submenu[hidden]{display:none}
+.cad-context-menu button{display:flex;justify-content:space-between;align-items:center;
+  gap:22px;width:100%;padding:7px 10px;color:#111;background:#fff;border:0;
+  border-radius:3px;font:inherit;text-align:left;cursor:pointer}
+.cad-context-menu button:hover,.cad-context-menu button:focus-visible{background:#eaf3fc;outline:0}
+.cad-menu-arrow{font-size:16px}
+.cad-submenu{position:absolute;z-index:11;left:0;top:0;padding:5px;min-width:94px;
+  display:flex;flex-direction:column;align-items:stretch;gap:2px;
+  background:#fff;border:1px solid #aab6c0;box-shadow:0 5px 17px #0002;border-radius:5px}
+.cad-submenu button{display:block;flex:none;width:100%;padding:7px 12px;
+  text-align:left;border:0;background:#fff;color:#111;cursor:pointer;font:inherit}
+.cad-submenu button:hover,.cad-submenu button:focus-visible{background:#eaf3fc;outline:0}
+#reference-pane{position:relative;min-width:0;min-height:0;background:#fff;overflow:hidden}
+#reference-log{position:absolute;z-index:12;top:12px;right:12px;display:none;
+  width:max-content;max-width:calc(100% - 24px);height:auto;max-height:calc(100% - 24px);
+  overflow:hidden;background:#fffffff2;border:1px solid #555;border-radius:0;
+  box-shadow:0 3px 10px #0002;padding:6px 9px;color:#111;font-size:14px;font-weight:700;
+  white-space:nowrap;text-align:left;cursor:grab;touch-action:none;user-select:none}
+#reference-log:active{cursor:grabbing}
+#reference-log .reference-log-line{display:block;line-height:1.7;text-align:left;
+  font-size:14px;font-weight:700;cursor:context-menu}
+#legend-context-menu{position:absolute;z-index:20;display:block;background:#fff;
+  border:1px solid #9cabb7;padding:4px;box-shadow:0 4px 12px #0002}
+.legend-menu-primary,.legend-menu-secondary{display:flex;flex-direction:column;gap:2px;align-items:stretch}
+.legend-menu-primary button{display:block;width:100%;text-align:left}
+.legend-menu-secondary{position:absolute;z-index:21;top:0;left:100%;min-width:118px;
+  max-height:min(75vh,460px);overflow-y:auto;white-space:nowrap;background:#fff;
+  border:1px solid #9cabb7;box-shadow:0 4px 12px #0002;padding:4px}
+.legend-menu-secondary[hidden]{display:none}
+#legend-context-menu[hidden]{display:none}
+#legend-context-menu button{padding:5px 18px;border:0;background:#fff;color:#111;
+  font:13px "Segoe UI","Microsoft YaHei",sans-serif;cursor:pointer}
+#legend-context-menu button:hover{background:#e5f2fc}
+.legend-menu-secondary button{text-align:left}
+.legend-menu-secondary button[aria-checked="true"]::after{content:' ✓';font-weight:700}
+#reference-frames{display:grid;grid-template-rows:minmax(0,1fr) 8px minmax(0,1fr);height:100%;width:100%}
+.reference-frame{min-height:0;min-width:0;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#fff}
+.reference-frame img{display:none;flex:0 0 auto;width:auto;height:auto;object-fit:contain}
+.reference-overlays{position:absolute;inset:0;z-index:2;background:transparent;pointer-events:none}
+.reference-overlays img{display:block;position:absolute;left:50%;top:50%;
+  transform:translate(-50%,-50%);background:transparent;opacity:1;pointer-events:none}
+.reference-placeholder{padding:15px;color:#8293a4;font-size:12px;text-align:center}
+.splitter{z-index:7;touch-action:none;user-select:none;position:relative;
+  display:flex;align-items:center;justify-content:center;background:#c4d1da}
+.splitter::after{content:"";background:#6a8ca5;border-radius:3px}
+#main-splitter{cursor:col-resize;width:8px}
+#main-splitter::after{width:3px;height:42px}
+#reference-splitter{cursor:row-resize;height:8px}
+#reference-splitter::after{width:44px;height:3px}
+.splitter:hover,.splitter:focus-visible{background:#8cbad4;outline:none}
+body.dragging-divider{cursor:col-resize;user-select:none}
+body.dragging-divider.vertical{cursor:row-resize}
+@media(max-width:750px){
+ #layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,55%) minmax(0,45%)}
+ #main-splitter{display:none}
+ .cad-operation{top:6px;left:6px;right:59px;font-size:14px}
+ .cad-selection{bottom:6px;left:6px;font-size:11px}
+ #reset-view{top:6px;right:6px}
+}
 </style>
 <script type="importmap">
 {"imports":{
-  "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
-  "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+"three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+"three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
 }}
 </script>
 </head>
 <body>
 <div id="layout">
-  <div id="scene">
-    <div id="legend"><b>Fab / Subfab 3D</b><br/><small>点击柱体查询对应 Bokeh 数据<br/>拖动旋转 · 滚轮缩放 · 右键平移</small><br/><span id="picked">当前：C001</span></div>
-  </div>
-  <aside id="panel">
-    <header><strong>Python / Bokeh 数据分析</strong><p>图表实时响应三维选中结果，且无需刷新 Bokeh 页面</p></header>
-    <iframe id="analysisFrame" src="/analysis" title="Bokeh 数据面板"></iframe>
+  <section id="cad-pane" aria-label="Fab 与 Subfab 联动 CAD">
+    <button type="button" id="reset-view" title="恢复平面俯视（保持当前缩放与平移）" aria-label="恢复平面俯视">↺</button>
+    <div id="cad-layers">
+      <div class="cad-layer" id="fab-stage" aria-label="Fab CAD">
+        <div class="cad-operation">滚轮缩放·右键拖动平移·左键拖动旋转</div>
+        <div id="fab-selected-info" class="cad-selection" aria-live="polite"></div>
+      </div>
+      <div id="cad-fixed-divider" aria-hidden="true"></div>
+      <div class="cad-layer" id="subfab-stage" aria-label="Subfab CAD">
+        <div id="subfab-selected-info" class="cad-selection" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+  <div id="main-splitter" class="splitter" role="separator" aria-label="拖动调整 CAD 与 SVG 区域宽度" aria-orientation="vertical" tabindex="0"></div>
+  <aside id="reference-pane" aria-label="PSD 与倍频程 SVG">
+    <div id="reference-frames">
+      <div class="reference-frame" id="psd-frame">
+        <img id="psd-reference" alt="PSD 参考底图">
+        <div class="reference-overlays" id="psd-overlays" aria-hidden="true"></div>
+        <div class="reference-placeholder" id="psd-placeholder">PSD 图片未提供</div>
+      </div>
+      <div id="reference-splitter" class="splitter" role="separator" aria-label="拖动调整上下 SVG 图片区域高度" aria-orientation="horizontal" tabindex="0"></div>
+      <div class="reference-frame" id="octave-frame">
+        <img id="octave-reference" alt="1/3 倍频程参考底图">
+        <div class="reference-overlays" id="octave-overlays" aria-hidden="true"></div>
+        <div class="reference-placeholder" id="octave-placeholder">倍频程图片未提供</div>
+      </div>
+    </div>
+    <div id="reference-log" role="status" aria-label="已选择 SVG 图表"></div>
+    <div id="legend-context-menu" hidden role="menu"></div>
   </aside>
 </div>
-<script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x17202b);
-const stage = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-stage.insertBefore(renderer.domElement, stage.firstChild);
-const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
-camera.position.set(220, 125, 250);
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(78, 10, 90); // Y-up: floor height is Y
-controls.enableDamping = true;
-controls.update();
-scene.add(new THREE.AmbientLight(0xffffff, 2));
-const light = new THREE.DirectionalLight(0xffffff, 2);
-light.position.set(130, 200, 90);
-scene.add(light);
-
-// Demonstration floors; replace/augment with your existing SVG planes.
-const floorGeometry = new THREE.PlaneGeometry(180, 220);
-floorGeometry.rotateX(-Math.PI/2);
-for (const [y, color, opacity] of [[0, 0x468acc, 0.18], [20, 0x54c9b5, 0.22]]) {
-  const floor = new THREE.Mesh(floorGeometry,
-    new THREE.MeshBasicMaterial({color, transparent:true, opacity, side:THREE.DoubleSide, depthWrite:false}));
-  floor.position.set(78,y,90);
-  scene.add(floor);
-}
-
-const pickable = [];
-const demoColumns = new THREE.Group();
-const demo = [
-  ['C001', 30, 30],
-  ['C002', 80, 88],
-  ['C003', 137, 155],
-];
-for (const [elementId,x,z] of demo) {
-  const geometry = new THREE.BoxGeometry(8, 45, 8);
-  const material = new THREE.MeshStandardMaterial({color:0x9cb5c9,metalness:0.2,roughness:0.5});
-  const mesh = new THREE.Mesh(geometry,material);
-  mesh.position.set(x,17,z);
-  mesh.name = elementId;
-  mesh.userData.elementId = elementId;
-  demoColumns.add(mesh);
-  pickable.push(mesh);
-}
-scene.add(demoColumns);
-
-// Ask Python which optional models are present before loading bytes.
-// No request to a missing GLB; drop Column.glb into assets/ and refresh to enable it.
-async function loadOptionalColumn() {
-  try {
-    const response = await fetch('./model-manifest.json', {cache: 'no-store'});
-    if (!response.ok) throw new Error(`Model manifest returned HTTP ${response.status}`);
-    const {column} = await response.json();
-    if (!column?.available) {
-      console.info('Column.glb is not present; demo columns remain available.');
-      return;
-    }
-    new GLTFLoader().load(column.url, gltf => {
-      gltf.scene.traverse(child => {
-        if (child.isMesh) {
-          child.userData.elementId ??= child.name;
-          pickable.push(child);
-        }
-      });
-      scene.add(gltf.scene);
-    }, undefined, error => {
-      console.error('Column.glb exists but could not be loaded:', error);
-    });
-  } catch (error) {
-    console.warn('Optional model availability could not be checked:', error);
-  }
-}
-loadOptionalColumn();
-
-// This app never registers a Service Worker. Remove only stale registrations
-// of the old root /sw.js script (if one was left by a previous local app).
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then(registrations =>
-    Promise.all(registrations.filter(registration => {
-      const workers = [registration.active, registration.waiting, registration.installing];
-      return workers.some(worker => {
-        if (!worker) return false;
-        try { return new URL(worker.scriptURL).pathname === '/sw.js'; }
-        catch { return false; }
-      });
-    }).map(registration => registration.unregister()))
-  ).catch(() => {});
-}
-
-const iframe = document.getElementById('analysisFrame');
-let bokehReady = false;
-let pendingId = 'C001';
-window.addEventListener('message', event => {
-  if (event.origin !== location.origin || event.source !== iframe.contentWindow) return;
-  if (event.data?.type === 'BOKEH_READY') {
-    bokehReady = true;
-    sendSelection(pendingId);
-  }
-});
-function sendSelection(elementId) {
-  pendingId = elementId;
-  document.getElementById('picked').textContent = `当前：${elementId}`;
-  if (!bokehReady) return;
-  iframe.contentWindow.postMessage({type:'SELECT_ELEMENT', elementId}, location.origin);
-}
-
-const picker = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-let pointerStart;
-renderer.domElement.addEventListener('pointerdown', event => {
-  pointerStart = {x:event.clientX,y:event.clientY};
-});
-renderer.domElement.addEventListener('pointerup', event => {
-  if (event.button !== 0 || !pointerStart) return;
-  const delta = Math.hypot(event.clientX-pointerStart.x,event.clientY-pointerStart.y);
-  pointerStart = undefined;
-  if (delta > 5) return; // Don't treat camera dragging as a click.
-  const rect = renderer.domElement.getBoundingClientRect();
-  mouse.x = 2*(event.clientX-rect.left)/rect.width-1;
-  mouse.y = 1-2*(event.clientY-rect.top)/rect.height;
-  picker.setFromCamera(mouse,camera);
-  const hit = picker.intersectObjects(pickable,true)[0];
-  if (!hit) return;
-  const id = hit.object.userData.elementId || hit.object.name;
-  if (id) sendSelection(id);
-});
-
-function resize() {
-  const width=stage.clientWidth, height=stage.clientHeight;
-  camera.aspect=width/height;
-  camera.updateProjectionMatrix();
-  renderer.setSize(width,height,false);
-}
-new ResizeObserver(resize).observe(stage);
-resize();
-function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); }
-animate();
-</script>
+<script type="module" src="./cad_viewer.js"></script>
 </body>
 </html>

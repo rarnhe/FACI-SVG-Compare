@@ -25,16 +25,36 @@ from bokeh.plotting import figure
 from bokeh.server.server import Server
 from tornado.web import RequestHandler, StaticFileHandler
 
+# Both the -m package entry and direct "python __main__.py" remain supported.
+if __package__:
+    from .xlsx_spatial import (
+        SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
+    )
+    from .cad_service import build_cad_manifest, extract_embedded_image
+    from .cad_svg_catalog import build_ellipse_svg_catalog
+else:
+    from xlsx_spatial import (
+        SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
+    )
+    from cad_service import build_cad_manifest, extract_embedded_image
+    from cad_svg_catalog import build_ellipse_svg_catalog
+
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8080"))
 STATIC_DIR = Path(__file__).resolve().parent
 IDENTITY_PATH = "/__onethree_identity__"
-COLUMN_MODEL_NAME = "Column.glb"
 # Keep the identity tied to the running source, not just the repository name.
 # A new invocation must not silently reuse a previous Python process serving old HTML.
 BUILD_REVISION = sha256(
     (STATIC_DIR / "__main__.py").read_bytes()
     + (STATIC_DIR / "index.html").read_bytes()
+    + (STATIC_DIR / "xlsx_spatial.py").read_bytes()
+    + (STATIC_DIR / "cad_service.py").read_bytes()
+    + (STATIC_DIR / "cad_viewer.js").read_bytes()
+    + (STATIC_DIR / "cad_geometry.mjs").read_bytes()
+    + (STATIC_DIR / "cad_ui.mjs").read_bytes()
+    + (STATIC_DIR / "cad_svg_catalog.py").read_bytes()
+    + (STATIC_DIR / "cad_validation.py").read_bytes()
 ).hexdigest()[:12]
 APP_ID = f"OneThreeOctave-SVG-Compare:Bokeh-Three.js:{BUILD_REVISION}"
 
@@ -46,43 +66,72 @@ class NoCacheIndexHandler(StaticFileHandler):
         return 0
 
     def set_extra_headers(self, path):
+        # Windows may map .mjs to text/plain. ES module scripts require a
+        # JavaScript MIME type regardless of the host's MIME registry.
+        if str(path).lower().endswith((".js", ".mjs")):
+            self.set_header("Content-Type", "text/javascript; charset=utf-8")
         self.set_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.set_header("Pragma", "no-cache")
         self.set_header("Expires", "0")
         self.set_header("X-App-Revision", BUILD_REVISION)
 
 
-class LegacyColumnHandler(RequestHandler):
-    """Handle requests from an already-open, stale viewer without producing a 404."""
+class CadManifestHandler(RequestHandler):
+    """Serve a read-only JSON manifest for two linked XLSX sheets."""
 
-    def get(self, _legacy_name):
-        self.set_header("Cache-Control", "no-store")
-        if column_model_available():
-            # Direct old cached GLTFLoader clients to the new, real filename.
-            self.redirect("/viewer/assets/Column.glb", permanent=False, status=307)
-            return
-        # No GLB exists; avoid a server-side 404 while client is migrated.
-        self.set_status(204)
-        self.finish()
-
-
-def column_model_available(asset_dir: Path | None = None) -> bool:
-    """Check the real local asset directory without downloading a missing GLB."""
-    directory = asset_dir if asset_dir is not None else STATIC_DIR / "assets"
-    return (directory / COLUMN_MODEL_NAME).is_file()
-
-
-class OptionalModelManifestHandler(RequestHandler):
-    """Tell the viewer which optional models exist; refreshes after assets change."""
+    def initialize(self, state):
+        self.state = state
 
     def get(self):
         self.set_header("Cache-Control", "no-store")
-        self.write({
-            "column": {
-                "available": column_model_available(),
-                "url": "./assets/Column.glb",
-            }
-        })
+        self.write(self.state["manifest"])
+
+
+class EllipseSvgCatalogHandler(RequestHandler):
+    """On-demand SVG index for an actual XLSX ellipse and its parent textbox."""
+
+    def initialize(self, state):
+        self.state = state
+
+    def get(self, layer, object_index):
+        try:
+            payload = build_ellipse_svg_catalog(
+                STATIC_DIR / "assets", self.state["sheets"],
+                int(layer), int(object_index),
+            )
+        except (ValueError, OSError):
+            self.send_error(404)
+            return
+        self.set_header("Cache-Control", "no-store")
+        self.write(payload)
+
+
+class CadImageHandler(RequestHandler):
+    """Read only XLSX picture parts selected by trusted sheet/object indices."""
+
+    def initialize(self, state):
+        self.state = state
+
+    def get(self, layer, image_index):
+        try:
+            data, content_type = extract_embedded_image(
+                self.state["workbook"], self.state["sheets"],
+                int(layer), int(image_index),
+            )
+        except (ValueError, KeyError, FileNotFoundError, OSError):
+            self.send_error(404)
+            return
+        self.set_header("Content-Type", content_type)
+        self.set_header("Cache-Control", "no-store")
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.write(data)
+
+
+class PrivateWorkbookHandler(RequestHandler):
+    """The source Excel workbook is local input data, never public static media."""
+
+    def get(self, _filename):
+        self.send_error(404)
 
 
 class NoServiceWorkerHandler(RequestHandler):
@@ -131,6 +180,17 @@ def console_message(localized: str, fallback: str, stream) -> str:
     except (UnicodeEncodeError, LookupError):
         return fallback
     return localized
+
+def print_spatial_report(workbook, sheets):
+    """Print all XLSX objects; protect output in non-Unicode Windows consoles."""
+    rendered = format_spatial_report(workbook, sheets)
+    encoding = sys.stdout.encoding or "utf-8"
+    try:
+        rendered.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        rendered = rendered.encode(encoding, errors="backslashreplace").decode(encoding)
+    print(rendered, flush=True)
+
 
 # Replace with your own database-backed mapping / query results.
 SENSORS = {
@@ -213,6 +273,21 @@ def make_bokeh_document(doc):
 
 
 def main():
+    # Exactly one .xlsx is allowed in assets/. Compute geometry before opening
+    # the browser; malformed/ambiguous input cannot silently choose a workbook.
+    try:
+        workbook, spatial_sheets = load_assets_spatial_report(STATIC_DIR / "assets")
+    except (SpatialXlsxError, OSError) as error:
+        raise SystemExit(f"[XLSX ERROR] {error}") from None
+
+    cad_state = {
+        "workbook": workbook,
+        "sheets": spatial_sheets,
+        "manifest": build_cad_manifest(workbook, spatial_sheets, STATIC_DIR / "assets"),
+    }
+
+    # A workbook-specific tab caption, set by the HTML document after it loads
+    # the manifest. No other data source is used as an arbitrary HTML title.
     # An explicit revision in the URL defeats old HTML caches on first launch.
     url = f"http://{HOST}:{PORT}/viewer/index.html?rev={BUILD_REVISION}"
     try:
@@ -225,9 +300,12 @@ def main():
                 (r"/__onethree_identity__", ApplicationIdentityHandler),
                 (r"/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/sw\.js", NoServiceWorkerHandler),
-                (r"/viewer/model-manifest\.json", OptionalModelManifestHandler),
-                (r"/viewer/(index\.html)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),
-                (r"/viewer/assets/(柱子\.glb|%E6%9F%B1%E5%AD%90\.glb)", LegacyColumnHandler),
+                (r"/viewer/cad-layout\.json", CadManifestHandler, {"state": cad_state}),
+                (r"/viewer/cad-image/([0-9]+)/([0-9]+)", CadImageHandler, {"state": cad_state}),
+                (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)", EllipseSvgCatalogHandler,
+                 {"state": cad_state}),
+                (r"/viewer/(index\.html|cad_viewer\.js|cad_geometry\.mjs|cad_ui\.mjs)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),
+                (r"/viewer/assets/((?i:.*\.xlsx))", PrivateWorkbookHandler),
                 (r"/viewer/assets/(.*)", StaticFileHandler, {"path": str(STATIC_DIR / "assets")}),
             ],
         )
@@ -240,6 +318,7 @@ def main():
                 f"Already running. Opening existing viewer: {url}",
                 sys.stdout,
             ), flush=True)
+            print_spatial_report(workbook, spatial_sheets)
             open_viewer(url)
             return
         raise SystemExit(console_message(
@@ -252,6 +331,7 @@ def main():
         )) from None
     server.start()
     print("Three.js + Bokeh viewer:", url, flush=True)
+    print_spatial_report(workbook, spatial_sheets)
     open_viewer(url)
     try:
         server.io_loop.start()

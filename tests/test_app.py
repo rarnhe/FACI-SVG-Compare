@@ -43,19 +43,6 @@ class TestPackageLayout(unittest.TestCase):
         self.assertFalse((ROOT / "frontend").exists())
 
 
-class TestOptionalAssets(unittest.TestCase):
-    def test_column_glb_is_optional_and_detected_when_present(self):
-        with TemporaryDirectory() as location:
-            asset_dir = Path(location)
-            self.assertFalse(app.column_model_available(asset_dir))
-            (asset_dir / "Other.glb").write_bytes(b"sample")
-            self.assertFalse(app.column_model_available(asset_dir))
-            (asset_dir / "Column.glb").write_bytes(b"glTF")
-            self.assertTrue(app.column_model_available(asset_dir))
-            (asset_dir / "Column.glb").unlink()
-            self.assertFalse(app.column_model_available(asset_dir))
-
-
 class TestSensorHistory(unittest.TestCase):
     def test_known_sensors_have_24_aligned_samples(self):
         for element_id in SENSORS:
@@ -107,31 +94,366 @@ class TestBokehSelection(unittest.TestCase):
 
 
 class TestStaticFrontend(unittest.TestCase):
-    def test_frontend_links_to_bokeh_and_has_pick_logic(self):
+    def test_new_two_layer_cad_layout_and_svg_panes(self):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        for expected in ('src="/analysis"', "Raycaster", "SELECT_ELEMENT", "BOKEH_READY", "GLTFLoader", "pointerup"):
+        for expected in ('id="fab-stage"', 'id="subfab-stage"', 'id="reset-view"',
+                         'id="psd-reference"', 'id="octave-reference"', 'src="./cad_viewer.js"'):
             with self.subTest(expected=expected):
                 self.assertIn(expected, html)
+        self.assertNotIn("GLTFLoader", html)
+
+    def test_shared_orbit_controls_and_clickable_shapes(self):
+        viewer = (STATIC_DIR / "cad_viewer.js").read_text(encoding="utf-8")
+        for expected in ("OrbitControls", "synchronizeFrom(", "THREE.MOUSE.ROTATE",
+                         "THREE.MOUSE.PAN", "raycaster.intersectObjects",
+                         "resetTopView()", "cad-layout.json",
+                         "kind==='ellipse'", "kind==='rectangle'", "kind==='textbox'",
+                         "installSplitter('main-splitter'", "installSplitter('reference-splitter'"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, viewer)
+        self.assertNotIn("GLTFLoader", viewer)
+
+
+    def test_operation_labels_are_plain_black_and_each_layer_has_own_breadcrumb(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        self.assertEqual(html.count("滚轮缩放·右键拖动平移·左键拖动旋转"),1)
+        for attr in ('id="fab-selected-info"', 'id="subfab-selected-info"',
+                     'class="cad-operation"', 'class="cad-selection"'):
+            self.assertIn(attr,html)
+        self.assertIn(".cad-operation{",html)
+        self.assertIn("border:1px solid #bfc8cf;border-radius:8px",html)
+        self.assertIn("border-radius:8px",html)
+        self.assertIn("bottom:12px;left:12px",html)
+        self.assertNotIn('id="selected-info"',html)
+        self.assertNotIn('id="cad-info"',html)
+        self.assertNotIn("Fab / Subfab · 联动 CAD 视图",html)
+
+    def test_white_background_and_dynamic_context_menu_hierarchy(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        self.assertIn("scene.background = new THREE.Color(0xffffff)",viewer)
+        self.assertIn("background:#fff",html)
+        for marker in ("createContextMenu(", "closeContextMenus(", "openContextMenu(",
+                       "selectionParts(", "workbookName=data.workbook",
+                       "if (kind !== 'textbox') layer.clickable.push(clickTarget)",
+                       "event.button===2", "'X','Y','Z'",
+                       "'./cad-svg-catalog/'", "showAxisSubmenu(", "prefetchSvg(",
+                       "appendReferenceHistory(", "document.title=workbookName"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker,viewer)
+        self.assertIn("selectOnButton(mesh.userData.cadObject,button)",viewer)
+        self.assertIn("canvas.addEventListener('pointermove'",viewer)
+        self.assertIn("canvas.addEventListener('pointerleave'",viewer)
+        self.assertIn("stageId==='fab-stage'?'fab-selected-info':'subfab-selected-info'",viewer)
+        self.assertNotIn("2025 ›",viewer)
+
+
+    def test_svg_fit_is_centered_bounded_and_initial_split_ratio_fixed(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        pure=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        self.assertIn('id="main-splitter"',html)
+        self.assertIn('id="reference-splitter"',html)
+        self.assertIn("justify-content:center;background:#fff",html)
+        self.assertIn("overflow:hidden;display:flex",html)
+        self.assertNotIn("overflow-x:auto",html)
+        self.assertIn("minmax(0,1fr) 8px minmax(0,1fr)",html)
+        self.assertIn("let rightSplitRatio = INITIAL_REFERENCE_SPLIT",viewer)
+        self.assertIn("fitSvgPane(",viewer)
+        self.assertIn("clampMainDivider(",viewer)
+        self.assertIn("clampReferenceSplit(",viewer)
+        self.assertIn("fitSvgHeightToPane()",viewer)
+        self.assertIn("INITIAL_REFERENCE_SPLIT = 0.5",pure)
+        self.assertNotIn("rightSplitChangedByUser",viewer)
+        self.assertIn("base.element.style.width=width+'px'",viewer)
+        self.assertIn("layer.element.style.width=width+'px'",viewer)
+
+
+    def test_drawing_strategies_use_actual_meshes_and_raycaster(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        strategies={
+            "textbox": ("const fillColor=colorValue(colors.fill", "new THREE.PlaneGeometry(w,h)"),
+            "ellipse": ("kind==='ellipse'", "new THREE.CircleGeometry(radius,72)"),
+            "rectangle": ("kind==='rectangle'", "new THREE.BoxGeometry(w,h,depth)"),
+        }
+        for shape, snippets in strategies.items():
+            with self.subTest(shape=shape):
+                for snippet in snippets:
+                    self.assertIn(snippet,viewer)
+        self.assertIn("layer.clickable.push(clickTarget)",viewer)
+        self.assertIn("raycaster.intersectObjects(targets,false)",viewer)
+        self.assertIn("selectOnButton(mesh.userData.cadObject,button)",viewer)
+        parser=(STATIC_DIR/"xlsx_spatial.py").read_text(encoding="utf-8")
+        self.assertNotIn("drawTopLeftText(",viewer)
+        self.assertIn("new THREE.CanvasTexture(canvas)",viewer)
+        self.assertIn("context.fillText(part.text,part.x,part.y)",viewer)
+        self.assertNotIn("frontZ",viewer)
+        self.assertIn('font_ref = first_child(style, "fontRef")',parser)
+        self.assertNotIn('"text": style_color(',parser)
+        self.assertIn('obj["text"] = shape_text(element)',parser)
+
+
+    def test_rectangle_depth_directive_and_ellipse_lifting_are_wired(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        self.assertIn("rectangleHeight(item.alt_text,w,h)",viewer)
+        self.assertIn("ellipseElevation(item,x=>toWorldRect(x,layer),rectangles)",viewer)
+        self.assertIn("circleRectangleRelation",helper if False else
+                      (STATIC_DIR/"cad_geometry.mjs").read_text(encoding="utf-8"))
+        self.assertIn("const rectangles=rectangleSpecs(layer.objects,obj=>toWorldRect(obj,layer))",viewer)
+        self.assertIn("depth>0",viewer)
+        self.assertIn("new THREE.PlaneGeometry(w,h)",viewer)
+        with open(STATIC_DIR/"cad_geometry.mjs",encoding="utf-8") as file:
+            helper=file.read()
+        self.assertIn("match[2].toLowerCase()==='x' ? width : height",helper)
+        self.assertIn("pointInsideRotatedRectangle",helper)
+
+    def test_textbox_transparent_fill_and_outline_are_respected(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        self.assertIn("const fillColor=colorValue(colors.fill",viewer)
+        self.assertIn("colors.fill==='无/透明'?0:1",viewer)
+        self.assertIn("const outline=cadOutlineSpec(item)",viewer)
+        self.assertNotIn("A textbox always has gray background",viewer)
+        self.assertIn("border-radius:8px",html)
+
+    def test_xlsx_alt_svg_catalog_and_picture_aspect_pipeline_are_wired(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        service=(STATIC_DIR/"__main__.py").read_text(encoding="utf-8")
+        self.assertIn("pictureLayerScales(bounds,ratios)",viewer)
+        self.assertIn("loadCadTexture(",viewer)
+        self.assertIn("applyReferenceImage(key,image.url,image.width,image.height)",viewer)
+        self.assertIn("drawImage(layer,item,textures[i])",viewer)
+        self.assertIn("const textures=await Promise.all(layerImages.map(item=>",viewer)
+        self.assertIn("loadCadTexture(item?.image_url)",viewer)
+        self.assertIn("overlaySelections.set(key,entry)",viewer)
+        self.assertIn("displayedSvgWidth",viewer)
+        self.assertIn("svgHistory.append(line)",viewer)
+        self.assertIn("EllipseSvgCatalogHandler",service)
+        self.assertIn("cad-svg-catalog",service)
+        self.assertIn("cad_svg_catalog.py",service)
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        self.assertIn('id="reference-log"',html)
+        self.assertIn("border-radius:0",html)
+        self.assertIn("cursor:grab",html)
+        self.assertNotIn("max-width:100%;max-height:100%;object-fit:contain",html)
+
+    def test_workbook_title_and_embedded_png_backdrop_are_wired(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        server=(STATIC_DIR/"__main__.py").read_text(encoding="utf-8")
+        service=(STATIC_DIR/"cad_service.py").read_text(encoding="utf-8")
+        ui=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        self.assertIn("document.title=workbookName.replace(/\\.xlsx$/i,'')",viewer)
+        self.assertIn("loadCadTexture(item?.image_url)",viewer)
+        self.assertIn("imageAspectRatio(texture?.image,bounds[i])",viewer)
+        self.assertIn("const transforms=pictureLayerScales(bounds,ratios)",viewer)
+        self.assertIn("layer.scaleX=transforms[i].x",viewer)
+        self.assertIn("layer.scaleY=transforms[i].y",viewer)
+        self.assertIn("if(item.type==='image') drawImage(layer,item,textures[i]);",viewer)
+        self.assertIn("if(item.type==='shape') drawShape(layer,item,rectangles);",viewer)
+        self.assertIn("export function imageAspectRatio(image, anchor)",ui)
+        self.assertIn("empty.textContent='无可用测试结果'",viewer)
+        self.assertNotIn("loadSheetSvgTexture(",viewer)
+        self.assertNotIn("drawSvgBackground(",viewer)
+        self.assertNotIn("background_svg",viewer+service)
+        self.assertIn("CadImageHandler",server)
+        self.assertIn("/viewer/cad-image/",server)
+        self.assertIn("extract_embedded_image",service)
+        self.assertIn('obj["image_url"] = f"/viewer/cad-image/{layer_index}/{object_index}"',service)
+
+    def test_cad_fixed_divider_and_matching_top_controls(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        self.assertIn('id="cad-fixed-divider"',html)
+        self.assertIn("#cad-fixed-divider{width:100%;height:8px;background:#c4d1da;",html)
+        self.assertIn("pointer-events:none;user-select:none",html)
+        self.assertIn("grid-template-rows:minmax(0,1fr) 8px minmax(0,1fr)",html)
+        self.assertIn("top:10px;left:12px",html)
+        self.assertIn("top:10px;right:12px",html)
+        self.assertIn("height:36px",html)
+        self.assertIn("font-size:14px",html)
+        self.assertIn("border:1px solid #bfc8cf;background:#fff",html)
+
+    def test_svg_transparent_overlay_legend_dedup_and_pair_close(self):
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        pure=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        for snippet in ('id="psd-overlays"', 'id="octave-overlays"',
+                        'id="legend-context-menu"',
+                        '.reference-overlays{', 'background:transparent', 
+                        '.reference-overlays img'):
+            self.assertIn(snippet,html)
+        for snippet in ("canAddOverlay(overlaySelections,overlayLoads,key)",
+                        "overlayLoads.add(key)", "overlaySelections.set(key,entry)",
+                        "showLegendMenu(key,event.clientX,event.clientY)",
+                        "removeReferenceOverlay(key)", "overlaySelections.delete(key)",
+                        "makeColoredPair(pair,style)",
+                        "changeLegendStyle(", "showLegendMenu(",
+                        "SVG_COLOR_CHOICES", "restyleSvgMarkup(markup,style,key)",
+                        "URL.createObjectURL(new Blob([colorized]",
+                        "URL.revokeObjectURL(pair[key].blobUrl)",
+                        "document.getElementById('psd-overlays').append",
+                        "document.getElementById('octave-overlays').append"):
+            self.assertIn(snippet,viewer)
+        self.assertIn("selectionParts(items,selected,toRect)",pure)
+        self.assertIn("requiredSvgRatio(baseRatio, entries)",pure)
+        self.assertNotIn("applyReferenceImage('psd',psd.url",viewer)
+
+    def test_hover_breadcrumb_textbox_rectangle_sensor_and_bold_parent(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        geometry=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        self.assertIn("layer.hoverable.push(clickTarget)",viewer)
+        self.assertIn("button===null ? layer.hoverable",viewer)
+        self.assertIn("selectionParts(",viewer)
+        self.assertIn("part.kind==='textbox'?'strong':'span'",viewer)
+        self.assertNotIn("selectionPath(workbookName",viewer)
+        self.assertIn("shape_kind==='textbox'",geometry)
+        self.assertIn("shape_kind==='rectangle'",geometry)
+
+    def test_svg_mutation_service_removed_and_catalog_remains_readonly(self):
+        server=(STATIC_DIR/"__main__.py").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        self.assertNotIn("SvgStyleHandler",server)
+        self.assertNotIn("update_svg_pair",server)
+        self.assertNotIn("svg_styling.py",server)
+        self.assertNotIn("cad-svg-style",server+viewer)
+        self.assertNotIn("persistSvgStyle",viewer)
+        self.assertNotIn("method:'POST'",viewer)
+        self.assertFalse((STATIC_DIR/"svg_styling.py").exists())
+        self.assertIn("EllipseSvgCatalogHandler",server)
+
+    def test_independent_panel_fit_and_unadorned_colored_legend(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        helper=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        self.assertIn("fitSvgPane(frame.clientWidth,frame.clientHeight,displayedRatio(key))",viewer)
+        self.assertIn("font-size:14px;font-weight:700",html)
+        self.assertIn("line.textContent=label",viewer)
+        self.assertIn("line.style.color=entry.color",viewer)
+        self.assertNotIn('className=\'legend-swatch\'',viewer)
+        self.assertIn("SVG_COLOR_CHOICES=Object.freeze([",helper)
+        self.assertIn("SVG_LINE_WIDTHS",helper)
+        self.assertIn("SVG_LINE_TYPES",helper)
+        self.assertIn("submenu('线型','lineStyle',SVG_LINE_TYPES)",viewer)
+        self.assertIn("submenu('线宽','lineWidth',SVG_LINE_WIDTHS.map",viewer)
+        self.assertNotIn("label:'原始线宽'",viewer)
+        self.assertIn("mergeSvgStyle(entry.style,patch)",viewer)
+        self.assertIn("entry.style=style",viewer)
+        self.assertIn("recolorSvgMarkup(source,color)",helper)
+        self.assertIn("close.textContent='退出'",viewer)
+
+    def test_svg_catalog_labels_and_translucent_cuboids(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        ui=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        catalog=(STATIC_DIR/"cad_svg_catalog.py").read_text(encoding="utf-8")
+        self.assertIn("name_matches(p.name, search_identifier)",catalog)
+        self.assertIn("search_identifier = rectangle_name if rectangle is not None else folder_name",catalog)
+        self.assertIn('"target_kind": "rectangle" if rectangle is not None else "ellipse"',catalog)
+        self.assertIn('circle_relation(ellipse, Rectangle.from_object(obj)) == "inside"',catalog)
+        self.assertIn('"sheet": sheets[layer_index]["sheet"]',catalog)
+        self.assertIn("svgLegendName(catalog,axis)",viewer)
+        self.assertIn("svgSelectionKey(catalog,date,axis)",viewer)
+        self.assertIn("appendReferenceHistory(key,label,entry)",viewer)
+        self.assertIn("export function svgLegendName(catalog,axis)",ui)
+        self.assertIn("export function svgSelectionKey(catalog,date,axis)",ui)
+        self.assertIn("for(const axis of ['X','Y','Z'])",viewer)
+        self.assertIn("display:flex;flex-direction:column;align-items:stretch;gap:2px",html)
+        self.assertIn(".cad-submenu button{display:block",html)
+        self.assertIn("wireframe:false,depthTest:true,depthWrite:false",viewer)
+        self.assertIn("side:THREE.FrontSide",viewer)
+        self.assertIn("CUBOID_FACE_OPACITY",viewer)
+        self.assertIn("CUBOID_SELECTED_OPACITY",viewer)
+        self.assertIn("isTransparentCuboid=true",viewer)
+        self.assertIn("new THREE.EdgesGeometry(cube)",viewer)
+
+    def test_semantic_threejs_layer_order_and_legend_first_level_alignment(self):
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        ui=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        html=(STATIC_DIR/"index.html").read_text(encoding="utf-8")
+        for expected in (
+            "CAD_DRAW_ORDER = Object.freeze({",
+            "image: 0", "textbox: 10", "rectangle: 20", "ellipse: 30",
+            "export function cadShapeRenderOrder(kind)",
+            "export function cadShapeZOffset(kind)",
+            "kind === 'textbox' ? -1 : kind === 'ellipse' ? 1 : 0",
+        ):
+            self.assertIn(expected, ui)
+        for expected in (
+            "group.position.set(r.x+w/2,r.y-h/2,raisedZ+cadShapeZOffset(kind))",
+            "group.renderOrder=priority",
+            "node.renderOrder=priority+(node.userData.isCadOutline",
+            "image.renderOrder=CAD_DRAW_ORDER.image",
+            "group.renderOrder=CAD_DRAW_ORDER.image",
+            "cadShapeRenderOrder(b.object.userData.cadObject?.shape_kind)",
+            "depthWrite:false",
+        ):
+            self.assertIn(expected, viewer)
+        self.assertIn("white-space:nowrap;text-align:left;cursor:grab", html)
+        self.assertIn("#reference-log .reference-log-line{display:block;line-height:1.7;text-align:left", html)
+        self.assertIn(".legend-menu-primary button{display:block;width:100%;text-align:left}", html)
+        self.assertIn("new THREE.EdgesGeometry(cube)", viewer)
+
+    def test_drawingml_text_position_color_font_and_cuboid_edge_color_are_wired(self):
+        parser=(STATIC_DIR/"xlsx_spatial.py").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        ui=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        for expected in (
+            "def theme_text_fonts(z: ZipFile)",
+            "def textbox_text_layout(node: ET.Element",
+            "def text_property_style(node: ET.Element",
+            'obj["text_layout"] = textbox_text_layout(',
+            'obj["colors"] = {',
+            '"outline": style_color(outline, style, "line", palette, fills, lines)',
+            '"font_size_pt": 11.0',
+            '"insets_px": insets',
+            '"paragraphs": paragraphs',
+        ):
+            self.assertIn(expected,parser)
+        for expected in (
+            "function drawTextboxText(group,item,worldRect)",
+            "layoutTextboxText(layout,w,h",
+            "textboxFont(part.run)",
+            "context.fillText(part.text,part.x,part.y)",
+            "new THREE.CanvasTexture(canvas)",
+            "textMesh.position.z=0.9",
+            "textMesh.userData.isTextboxText=true",
+            "if(kind==='textbox') drawTextboxText(group,item,r)",
+            "new THREE.EdgesGeometry(cube)",
+            "new THREE.InstancedMesh(outlineCylinder,material,segments.length)",
+            "mesh.frustumCulled=false",
+            "const outline=cadOutlineSpec(item)",
+            "if(outline) group.add(...makePlanarOutline('ellipse',w,h,outline,layer))",
+            "!rectangleHasAltText(item.alt_text)",
+            "borderGroup.renderOrder=priority+0.75",
+            "borderGroup.add(...makePlanarOutline('rectangle',w,h,outline,layer))",
+            "group.add(...edges)",
+            "updateLayerOutlines(layer)",
+            "layer.outlineMeshes.push(mesh)",
+            "color:parseInt(outline.color.slice(1),16)",
+            "toneMapped:false",
+            "mesh.userData.isTransparentCuboid",
+        ):
+            self.assertIn(expected,viewer)
+        self.assertNotIn("cadOutlineHaloColor",viewer)
+        self.assertNotIn("isCadOutlineHalo",viewer)
+        for expected in (
+            "CUBOID_FACE_OPACITY = 0.93",
+            "CUBOID_SELECTED_OPACITY = 1.00",
+            "export function textboxFont(run)",
+            "export function layoutTextboxText(layout,width,height,measure)",
+        ):
+            self.assertIn(expected,ui)
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())
 
-    def test_no_old_model_path_remains_in_viewer(self):
+    def test_no_column_or_service_worker_in_viewer(self):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn("柱子.glb", html)
-        self.assertIn("Column.glb", (STATIC_DIR / "__main__.py").read_text(encoding="utf-8"))
+        viewer = (STATIC_DIR / "cad_viewer.js").read_text(encoding="utf-8")
+        server = (STATIC_DIR / "__main__.py").read_text(encoding="utf-8")
+        self.assertNotIn("Column.glb", html + viewer + server)
+        self.assertNotIn("serviceWorker.register(", html + viewer)
+        self.assertNotIn("GLTFLoader", html + viewer)
 
-    def test_glb_is_loaded_only_after_optional_manifest(self):
-        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertIn("fetch('./model-manifest.json'", html)
-        self.assertIn("if (!column?.available)", html)
-        self.assertIn("new GLTFLoader().load(column.url", html)
-        self.assertNotIn("柱子.glb", html)
-
-    def test_no_service_worker_registration_in_html(self):
-        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn("serviceWorker.register(", html)
-        self.assertIn("registration.unregister()", html)
 
 
 class TestHttpIntegration(unittest.TestCase):
@@ -224,16 +546,73 @@ class TestHttpIntegration(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertIn("Bokeh", body)
 
-    def test_model_manifest_matches_local_assets(self):
-        with urlopen(self.base + "/viewer/model-manifest.json", timeout=5) as response:
+    def test_cad_layout_has_two_sheets_and_reference_metadata(self):
+        with urlopen(self.base + "/viewer/cad-layout.json", timeout=5) as response:
             self.assertEqual(response.status, 200)
             self.assertIn("no-store", response.headers["Cache-Control"])
-            manifest = json.load(response)
-        self.assertEqual(
-            manifest["column"]["available"],
-            (STATIC_DIR / "assets" / "Column.glb").is_file(),
-        )
-        self.assertEqual(manifest["column"]["url"], "./assets/Column.glb")
+            data = json.load(response)
+        self.assertEqual([layer["title"] for layer in data["layers"]], ["Fab", "Subfab"])
+        self.assertEqual(set(data["reference_svgs"]), {"psd", "octave"})
+        for key, filename in (("psd", "PSD_base.svg"), ("octave", "1-3-Octave_base.svg")):
+            self.assertEqual(
+                data["reference_svgs"][key]["available"],
+                (STATIC_DIR / "assets" / filename).is_file(),
+            )
+
+    def test_javascript_modules_have_browser_accepted_mime_type(self):
+        # Use the real Python -m HTTP service: Windows can otherwise send
+        # text/plain for .mjs despite successful HTTP 200 and JS syntax tests.
+        for module_path, source_marker in (
+            ("/viewer/cad_viewer.js", "OrbitControls"),
+            ("/viewer/cad_geometry.mjs", "rectangleHeight"),
+            ("/viewer/cad_ui.mjs", "selectionParts"),
+        ):
+            with self.subTest(module_path=module_path):
+                with urlopen(self.base + module_path, timeout=5) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(
+                        response.headers.get_content_type(), "text/javascript"
+                    )
+                    self.assertEqual(
+                        response.headers.get_content_charset(), "utf-8"
+                    )
+                    self.assertIn("no-store", response.headers["Cache-Control"])
+                    self.assertEqual(
+                        response.headers["X-App-Revision"], app.BUILD_REVISION
+                    )
+                    self.assertIn(source_marker, response.read().decode("utf-8"))
+
+    def test_html_still_has_html_mime_type(self):
+        with urlopen(self.base + "/viewer/index.html", timeout=5) as response:
+            self.assertEqual(response.headers.get_content_type(), "text/html")
+
+
+    def test_cad_js_is_served_and_source_xlsx_is_private(self):
+        with urlopen(self.base + "/viewer/cad_viewer.js", timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("OrbitControls", response.read().decode("utf-8"))
+        with self.assertRaises(HTTPError) as failure:
+            urlopen(self.base + "/viewer/assets/private.xlsx", timeout=5)
+        self.assertEqual(failure.exception.code, 404)
+
+    def test_invalid_ellipse_catalog_route_returns_404(self):
+        with self.assertRaises(HTTPError) as error:
+            urlopen(self.base + "/viewer/cad-svg-catalog/0/999", timeout=5)
+        self.assertEqual(error.exception.code, 404)
+
+    def test_removed_svg_post_route_returns_404_without_writing(self):
+        data=json.dumps({"layer":0,"object_index":0,
+                         "operation":"color","value":"#4F99CF"}).encode()
+        request=Request(self.base+"/viewer/cad-svg-style",data=data,
+                        method="POST",headers={"Content-Type":"application/json"})
+        with self.assertRaises(HTTPError) as removed:
+            urlopen(request,timeout=5)
+        self.assertEqual(removed.exception.code,404)
+
+    def test_invalid_embedded_image_route_is_safe(self):
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(self.base + "/viewer/cad-image/0/999", timeout=5)
+        self.assertEqual(caught.exception.code, 404)
 
     def test_sw_js_requests_return_204_without_registering(self):
         for path in ("/sw.js", "/viewer/sw.js"):
@@ -246,31 +625,13 @@ class TestHttpIntegration(unittest.TestCase):
     def test_root_asset_file_is_served(self):
         with urlopen(self.base + "/viewer/assets/README.md", timeout=5) as response:
             self.assertEqual(response.status, 200)
-            self.assertIn("GLB", response.read().decode("utf-8"))
+            self.assertIn("XLSX", response.read().decode("utf-8"))
 
     def test_python_source_is_not_exposed_by_static_server(self):
         with self.assertRaises(HTTPError) as caught:
             urlopen(self.base + "/viewer/__main__.py", timeout=5)
         self.assertEqual(caught.exception.code, 404)
 
-    def test_legacy_chinese_asset_request_never_returns_404(self):
-        # The browser may still have old HTML in an existing tab.
-        # Suppress redirects to verify the expected 307 response when Column.glb exists.
-        class NoRedirect(HTTPRedirectHandler):
-            def redirect_request(self, request, fp, code, msg, headers, newurl):
-                return None
-
-        opener = build_opener(NoRedirect)
-        legacy = self.base + "/viewer/assets/" + quote("柱子.glb")
-        if (STATIC_DIR / "assets" / "Column.glb").is_file():
-            with self.assertRaises(HTTPError) as caught:
-                opener.open(Request(legacy), timeout=5)
-            self.assertEqual(caught.exception.code, 307)
-            self.assertEqual(caught.exception.headers["Location"], "/viewer/assets/Column.glb")
-        else:
-            with opener.open(Request(legacy), timeout=5) as response:
-                self.assertEqual(response.status, 204)
-                self.assertEqual(response.read(), b"")
 
 
 class TestPortConflict(unittest.TestCase):
