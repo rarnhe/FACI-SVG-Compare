@@ -6,7 +6,7 @@ import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, imageAspectRatio, fitSvgPane, clampMainDivider, clampReferenceSplit,
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
-  recolorSvgMarkup, svgLegendName, svgSelectionKey,
+  restyleSvgMarkup, mergeSvgStyle, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER, cadShapeRenderOrder, cadShapeZOffset,
   textboxFont, layoutTextboxText,
@@ -666,14 +666,14 @@ function releaseColoredPair(pair) {
   }
 }
 
-async function makeColoredPair(sourcePair,color) {
+async function makeColoredPair(sourcePair,style) {
   const [psdMarkup,octaveMarkup]=await Promise.all([
     originalSvg(sourcePair.psd),originalSvg(sourcePair.octave),
   ]);
   const result={};
   try {
     for(const [key,markup] of [['psd',psdMarkup],['octave',octaveMarkup]]) {
-      const colorized=recolorSvgMarkup(markup,color);
+      const colorized=restyleSvgMarkup(markup,style);
       const blobUrl=URL.createObjectURL(new Blob([colorized],{
         type:'image/svg+xml;charset=utf-8',
       }));
@@ -697,12 +697,13 @@ async function switchReferencePair(pair,key,label) {
   overlayLoads.add(key);
   try {
     const color=nextLegendColor(colorCursor++);
-    const previews=await makeColoredPair(pair,color);
+    const style=mergeSvgStyle({color});
+    const previews=await makeColoredPair(pair,style);
     if(overlaySelections.has(key)) {
       releaseColoredPair(previews);
       return false;
     }
-    const entry={sourcePair:{psd:pair.psd,octave:pair.octave},color,saving:false};
+    const entry={sourcePair:{psd:pair.psd,octave:pair.octave},color,style,saving:false};
     for(const key of ['psd','octave']) {
       const preview=previews[key],element=document.createElement('img');
       element.alt='';
@@ -767,12 +768,14 @@ function removeReferenceOverlay(key) {
   clampFloatingLog();
 }
 
-async function changeLegendColor(key,color) {
+async function changeLegendStyle(key,patch) {
   const entry=overlaySelections.get(key);
-  if(!entry || entry.saving || entry.color===color) return;
+  if(!entry || entry.saving) return;
+  const style=mergeSvgStyle(entry.style,patch);
+  if(Object.keys(style).every(name=>style[name]===entry.style[name])) return;
   entry.saving=true;
   try {
-    const next=await makeColoredPair(entry.sourcePair,color);
+    const next=await makeColoredPair(entry.sourcePair,style);
     if(overlaySelections.get(key)!==entry) {
       releaseColoredPair(next);
       return;
@@ -784,14 +787,16 @@ async function changeLegendColor(key,color) {
       entry[key].ratio=next[key].height/next[key].width;
       entry[key].blobUrl=next[key].blobUrl;
     }
-    entry.color=color;
-    entry.legend.style.color=color;
+    entry.style=style;
+    entry.color=style.color;
+    entry.legend.style.color=style.color;
     fitSvgHeightToPane();
     legendMenu.hidden=true;
     releaseColoredPair(previous);
   } catch(error) {
-    console.error('SVG color adjustment failed:',error);
-    legendMenu.title='颜色调整失败: '+error.message;
+    console.error('SVG style adjustment failed:',error);
+    legendMenu.title='样式调整失败: '+error.message;
+    window.alert('SVG 样式调整失败：'+error.message);
   } finally {
     entry.saving=false;
   }
@@ -808,32 +813,39 @@ function showLegendMenu(key,x,y) {
   secondary.className='legend-menu-secondary';
   secondary.hidden=true;
   legendMenu.append(primary,secondary);
-  const colorButton=document.createElement('button');
-  colorButton.type='button';
-  colorButton.setAttribute('role','menuitem');
-  colorButton.textContent='颜色 ›';
-  colorButton.addEventListener('click',()=>{
-    secondary.replaceChildren();
-    for(const color of SVG_COLORS) {
-      const item=document.createElement('button');
-      item.type='button';
-      item.setAttribute('role','menuitem');
-      item.textContent=color;
-      item.style.color=color;
-      item.addEventListener('click',()=>{void changeLegendColor(key,color);});
-      secondary.append(item);
-    }
-    secondary.hidden=false;
-    const primaryWidth=primary.offsetWidth;
-    const popupWidth=secondary.offsetWidth;
-    // Vertically stacked 17-color list opens to the right when it fits.
-    secondary.style.left=(parseFloat(legendMenu.style.left||'0')
-      +primaryWidth+popupWidth<=pane.clientWidth ? primaryWidth : -popupWidth)+'px';
-    secondary.style.top=Math.max(0,Math.min(
-      colorButton.offsetTop,pane.clientHeight-secondary.offsetHeight-
-      parseFloat(legendMenu.style.top||'0')))+'px';
-  });
-  primary.append(colorButton);
+  legendMenu.title='';
+  const entry=overlaySelections.get(key);
+  function submenu(label,property,choices) {
+    const button=document.createElement('button');
+    button.type='button';
+    button.setAttribute('role','menuitem');
+    button.textContent=label+' ›';
+    button.addEventListener('click',()=>{
+      secondary.replaceChildren();
+      for(const choice of choices) {
+        const item=document.createElement('button');
+        item.type='button';
+        item.setAttribute('role','menuitemradio');
+        item.setAttribute('aria-checked',String(entry.style[property]===choice.value));
+        item.textContent=choice.label;
+        if(property==='color') item.style.color=choice.value;
+        item.addEventListener('click',()=>{void changeLegendStyle(key,{[property]:choice.value});});
+        secondary.append(item);
+      }
+      secondary.hidden=false;
+      const primaryWidth=primary.offsetWidth, popupWidth=secondary.offsetWidth;
+      secondary.style.left=(parseFloat(legendMenu.style.left||'0')
+        +primaryWidth+popupWidth<=pane.clientWidth ? primaryWidth : -popupWidth)+'px';
+      secondary.style.top=Math.max(0,Math.min(
+        button.offsetTop,pane.clientHeight-secondary.offsetHeight-
+        parseFloat(legendMenu.style.top||'0')))+'px';
+    });
+    primary.append(button);
+  }
+  submenu('颜色','color',SVG_COLORS.map(value=>({label:value,value})));
+  submenu('线型','lineStyle',SVG_LINE_TYPES);
+  submenu('线宽','lineWidth',[{label:'原始线宽',value:null},
+    ...SVG_LINE_WIDTHS.map(value=>({label:String(value),value}))]);
   const close=document.createElement('button');
   close.type='button';
   close.setAttribute('role','menuitem');

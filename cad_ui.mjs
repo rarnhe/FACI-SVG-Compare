@@ -356,3 +356,135 @@ export function recolorSvgMarkup(source,color) {
   }
   return new XMLSerializer().serializeToString(documentXml);
 }
+
+
+// Legend styles are independent; null restores the original width/dash pattern.
+export const SVG_LINE_WIDTHS=Object.freeze([0.5,0.75,1,1.5,2,2.5,3]);
+export const SVG_LINE_TYPES=Object.freeze([
+  {label:'原始线型',value:null},
+  {label:'实线',value:'none'},
+  {label:'虚线',value:'8 5'},
+  {label:'点线',value:'1 5'},
+  {label:'点划线',value:'10 4 1 4'},
+  {label:'双点划线',value:'10 4 1 4 1 4'},
+].map(Object.freeze));
+
+export function mergeSvgStyle(previous,patch={}) {
+  const style={color:previous.color,lineWidth:previous.lineWidth??null,
+    lineStyle:previous.lineStyle??null,...patch};
+  if(!SVG_COLORS.includes(style.color) ||
+    (style.lineWidth!==null && !SVG_LINE_WIDTHS.includes(style.lineWidth)) ||
+    !SVG_LINE_TYPES.some(type=>type.value===style.lineStyle))
+    throw new RangeError('Unsupported SVG style');
+  return {color:style.color,lineWidth:style.lineWidth,lineStyle:style.lineStyle};
+}
+
+const PROTECTED_SVG=/^(?:defs|mask|clippath|filter|marker|pattern|symbol|lineargradient|radialgradient|metadata|title|desc|text|tspan)$/i;
+const AUXILIARY_SVG=/(?:^|[\s_.-])(?:axes?|axis|grid(?:lines?)?|ticks?|spines?|legend|labels?|background|frame|border|patch|matplotlib\.axis)(?=$|[\s_.-]|\d)/i;
+const CURVE_SVG=/(?:^|[\s_.-])(?:curve|series|trace|spectrum|psd|octave|data-series|line2d)(?=$|[\s_.-]|\d)/i;
+function svgLineRole(node) {
+  let marked=false;
+  for(let current=node;current;current=current.parentElement) {
+    if(PROTECTED_SVG.test(current.localName||'')) return 'protected';
+    const name=[current.getAttribute('id'),current.getAttribute('class')].join(' ');
+    // Matplotlib axes_1 is a container for the plot, not the axis itself.
+    if(AUXILIARY_SVG.test(name.replace(/\baxes_\d+\b/g,''))) return 'protected';
+    if(current.hasAttribute('data-series') || current.hasAttribute('data-curve') ||
+       CURVE_SVG.test(name)) marked=true;
+  }
+  return marked?'marked':'fallback';
+}
+
+// Resolve common SVG presentation attributes, CSS selectors and inherited
+// stroke without inserting potentially active SVG markup into the live page.
+function strokeDeclaration(css) {
+  const values=[...String(css??'').matchAll(/(?:^|;)\s*stroke\s*:\s*([^;]+?)(?:\s*!important)?\s*(?=;|$)/gi)];
+  if(!values.length) return null;
+  const important=values.filter(v=>/!important\s*$/i.test(v[0]));
+  const last=(important.length?important:values).at(-1);
+  return {value:last[1].trim(),important:/!important\s*$/i.test(last[0])};
+}
+function strokeRules(xml) {
+  const result=[];
+  for(const sheet of xml.getElementsByTagName('style')) {
+    const css=String(sheet.textContent||'').replace(/\/\*[\s\S]*?\*\//g,'');
+    for(const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const decl=strokeDeclaration(match[2]);
+      if(!decl || match[1].trim().startsWith('@')) continue;
+      for(const raw of match[1].split(',')) {
+        const selector=raw.trim();
+        if(!selector) continue;
+        // Common class/id/tag selectors, ordered by specificity then source.
+        const rank=(selector.match(/#[\w-]+/g)||[]).length*10000+
+          (selector.match(/\.[\w-]+|\[[^\]]+\]|:[\w-]+/g)||[]).length*100+
+          (selector.match(/(?:^|[\s>+~])[\w-]+/g)||[]).length;
+        result.push({selector,rank,...decl});
+      }
+    }
+  }
+  return result;
+}
+function resolvedStroke(node,rules) {
+  for(let current=node;current;current=current.parentElement) {
+    let winner=current.hasAttribute('stroke')
+      ? {value:current.getAttribute('stroke'),rank:-1,important:false}:null;
+    for(const rule of rules) {
+      let matched=false;
+      try {matched=current.matches?.(rule.selector)??false;} catch {continue;}
+      if(matched && (!winner || Number(rule.important)>Number(winner.important) ||
+        (rule.important===winner.important && rule.rank>=winner.rank))) winner=rule;
+    }
+    const inline=strokeDeclaration(current.getAttribute('style'));
+    if(inline && (!winner?.important || inline.important)) winner=inline;
+    if(winner && !/^inherit$/i.test(winner.value)) return winner.value;
+  }
+  return null;
+}
+export function svgCurveNodes(xml) {
+  const rules=strokeRules(xml), marked=[], fallback=[];
+  for(const node of xml.getElementsByTagName('*')) {
+    const kind=(node.localName||'').toLowerCase();
+    if(!['path','polyline','line','polygon','rect','use'].includes(kind)) continue;
+    const role=svgLineRole(node);
+    if(role==='protected' || !recolorablePaint(resolvedStroke(node,rules))) continue;
+    if(role==='marked') marked.push(node);
+    // Untagged SVG: use open paths / polylines, not lines, bars or frames.
+    else if(kind==='polyline' || (kind==='path' &&
+      !/[zZ]\s*$/.test(node.getAttribute('d')||'') &&
+      ((node.getAttribute('d')||'').match(/[-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?/gi)||[]).length>=6))
+      fallback.push(node);
+  }
+  return marked.length?marked:fallback;
+}
+
+export function restyleSvgMarkup(source,requested) {
+  const style=mergeSvgStyle(requested);
+  const xml=new DOMParser().parseFromString(source,'image/svg+xml');
+  if(xml.getElementsByTagName('parsererror').length ||
+     xml.documentElement?.localName!=='svg') throw new Error('Cannot parse original SVG source');
+  const curves=svgCurveNodes(xml);
+  // The original color-only fallback is retained for legacy SVGs lacking
+  // recognizable curves; never guess which auxiliary lines to resize.
+  if(!curves.length) {
+    if(style.lineWidth!==null || style.lineStyle!==null)
+      throw new Error('未识别到可修改线型或线宽的频谱曲线');
+    return recolorSvgMarkup(source,style.color);
+  }
+  for(const node of curves) {
+    const properties=[['stroke',style.color]];
+    if(style.lineWidth!==null) properties.push(['stroke-width',String(style.lineWidth)]);
+    if(style.lineStyle!==null) {
+      // Keep the pattern visible at wider widths; values are SVG user units.
+      const dash=style.lineStyle==='none'?'none':style.lineStyle.split(' ')
+        .map(value=>String(Number(value)*Math.max(1,style.lineWidth??1))).join(' ');
+      properties.push(['stroke-dasharray',dash]);
+      if(style.lineStyle.includes('1')) properties.push(['stroke-linecap','round']);
+    }
+    // An inline important declaration overrides author CSS, including class
+    // rules. Original attributes/geometry/fill remain intact.
+    const old=node.getAttribute('style')||'';
+    const suffix=properties.map(([key,value])=>key+':'+value+' !important').join(';');
+    node.setAttribute('style',old.replace(/;+\s*$/,'')+(old.trim()?';':'')+suffix);
+  }
+  return new XMLSerializer().serializeToString(xml);
+}

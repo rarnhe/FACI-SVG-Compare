@@ -285,9 +285,9 @@ class TestStaticFrontend(unittest.TestCase):
                         "overlayLoads.add(key)", "overlaySelections.set(key,entry)",
                         "showLegendMenu(key,event.clientX,event.clientY)",
                         "removeReferenceOverlay(key)", "overlaySelections.delete(key)",
-                        "makeColoredPair(pair,color)",
-                        "changeLegendColor(", "showLegendMenu(",
-                        "SVG_COLORS", "recolorSvgMarkup(markup,color)",
+                        "makeColoredPair(pair,style)",
+                        "changeLegendStyle(", "showLegendMenu(",
+                        "SVG_COLORS", "restyleSvgMarkup(markup,style)",
                         "URL.createObjectURL(new Blob([colorized]",
                         "URL.revokeObjectURL(pair[key].blobUrl)",
                         "document.getElementById('psd-overlays').append",
@@ -330,8 +330,12 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("line.style.color=entry.color",viewer)
         self.assertNotIn('className=\'legend-swatch\'',viewer)
         self.assertIn("SVG_COLORS=Object.freeze([",helper)
-        self.assertNotIn("SVG_LINE_WIDTHS",helper)
-        self.assertNotIn("SVG_LINE_TYPES",helper)
+        self.assertIn("SVG_LINE_WIDTHS",helper)
+        self.assertIn("SVG_LINE_TYPES",helper)
+        self.assertIn("submenu('线型','lineStyle',SVG_LINE_TYPES)",viewer)
+        self.assertIn("submenu('线宽','lineWidth'",viewer)
+        self.assertIn("mergeSvgStyle(entry.style,patch)",viewer)
+        self.assertIn("entry.style=style",viewer)
         self.assertIn("recolorSvgMarkup(source,color)",helper)
         self.assertIn("close.textContent='退出'",viewer)
 

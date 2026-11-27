@@ -9,6 +9,7 @@ import {
   CAD_DRAW_ORDER,cadShapeRenderOrder,cadShapeZOffset,
   textboxFont,layoutTextboxText,
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
+  SVG_LINE_WIDTHS,SVG_LINE_TYPES,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
 } from '../cad_ui.mjs';
 
 const shape=(kind,x,y,width,height,text,rotation=0)=>({
@@ -403,4 +404,86 @@ test('textbox explicit newline and bottom anchor preserve original position',()=
     paragraphs:[{align:'left',runs:[run]}],
   },100,90,()=>10);
   assert.deepEqual(out.map(x=>[x.text,x.y]),[['A',44],['B',64]]);
+});
+
+
+test('SVG legend independent styles, original restoration and strict validation',()=>{
+  const base=mergeSvgStyle({color:'#4F99CF'});
+  assert.deepEqual(base,{color:'#4F99CF',lineWidth:null,lineStyle:null});
+  const width=mergeSvgStyle(base,{lineWidth:2.5});
+  const dash=mergeSvgStyle(width,{lineStyle:'8 5'});
+  assert.deepEqual(mergeSvgStyle(dash,{color:'#E41A1C'}),
+    {color:'#E41A1C',lineWidth:2.5,lineStyle:'8 5'});
+  assert.deepEqual(mergeSvgStyle(dash,{lineWidth:null,lineStyle:null}),base);
+  assert.deepEqual(SVG_LINE_WIDTHS,[0.5,0.75,1,1.5,2,2.5,3]);
+  assert.equal(SVG_LINE_TYPES.length,6);
+  assert.throws(()=>mergeSvgStyle(base,{lineWidth:-1}),RangeError);
+  assert.throws(()=>mergeSvgStyle(base,{lineStyle:'bad'}),RangeError);
+  assert.throws(()=>mergeSvgStyle(base,{color:'red'}),RangeError);
+});
+
+function svgFixture() {
+  class Node {
+    constructor(localName,attrs={},parentElement=null,textContent=''){
+      Object.assign(this,{localName,attrs:{...attrs},parentElement,textContent});
+    }
+    getAttribute(key){return this.attrs[key]??null;}
+    hasAttribute(key){return Object.hasOwn(this.attrs,key);}
+    setAttribute(key,value){this.attrs[key]=value;}
+    matches(selector){return selector.startsWith('.') &&
+      (this.attrs.class||'').split(/\s+/).includes(selector.slice(1));}
+  }
+  const root=new Node('svg');
+  const group=new Node('g',{id:'curve_1',stroke:'#111111'},root);
+  const curve=new Node('path',{d:'M0 0 L5 8 L9 3',fill:'none',style:'stroke-width:1;stroke-dasharray:2 3'},group);
+  const cssCurve=new Node('polyline',{class:'series',points:'0,0 1,2 3,1'},root);
+  const none=new Node('path',{class:'series',stroke:'none',style:'stroke:none !important',d:'M0 0 L1 2 L3 4'},root);
+  const axis=new Node('g',{id:'axis_1'},root);
+  const axisPath=new Node('path',{class:'series',stroke:'#aaa',d:'M0 0 L1 2 L3 4'},axis);
+  const defs=new Node('defs',{},root);
+  const protectedPath=new Node('path',{class:'series',stroke:'#aaa'},defs);
+  const css=new Node('style',{},root,'.series { stroke: #123456 !important; stroke-width: 4; }');
+  const nodes=[root,group,curve,cssCurve,none,axis,axisPath,defs,protectedPath,css];
+  return {curve,cssCurve,none,axisPath,protectedPath,xml:{
+    documentElement:root,
+    getElementsByTagName:name=>name==='*'?nodes:name==='style'?[css]:[],
+  }};
+}
+test('curve detection supports inherited and CSS strokes; excludes axes and definitions',()=>{
+  const {xml,curve,cssCurve}=svgFixture();
+  assert.deepEqual(svgCurveNodes(xml),[curve,cssCurve]);
+});
+test('restyle sets inline overrides on curves, preserves auxiliary geometry and restores originals',()=>{
+  const previousParser=globalThis.DOMParser,previousSerializer=globalThis.XMLSerializer;
+  let fixture;
+  globalThis.DOMParser=class {parseFromString(){fixture=svgFixture();return fixture.xml;}};
+  globalThis.XMLSerializer=class {serializeToString(){return JSON.stringify(
+    Object.fromEntries(['curve','cssCurve','none','axisPath','protectedPath'].map(key=>[key,fixture[key].attrs])));}};
+  try {
+    const style=mergeSvgStyle({color:'#4F99CF'},{lineWidth:2,lineStyle:'8 5'});
+    const out=JSON.parse(restyleSvgMarkup('<svg/>',style));
+    assert.match(out.curve.style,/stroke-width:2 !important/);
+    assert.match(out.cssCurve.style,/stroke-dasharray:16 10 !important/);
+    assert.equal(out.curve.d,'M0 0 L5 8 L9 3');
+    assert.equal(out.curve.fill,'none');
+    assert.equal(out.axisPath.style,undefined);
+    assert.equal(out.protectedPath.style,undefined);
+    assert.equal(out.none.style,'stroke:none !important');
+    const original=JSON.parse(restyleSvgMarkup('<svg/>',mergeSvgStyle(style,{lineWidth:null,lineStyle:null})));
+    assert.equal(original.curve.style,'stroke-width:1;stroke-dasharray:2 3;stroke:#4F99CF !important');
+    assert.equal(original.cssCurve.style,'stroke:#4F99CF !important');
+    const solid=JSON.parse(restyleSvgMarkup('<svg/>',mergeSvgStyle(style,{lineStyle:'none'})));
+    assert.match(solid.curve.style,/stroke-dasharray:none !important/);
+  } finally {
+    if(previousParser===undefined) delete globalThis.DOMParser; else globalThis.DOMParser=previousParser;
+    if(previousSerializer===undefined) delete globalThis.XMLSerializer; else globalThis.XMLSerializer=previousSerializer;
+  }
+});
+test('unmarked open polyline/path fallback avoids single segments and closed paths',()=>{
+  const nodes=['M0 0 L1 2 L3 4','M0 0 L1 2','M0 0 L1 2 L3 4 Z'].map(d=>({
+    localName:'path',getAttribute:key=>key==='d'?d:key==='stroke'?'red':null,
+    hasAttribute:key=>key==='stroke',
+  }));
+  const xml={getElementsByTagName:name=>name==='*'?nodes:[]};
+  assert.deepEqual(svgCurveNodes(xml),[nodes[0]]);
 });
