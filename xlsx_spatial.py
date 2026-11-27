@@ -1,7 +1,7 @@
 """Extract Excel DrawingML objects as 2D positions relative to A1.
 
 X increases to the right, Y downwards. Read saved absolute DrawingML
-X and extents from saved transforms; Y independently from worksheet row anchors. Never use column metrics. Geometry is kept in
+X and extents from saved transforms; Y from worksheet row anchors normalized to the picture height when possible. Never use column metrics. Geometry is kept in
 integer EMU and reported in reference pixels at 96 DPI (9525 EMU / pixel).
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 import colorsys
 from bisect import bisect_left
 from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from math import cos, radians, sin
 from pathlib import Path
 import posixpath
@@ -332,7 +333,8 @@ def anchor_y(anchor: ET.Element, width: int, height: int, angle: float,
     kind = local_name(anchor.tag)
     if kind == "absoluteAnchor":
         y = emu_attribute(first_child(anchor, "pos"), "y", "xdr:pos")
-        return y, {"source": "absoluteAnchor", "resolved_y_emu": y}
+        return y, {"source": "absoluteAnchor", "resolved_y_emu": y,
+                   "saved_y_emu": y}
     if rows is None:
         raise SpatialXlsxError("missing worksheet row geometry for Y")
     start = rows.marker_y(first_child(anchor, "from"))
@@ -345,6 +347,7 @@ def anchor_y(anchor: ET.Element, width: int, height: int, angle: float,
         if end is not None and end > start:
             span = end - start
             info["anchor_span_emu"] = span
+            info["anchor_end_y_emu"] = end
             rotated_span = abs(width * sin(radians(angle))) + abs(height * cos(radians(angle)))
             # The start marker is authoritative. Only shift by half the
             # difference when the markers clearly describe a rotated AABB.
@@ -617,6 +620,14 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
                 x, width, height, geometry_source = saved_horizontal_geometry(anchor, element)
                 angle = rotation_degrees(element)
                 y, vertical = anchor_y(anchor, width, height, angle, row_metrics)
+                # Saved Y is diagnostic only, never a cell-anchor fallback.
+                if geometry_source == "xfrm":
+                    off = first_child(object_transform(element), "off")
+                    try:
+                        vertical["saved_y_emu"] = int(off.get("y", "")) if off is not None else None
+                    except ValueError:
+                        vertical["saved_y_emu"] = None
+                vertical["edit_as"] = anchor.get("editAs")
                 rect = (x, y, x + width, y + height)
             except SpatialXlsxError as error:
                 raise SpatialXlsxError(
@@ -638,6 +649,12 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
                 "vertices_px": vertices_from_rect(rect, angle),
             }
             if kind == "image":
+                # Raw OOXML percentages (100000 = 100%); diagnostic only.
+                crop = first_child(first_child(element, "blipFill"), "srcRect")
+                obj["picture_crop"] = {
+                    key: crop.get(key, "0") if crop is not None else "0"
+                    for key in ("l", "t", "r", "b")
+                }
                 blip = find_descendant(element, "blip")
                 embed_id = None if blip is None else next(
                     (value for key, value in blip.attrib.items() if local_name(key) == "embed"),
@@ -680,6 +697,77 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
     return objects
 
 
+def normalize_sheet_y(objects: list[dict]) -> None:
+    """One picture-derived vertical position mapping per worksheet.
+
+    Preserve X, extents, rotation and the existing picture origin.
+    Calibrate only when the picture has a positive, independent two-cell
+    vertical span and no rotation. Otherwise keep the prior sheet geometry
+    and explicitly diagnose the unavailable calibration. Absolute anchors
+    have no row markers; map their saved relative Y using the picture's
+    saved Y when available, otherwise leave the entire sheet uncalibrated
+    rather than mix incompatible reference frames.
+    """
+    images = [obj for obj in objects if obj["type"] == "image"]
+    if len(images) != 1:
+        return  # Existing workbook validation handles invalid image counts.
+    picture = images[0]
+    v = picture["vertical_geometry"]
+    start = v.get("anchor_y_emu")
+    span = v.get("anchor_span_emu")
+    height = picture["bounds_emu"]["height"]
+    origin = picture["bounds_emu"]["y"]
+    absolute = [o for o in objects if o["anchor"] == "absoluteAnchor"]
+    saved_origin = v.get("saved_y_emu")
+    reason = None
+    if picture["anchor"] != "twoCellAnchor" or start is None or not span or span <= 0:
+        reason = "picture has no positive independent two-cell Y span"
+    elif picture["rotation_degrees"] % 360 != 0:
+        reason = "rotated picture cannot establish an unambiguous vertical axis"
+    elif absolute and saved_origin is None:
+        reason = "absolute anchors require saved picture Y for a common reference"
+    if reason:
+        for obj in objects:
+            obj["vertical_geometry"].update(calibration_status="unavailable",
+                                            calibration_reason=reason)
+        return
+    ratio = Fraction(height, span)
+    for obj in objects:
+        b = obj["bounds_emu"]
+        info = obj["vertical_geometry"]
+        raw_y = b["y"]
+        if obj is picture:
+            y = origin
+        elif obj["anchor"] == "absoluteAnchor":
+            # Absolute coordinates already use the target EMU system.
+            y = origin + raw_y - saved_origin
+        else:
+            anchor_start = info["anchor_y_emu"]
+            y = origin + round((anchor_start - start) * ratio)
+            obj_span = info.get("anchor_span_emu")
+            angle = radians(obj["rotation_degrees"])
+            rotated_span = abs(b["width"] * sin(angle)) + abs(b["height"] * cos(angle))
+            # Test the calibrated span before interpreting a rotated AABB.
+            # Never scale the unrotated box height or its rotation correction.
+            if obj_span is not None:
+                mapped_span = float(obj_span * ratio)
+                if (abs(mapped_span - b["height"]) > EMUS_PER_PIXEL
+                        and abs(mapped_span - rotated_span) <= EMUS_PER_PIXEL):
+                    y = origin + round((anchor_start - start) * ratio
+                                       + obj_span * ratio / 2 - Fraction(b["height"], 2))
+                    info["rotation_anchor"] = "rotated_outer_bounds"
+        b["y"] = y
+        obj["vertices_px"] = vertices_from_rect(
+            (b["x"], y, b["x"] + b["width"], y + b["height"]), obj["rotation_degrees"])
+        info.update(
+            source="absoluteAnchor" if obj["anchor"] == "absoluteAnchor" else "normalized_row_anchor",
+            uncalibrated_y_emu=raw_y, resolved_y_emu=y,
+            relative_y_emu=y-origin, calibration_status="applied",
+            calibration_factor=float(ratio), picture_anchor_start_emu=start,
+            picture_anchor_end_emu=start+span, picture_height_emu=height,
+        )
+
+
 def parse_xlsx(path: Path | str) -> list[dict]:
     path = Path(path)
     try:
@@ -718,6 +806,7 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                         drawing_part=drawing_part, members=set(z.namelist()),
                         sheet_name=name, row_metrics=row_metrics,
                     ))
+                normalize_sheet_y(objects)
                 sheets.append({"sheet": name, "objects": objects})
             return sheets
     except (BadZipFile, KeyError, ET.ParseError) as error:
@@ -791,8 +880,23 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                 start = vertical.get("anchor_y_emu", resolved)
                 reason = vertical.get("reason", "")
                 lines.append(f"    Y来源: {vertical['source']} "
-                             f"anchor={start} resolved={resolved} EMU"
+                             f"saved={vertical.get('saved_y_emu')} anchor={start} "
+                             f"resolved={resolved} EMU"
                              + (f" ({reason})" if reason else ""))
+                if vertical.get("calibration_status") == "applied":
+                    lines.append(
+                        f"    Y校准: k={vertical['calibration_factor']:.9f} "
+                        f"picture_from={vertical['picture_anchor_start_emu']} "
+                        f"picture_to={vertical['picture_anchor_end_emu']} "
+                        f"picture_height={vertical['picture_height_emu']} "
+                        f"before={vertical['uncalibrated_y_emu']} "
+                        f"relative={vertical['relative_y_emu']} EMU")
+                elif vertical.get("calibration_status") == "unavailable":
+                    lines.append("    Y校准未启用: " + vertical["calibration_reason"])
+            if obj["type"] == "image" and "picture_crop" in obj:
+                crop = obj["picture_crop"]
+                lines.append("    图片裁剪 srcRect: " + " ".join(
+                    f"{key}={value}" for key, value in crop.items()))
             for title, point in zip(("左上", "右上", "右下", "左下"), obj["vertices_px"]):
                 lines.append(f"    {title}: ({point['x']:.3f}, {point['y']:.3f}) px")
             if obj["rotation_degrees"]:

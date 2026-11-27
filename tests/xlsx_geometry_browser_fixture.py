@@ -34,23 +34,23 @@ def transform(x,y,w,h,rotation=0):
             f'<a:ext cx="{w*EMU}" cy="{h*EMU}"/></a:xfrm>')
 
 
-def anchored(x,y,w,h,child):
+def anchored(x,y,w,h,child,anchor_scale=1):
     # Column markers intentionally disagree. Row anchors are exact,
     # including the first hidden row; only Y is reconciled.
     left=x+80
-    top=y+40
+    top=40+y*anchor_scale
     right=left+w
-    # Deliberately disagree with saved height: Y must still use from.
-    bottom=top+h+7
+    # Picture endpoints independently establish scale; other spans conflict.
+    bottom=top+(h if x==0 and y==0 else h+7)*anchor_scale
     def mark(tag,px,py):
         col,dx=divmod(px,55)
-        row,dy=divmod(py,20)
-        return marker(tag,col,row+1,dx*EMU,dy*EMU)
+        row,dy=divmod(round(py*EMU),20*EMU)
+        return marker(tag,col,row+1,dx*EMU,dy)
     return (f'<xdr:twoCellAnchor editAs="oneCell">{mark("from",left,top)}'
             f'{mark("to",right,bottom)}{child}<xdr:clientData/></xdr:twoCellAnchor>')
 
 
-def shape(name,kind,x,y,w,h,number,rotation=0,alt=""):
+def shape(name,kind,x,y,w,h,number,rotation=0,alt="",anchor_scale=1):
     tx=' txBox="1"' if kind=="textbox" else ""
     geom="ellipse" if kind=="ellipse" else "rect"
     text={"Label":"BODYv2","Cube":"R_Cube"}.get(name,name)
@@ -60,20 +60,21 @@ def shape(name,kind,x,y,w,h,number,rotation=0,alt=""):
         f'<xdr:cNvSpPr{tx}/></xdr:nvSpPr><xdr:spPr>{transform(x,y,w,h,rotation)}'
         f'<a:prstGeom prst="{geom}"/>{fill}'
         '<a:ln><a:solidFill><a:srgbClr val="164070"/></a:solidFill></a:ln></xdr:spPr>'
-        f'<xdr:txBody><a:bodyPr/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></xdr:txBody></xdr:sp>')
+        f'<xdr:txBody><a:bodyPr/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></xdr:txBody></xdr:sp>',anchor_scale)
 
 
 def anchors(w,h):
     pic=image("Background").replace('<xdr:spPr/>',f'<xdr:spPr>{transform(0,0,w,h)}</xdr:spPr>')
+    a=0.8 if w==420 else 1.25
     return "".join([
-        anchored(0,0,w,h,pic),
-        shape("Label","textbox",10,10,240,180,3),
-        shape("Square","rectangle",30,35,40,40,4),
-        shape("Rotated","rectangle",100,35,80,30,5,32),
-        shape("Cube","rectangle",30,110,70,50,6,alt="z=0.5x"),
-        shape("Inside","ellipse",55,125,12,12,7),
-        shape("Partial","ellipse",94,125,12,12,8),
-        shape("Outside","ellipse",220,125,12,12,9),
+        anchored(0,0,w,h,pic,a),
+        shape("Label","textbox",10,10,240,180,3,anchor_scale=a),
+        shape("Square","rectangle",30,35,40,40,4,anchor_scale=a),
+        shape("Rotated","rectangle",100,35,80,30,5,32,anchor_scale=a),
+        shape("Cube","rectangle",30,110,70,50,6,alt="z=0.5x",anchor_scale=a),
+        shape("Inside","ellipse",55,125,12,12,7,anchor_scale=a),
+        shape("Partial","ellipse",94,125,12,12,8,anchor_scale=a),
+        shape("Outside","ellipse",220,125,12,12,9,anchor_scale=a),
     ])
 
 
