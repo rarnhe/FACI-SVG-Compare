@@ -1,29 +1,16 @@
 # Test Report
 
-- UTC (final CI report upload): 2026-11-27 13:30:39
-- Overall result: **PASS**
-- Base commit: `4c366975a9736066ed1178e34a76c9b3417b56bc`
-- Verified commit: `b18ae345d3b3327fc57daa014932fdacfac6bb30`
-- Workflow: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/46007574399
+- UTC: 2026-11-27 16:08:35
+- Result: **PASS**
+- Tests: 137
+- Passed: 137
+- Failures: 0
+- Errors: 0
+- Skipped: 0
+- Duration: 4.19s
 
-## Dual-track certification
+## Scope
 
-| Platform | Python unittest | Node geometry/UI | Real Chrome/WebGL | JS syntax | Result |
-| --- | ---: | ---: | ---: | --- | --- |
-| Ubuntu / Python 3.12 | 137/137 (3.498s) | 49/49 | 2/2 | PASS | PASS |
-| Windows / Python 3.14 | 137/137 (4.044s) | 49/49 | 2/2 | PASS | PASS |
+Restored DrawingML rich textbox font family, size, color and theme font references, paragraph alignment, body insets and textbox CanvasTexture rendering, plus theme aliases, phClr and line style inheritance, distinct absent/unresolved outlines and exact XLSX RGB borders without synthetic contrast colors. Cuboids now use 93%/100% solid-face opacity with matching rectangle-colored EdgesGeometry outlines. PNG CAD backgrounds, saved DrawingML X and extents, per-sheet picture dual-anchor normalized row-anchor Y, exact rational position mapping with preserved extents, absolute-anchor relative mapping, unavailable calibration diagnostics and raw crop metadata, no column metrics or xfrm Y fallback, contextual fail-fast on missing geometry, one exact EMU-to-world transform for all shapes and uniform XY scaling, shared rectangle overlap catalog/validation, rectangle visible-text search, unchanged non-geometric attributes, SVG overlays use seven named colors, widths 2/2.5/3/3.5/4 with original default, four line styles, proportional octave point scaling and shared planar outline rendering for blank-alt rectangles and ellipses; paired overlays, original restoration, curve targeting, shape selection, security and HTTP regressions are covered.
+Browser/WebGL regression includes real generated XLSX with missing/malformed/stale DrawingML Y, different independent picture calibration factors 1.25/0.8, mismatched end spans, inconsistent column markers and hidden rows/columns, production parser/manifest HTTP input and byte-exact real image endpoint extraction (browser uses the verified HTTP response bytes) and checks decoded raster versus XLSX display aspect, exact shape widths/heights, rotated corners, square projection, depth and text texture geometry, actual right-click inside/partial/outside catalog-to-SVG overlays and preserved original fill and opacity. Private workbook visual verification remains necessary.
 
-Both jobs passed on the first run and generated/uploaded test_report.md.
-
-- Ubuntu report: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/46007574399/artifacts/15202338061
-- Windows report: https://github.com/rarnhe/OneThreeOctave-SVG-Compare/actions/runs/46007574399/artifacts/15201613545
-
-## P0 scope and limitations
-
-- Per-sheet picture dual-anchor Y normalization uses exact rational H/(A1-A0) and applies it to row-anchor positions relative to the picture. Only Y translation changes; X, saved extents, rotation, uniform scale, Three.js, styling and SVG pair search are preserved.
-- Independent synthetic workbook factors 1.25 and 0.8, missing/malformed/stale saved Y, hidden/custom rows, mismatched shape spans, rotated outer bounds, absolute-anchor mapping, unavailable calibration and raw srcRect diagnostics are tested. Rotation outer-bound recognition uses calibrated span without scaling the saved dimensions.
-- An absolute-anchor shape has no row markers, so it uses its saved Y relative to the saved picture Y. If a picture lacks a valid independent two-cell span, is rotated, or the sheet has absolute anchors but lacks saved picture Y, retain the prior geometry for the entire sheet and report why calibration is unavailable. Invalid required row geometry retains existing contextual failure behavior.
-- Crop attributes are diagnostic only; no texture crop is applied. The affine calibration cannot guarantee correction of nonuniform row-height errors or inaccurate saved picture height. Real workbook visual verification remains necessary.
-- As in the base commit, browser tests verify actual image endpoint HTTP status/MIME and exact PNG bytes, then supply those bytes via Playwright routing to real Chromium. Direct browser-to-image-endpoint transport is not independently covered by this case. Earlier intermittent background loading failure remains unexplained.
-
-This checked-in summary reflects verified CI logs and uploaded artifact metadata. The report-only commit does not change production or test code.
