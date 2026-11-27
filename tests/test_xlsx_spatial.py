@@ -361,25 +361,82 @@ class TestGeometry(unittest.TestCase):
             {"x": -5, "y": 25}, {"x": -5, "y": 5},
         ])
 
-    def test_hidden_columns_and_row_heights_do_not_change_geometry(self):
+    def test_inconsistent_row_span_preserves_saved_geometry(self):
         sheet = ('<sheetFormatPr defaultRowHeight="71" defaultColWidth="42"/>'
                  '<cols><col min="1" max="3" hidden="1"/></cols>'
                  '<sheetData><row r="1" ht="40"/><row r="2" hidden="1"/></sheetData>')
-        self.assertEqual(self.parse(two_cell(),worksheet_xml=sheet),self.parse(two_cell()))
+        actual = self.parse(two_cell(),worksheet_xml=sheet)[0]["objects"][0]
+        expected = self.parse(two_cell())[0]["objects"][0]
+        self.assertEqual(actual["bounds_emu"], expected["bounds_emu"])
+        self.assertEqual(actual["vertical_geometry"]["source"],"drawingml")
+        self.assertIn("span disagrees",actual["vertical_geometry"]["reason"])
 
-    def test_worksheet_xml_is_never_read_for_geometry(self):
+    def test_column_metrics_never_used_for_vertical_correction(self):
         with TemporaryDirectory() as tmp:
-            book=fixture(Path(tmp)/"no-metrics.xlsx",sheet_count=2)
-            read=ZipFile.read
-            def without_sheet_body(archive,name,*args,**kwargs):
-                if isinstance(name,str) and name.startswith("xl/worksheets/") and name.endswith(".xml"):
-                    self.fail(f"Worksheet XML body was read: {name}")
-                return read(archive,name,*args,**kwargs)
-            with patch.object(ZipFile,"read",without_sheet_body):
+            book=fixture(Path(tmp)/"no-column-metrics.xlsx",sheet_count=2,
+                worksheet_xml='<sheetFormatPr defaultRowHeight="15" defaultColWidth="not-a-number"/>'
+                              '<cols><col min="invalid" max="invalid" width="invalid"/></cols>'
+                              '<sheetData><row r="1" ht="30"/></sheetData>')
+            first=spatial.first_child
+            def no_columns(parent,tag):
+                if tag in {"cols","col","colOff"}:
+                    self.fail("Column geometry accessed: "+tag)
+                return first(parent,tag)
+            with patch.object(spatial,"first_child",no_columns):
                 sheets=spatial.parse_xlsx(book)
             self.assertEqual(sheets[0]["objects"][0]["width_px"],135)
             self.assertEqual(sheets[1]["objects"][0]["width_px"],100)
             self.assertFalse(hasattr(spatial,"SheetMetrics"))
+
+    def test_vertical_translation_corrects_picture_and_each_shape_kind(self):
+        # 15pt=20px, first row 30pt=40px, second row hidden.
+        # row 2 (zero-based) begins at 40px, row 3 at 60px.
+        sheet=('<sheetFormatPr defaultRowHeight="15" defaultColWidth="999"/>'
+               '<sheetData><row r="1" ht="30"/><row r="2" hidden="1"/></sheetData>')
+        def anchor(child,x,y,w,h,first,last,first_off=0,last_off=0):
+            child=with_saved_geometry(child,x,y,w,h)
+            return (f'<xdr:twoCellAnchor>{marker("from",99,first,987654,first_off)}'
+                    f'{marker("to",100,last,123, last_off)}{child}</xdr:twoCellAnchor>')
+        children=[image("P"),shape("文本框"),shape("矩形"),shape("椭圆")]
+        anchors=anchor(children[0],80,10,300,60,2,5)
+        anchors+="".join(anchor(c,100+i*30,13+i,20,20,3,4) for i,c in enumerate(children[1:]))
+        with TemporaryDirectory() as tmp:
+            path=fixture(Path(tmp)/"stale-y.xlsx",anchors,worksheet_xml=sheet)
+            sheets=spatial.parse_xlsx(path)
+            objs=sheets[0]["objects"]
+            self.assertEqual([o["bounds_emu"]["y"] for o in objs],[40*9525]+[60*9525]*3)
+            self.assertEqual([o["bounds_emu"]["x"] for o in objs],[80*9525,100*9525,130*9525,160*9525])
+            self.assertEqual([o["height_px"] for o in objs],[60,20,20,20])
+            self.assertEqual([o["vertical_geometry"]["source"] for o in objs],["row_anchor"]*4)
+            service=import_module(f"{ROOT.name}.cad_service")
+            layer=service.build_cad_manifest(path,sheets,Path(tmp))["layers"][0]
+            self.assertEqual([o["bounds_emu"]["y"] for o in layer["objects"]],[0]+[20*9525]*3)
+            self.assertIn("Y校核: row_anchor",spatial.format_spatial_report(path,sheets))
+
+    def test_vertical_rotated_outer_bounds_and_one_cell_and_absolute(self):
+        # At 90 degrees a 60x20 object occupies a 60px vertical AABB.
+        # The unrotated top is 40+(60-20)/2=60px.
+        child=with_saved_geometry(shape("矩形",rot=5400000),20,5,60,20)
+        raw=f'<xdr:twoCellAnchor>{marker("from",0,1)}{marker("to",0,4)}{child}</xdr:twoCellAnchor>'
+        obj=self.parse(raw)[0]["objects"][0]
+        self.assertEqual(obj["bounds_emu"]["y"],60*9525)
+        self.assertEqual(obj["bounds_emu"]["width"],60*9525)
+        child=with_saved_geometry(shape(),22,5,20,30)
+        raw=f'<xdr:oneCellAnchor>{marker("from",0,2)}<xdr:ext cx="190500" cy="285750"/>{child}</xdr:oneCellAnchor>'
+        obj=self.parse(raw)[0]["objects"][0]
+        self.assertEqual(obj["bounds_emu"]["y"],60*9525)
+        self.assertEqual(self.parse(absolute(child))[0]["objects"][0]["bounds_emu"]["y"],20*9525)
+
+    def test_vertical_missing_default_and_zero_height(self):
+        child=with_saved_geometry(shape(),20,5,20,20)
+        raw=f'<xdr:twoCellAnchor>{marker("from",0,1)}{marker("to",0,2)}{child}</xdr:twoCellAnchor>'
+        obj=self.parse(raw,worksheet_xml='<sheetData/>')[0]["objects"][0]
+        self.assertEqual(obj["bounds_emu"]["y"],5*9525)
+        self.assertEqual(obj["vertical_geometry"]["source"],"drawingml")
+        sheet='<sheetFormatPr defaultRowHeight="15" zeroHeight="1"/><sheetData><row r="2" hidden="0" ht="15"/></sheetData>'
+        obj=self.parse(raw,worksheet_xml=sheet)[0]["objects"][0]
+        self.assertEqual(obj["bounds_emu"]["y"],0)
+        self.assertEqual(obj["vertical_geometry"]["source"],"row_anchor")
 
     def test_two_cell_saved_shape_geometry_beats_estimated_columns(self):
         def transformed(child, x, y, w, h):

@@ -39,9 +39,9 @@ assets/
 
 ## CAD 坐标与联动
 
-- **严格 DrawingML 几何模式**：不再读取 worksheet XML 的单元格、列宽或行高，不再存在 SheetMetrics、默认字体宽度估算或单元格坐标回退。工作表关系文件仍用于定位 drawing XML。
+- **DrawingML 几何模式与垂直校核**：X、宽、高、旋转仍直接使用保存的绝对 EMU；不读取列宽或估算字体。仅读取 worksheet 的显式行高（pt→EMU）、隐藏行和 row/rowOff 校核 Y。两单元格锚点的垂直跨度须与保存高度或旋转外框高度在 1px 内一致；单单元格锚点的直接高度须与保存高度一致。满足条件时使用行锚点的 Y（旋转外框取中心再还原未旋转顶边），背景和所有形状一致处理。缺失或冲突时保留 DrawingML Y，终端记录原因；绝对锚点保持不变。
 - 对 `oneCellAnchor` / `twoCellAnchor`，读取顶层对象自身的 `xfrm/off@x,y` 与 `xfrm/ext@cx,cy`，四个属性必须是有效整数 EMU，宽高必须为正；`absoluteAnchor` 直接使用其 `pos/ext`。零偏移且起始单元格标记非零的情况视作有歧义的占位值并报错（不转换标记为坐标），合法原点零偏移保留。旋转仍来自对象自身的 xfrm。
-- 缺失或无效几何不猜测、不降级、不静默跳过：启动时停止，报告 Sheet 名称、对象名称、锚点类型、drawing 路径及缺失/无效属性。终端和 manifest 的 `geometry_source` 仅为 `xfrm` 或 `absoluteAnchor`。需要在 Excel 中重新保存具备完整绝对几何的图纸；不模拟 Excel 打开后重新布局或陈旧变换同步。组合图形仍只读取顶层外框，不展开组内图元。
+- 缺失或无效几何不猜测、不降级、不静默跳过：启动时停止，报告 Sheet 名称、对象名称、锚点类型、drawing 路径及缺失/无效属性。终端和 manifest 的 `geometry_source` 仍为 `xfrm` 或 `absoluteAnchor`；`vertical_geometry` 另记录原始 Y、校核后的 Y、来源及不一致原因。需要在 Excel 中重新保存具备完整绝对几何的图纸；不模拟 Excel 打开后重新布局或陈旧变换同步。组合图形仍只读取顶层外框，不展开组内图元。
 
 `xlsx_spatial.py` 仍返回以 A1 左上角为原点的 `bounds_emu` 和 `vertices_px`；`cad_service.py` 再将**每个 Sheet 的底图左上角移到局部 (0,0)**，所有形状同步减去该 Sheet 图片的坐标偏移。这样 Fab 和 Subfab 通过各自的图纸原点使用统一的相机位置、朝向和缩放，不受原始单元格排版起点影响。
 

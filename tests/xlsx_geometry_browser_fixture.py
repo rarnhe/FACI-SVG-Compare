@@ -27,14 +27,16 @@ PNG=[
 
 
 def transform(x,y,w,h,rotation=0):
-    # Nonzero common sheet origin tests actual relative-coordinate subtraction.
-    return (f'<a:xfrm rot="{rotation*60000}"><a:off x="{(x+80)*EMU}" y="{(y+40)*EMU}"/>'
+    # Deliberately stale saved Y: picture has +23px, other objects have
+    # object-dependent shifts. X and both extents remain authoritative.
+    stale_y=y+40+(23 if x==0 and y==0 else 9+(x%17))
+    return (f'<a:xfrm rot="{rotation*60000}"><a:off x="{(x+80)*EMU}" y="{stale_y*EMU}"/>'
             f'<a:ext cx="{w*EMU}" cy="{h*EMU}"/></a:xfrm>')
 
 
 def anchored(x,y,w,h,child):
-    # Deliberately use markers inconsistent with the worksheet layout.
-    # Strict parsing must never consult the worksheet dimensions.
+    # Column markers intentionally disagree. Row anchors are exact,
+    # including the first hidden row; only Y is reconciled.
     left=x+80
     top=y+40
     right=left+w
@@ -42,7 +44,7 @@ def anchored(x,y,w,h,child):
     def mark(tag,px,py):
         col,dx=divmod(px,55)
         row,dy=divmod(py,20)
-        return marker(tag,col,row,dx*EMU,dy*EMU)
+        return marker(tag,col,row+1,dx*EMU,dy*EMU)
     return (f'<xdr:twoCellAnchor editAs="oneCell">{mark("from",left,top)}'
             f'{mark("to",right,bottom)}{child}<xdr:clientData/></xdr:twoCellAnchor>')
 
@@ -79,7 +81,7 @@ def main():
         base=Path(tmp)
         raw=fixture(base/"raw.xlsx",anchors(420,240),sheet_count=2,
                     second_anchors=anchors(280,200),media=True,
-                    worksheet_xml='<sheetFormatPr defaultColWidth="50" defaultRowHeight="60"/>'
+                    worksheet_xml='<sheetFormatPr defaultColWidth="50" defaultRowHeight="15"/>'
                                   '<cols><col min="1" max="5" hidden="1"/></cols>'
                                   '<sheetData><row r="1" hidden="1"/></sheetData>')
         book=base/"geometry.xlsx"

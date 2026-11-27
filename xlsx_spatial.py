@@ -1,13 +1,15 @@
 """Extract Excel DrawingML objects as 2D positions relative to A1.
 
 X increases to the right, Y downwards. Read saved absolute DrawingML
-geometry only, without worksheet column/row metrics. Geometry is kept in
+geometry; corroborate Y with explicit worksheet row anchors, never use column metrics. Geometry is kept in
 integer EMU and reported in reference pixels at 96 DPI (9525 EMU / pixel).
 """
 
 from __future__ import annotations
 
 import colorsys
+from bisect import bisect_left
+from decimal import Decimal, InvalidOperation
 from math import cos, radians, sin
 from pathlib import Path
 import posixpath
@@ -250,6 +252,123 @@ def outline_width_px(outline: ET.Element | None, style: ET.Element | None,
         return max(0, int(value)) / EMUS_PER_PIXEL if value is not None else None
     except ValueError:
         return None
+
+
+class VerticalRowMetrics:
+    """Sparse row heights in exact EMU from saved XLSX point measurements.
+
+    Do not infer a default font or a default row height when the worksheet
+    omits it. Columns and horizontal offsets are never consulted here.
+    """
+    def __init__(self, root: ET.Element):
+        self.default = None
+        self.indices = []
+        self.prefix = [0]
+        fmt = first_child(root, "sheetFormatPr")
+        if fmt is None or "defaultRowHeight" not in fmt.attrib:
+            return
+        try:
+            default = self.height(fmt.attrib["defaultRowHeight"])
+            zero = fmt.get("zeroHeight") in {"1", "true"}
+            self.default = 0 if zero else default
+            overrides = {}
+            data = first_child(root, "sheetData")
+            if data is not None:
+                for row in data:
+                    if local_name(row.tag) != "row":
+                        continue
+                    index = int(row.attrib["r"]) - 1
+                    if not 0 <= index < 1048576:
+                        raise ValueError("invalid row index")
+                    hidden = row.get("hidden")
+                    if hidden in {"1", "true"}:
+                        h = 0
+                    elif zero and hidden is None and "ht" not in row.attrib:
+                        h = 0
+                    else:
+                        h = self.height(row.attrib["ht"]) if "ht" in row.attrib else default
+                    overrides[index] = h - self.default
+            self.indices = sorted(overrides)
+            for index in self.indices:
+                self.prefix.append(self.prefix[-1] + overrides[index])
+        except (KeyError, ValueError, InvalidOperation, OverflowError):
+            self.default = None
+
+    @staticmethod
+    def height(points: str) -> int:
+        value = Decimal(points)
+        if not value.is_finite() or value < 0 or value > 409.5:
+            raise ValueError("invalid saved row height")
+        return round(value * EMUS_PER_POINT)
+
+    def marker_y(self, marker: ET.Element | None) -> int | None:
+        if self.default is None or marker is None:
+            return None
+        row, offset = first_child(marker, "row"), first_child(marker, "rowOff")
+        if row is None or offset is None:
+            return None
+        try:
+            index, off = int(row.text), int(offset.text)
+        except (TypeError, ValueError):
+            return None
+        if not 0 <= index < 1048576:
+            return None
+        return index * self.default + self.prefix[bisect_left(self.indices, index)] + off
+
+
+def vertical_rect(anchor: ET.Element, rect: tuple[int, int, int, int], angle: float,
+                  rows: VerticalRowMetrics | None) -> tuple[tuple[int, int, int, int], dict]:
+    """Only revise the Y translation when the saved anchor corroborates size.
+
+    Two-cell anchors can describe an unrotated or rotated outer rectangle.
+    Match their vertical span to the saved extents before using their center.
+    A one-cell anchor has an explicit unrotated extent. Absolute anchors
+    already have exact coordinates. No arbitrary offset or Y-only scaling.
+    """
+    x1, y1, x2, y2 = rect
+    info = {"saved_y_emu": y1, "resolved_y_emu": y1, "source": "drawingml"}
+    kind = local_name(anchor.tag)
+    if kind == "absoluteAnchor" or rows is None:
+        return rect, info
+    start = rows.marker_y(first_child(anchor, "from"))
+    if start is None:
+        info["reason"] = "row geometry unavailable"
+        return rect, info
+    info["anchor_y_emu"] = start
+    h, w = y2 - y1, x2 - x1
+    # Saved row heights can be rounded to display pixels by Excel.
+    # Only accept a corroborating span within one reference pixel.
+    tolerance = EMUS_PER_PIXEL
+    if kind == "twoCellAnchor":
+        end = rows.marker_y(first_child(anchor, "to"))
+        if end is None or end <= start:
+            info["reason"] = "missing or invalid end row anchor"
+            return rect, info
+        span = end - start
+        info["anchor_span_emu"] = span
+        rotated_span = abs(w * sin(radians(angle))) + abs(h * cos(radians(angle)))
+        # Prefer the unrotated interpretation when both fits are possible.
+        if abs(span - h) <= tolerance:
+            candidate = start
+        elif abs(span - rotated_span) <= tolerance:
+            candidate = round((start + end - h) / 2)
+        else:
+            info["reason"] = "row anchor span disagrees with saved extent"
+            return rect, info
+    elif kind == "oneCellAnchor":
+        ext = first_child(anchor, "ext")
+        try:
+            anchor_h = int(ext.attrib["cy"]) if ext is not None else 0
+        except (KeyError, ValueError):
+            anchor_h = 0
+        if anchor_h <= 0 or abs(anchor_h - h) > tolerance:
+            info["reason"] = "one-cell extent disagrees with saved extent"
+            return rect, info
+        candidate = start
+    else:
+        return rect, info
+    info.update(resolved_y_emu=candidate, source="row_anchor")
+    return (x1, candidate, x2, candidate + h), info
 
 
 def object_transform(node: ET.Element) -> ET.Element | None:
@@ -512,7 +631,7 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
                     theme_fonts: dict[str, dict[str, str]] | None = None,
                     drawing_rels: dict[str, tuple[str, str]] | None = None,
                     drawing_part: str = "", members: set[str] | None = None,
-                    sheet_name: str = "") -> list[dict]:
+                    sheet_name: str = "", row_metrics: VerticalRowMetrics | None = None) -> list[dict]:
     color_map = first_child(root, "clrMap")
     override = first_child(first_child(root, "clrMapOvr"), "overrideClrMapping")
     if color_map is not None or override is not None:
@@ -531,6 +650,7 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
             try:
                 rect, geometry_source = drawing_rect(anchor, element)
                 angle = rotation_degrees(element)
+                rect, vertical = vertical_rect(anchor, rect, angle, row_metrics)
             except SpatialXlsxError as error:
                 raise SpatialXlsxError(
                     f"Sheet '{sheet_name}', object '{name}' ({local_name(anchor.tag)}, "
@@ -543,6 +663,7 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
                 "name": name,
                 "anchor": local_name(anchor.tag),
                 "geometry_source": geometry_source,
+                "vertical_geometry": vertical,
                 "bounds_emu": {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1},
                 "width_px": round((x2 - x1) / EMUS_PER_PIXEL, 3),
                 "height_px": round((y2 - y1) / EMUS_PER_PIXEL, 3),
@@ -612,10 +733,11 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                 if rel is None or "worksheet" not in rel[0]:
                     raise SpatialXlsxError(f"Missing worksheet relationship for {name}")
                 sheet_part = resolve_part("xl/workbook.xml", rel[1])
-                # Only resolve the worksheet's drawing relationships. Do
-                # not even open its XML body (rows, columns, cells, styles).
+                # Row heights are explicit point measurements; use only
+                # these for Y corroboration, never column width/font metrics.
                 if sheet_part not in z.namelist():
                     raise SpatialXlsxError(f"Missing worksheet part for {name}: {sheet_part}")
+                row_metrics = VerticalRowMetrics(ET.fromstring(z.read(sheet_part)))
                 objects = []
                 for rel_type, target in relationships(z, sheet_part).values():
                     if not rel_type.endswith("/drawing"):
@@ -627,7 +749,7 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                         theme_fonts=fonts,
                         drawing_rels=relationships(z, drawing_part),
                         drawing_part=drawing_part, members=set(z.namelist()),
-                        sheet_name=name,
+                        sheet_name=name, row_metrics=row_metrics,
                     ))
                 sheets.append({"sheet": name, "objects": objects})
             return sheets
@@ -696,6 +818,14 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                 f"宽={obj['width_px']:.3f}px 高={obj['height_px']:.3f}px"
             )
             lines.append(f"    几何来源: {obj.get('geometry_source', 'unknown')}")
+            vertical = obj.get("vertical_geometry", {})
+            if vertical:
+                saved = vertical["saved_y_emu"]
+                resolved = vertical["resolved_y_emu"]
+                reason = vertical.get("reason", "")
+                lines.append(f"    Y校核: {vertical['source']} "
+                             f"saved={saved} resolved={resolved} delta={resolved-saved} EMU"
+                             + (f" ({reason})" if reason else ""))
             for title, point in zip(("左上", "右上", "右下", "左下"), obj["vertices_px"]):
                 lines.append(f"    {title}: ({point['x']:.3f}, {point['y']:.3f}) px")
             if obj["rotation_degrees"]:

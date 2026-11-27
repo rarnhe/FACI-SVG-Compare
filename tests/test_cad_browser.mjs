@@ -228,7 +228,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
             [-width/2,height/2],[width/2,height/2],
             [width/2,-height/2],[-width/2,-height/2],
           ].map(([x,y])=>mesh.localToWorld(new THREE.Vector3(x,y,0))):[];
-          return {name:item.name,source:item.geometry_source,width,height,depth,radius,center:center.toArray(),
+          return {name:item.name,source:item.geometry_source,verticalSource:item.vertical_geometry?.source,width,height,depth,radius,center:center.toArray(),
             fill:'#'+mesh.material.color.getHexString(),opacity:mesh.material.opacity,
             corners:corners.map(p=>p.toArray()),
             screen:corners.map(p=>project(p,viewport.x,viewport.y)),
@@ -260,6 +260,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       for(const actual of m.shapes){
         const item=data.layers[i].objects.find(o=>o.name===actual.name), b=item.bounds_emu;
         assert.equal(actual.source,'xfrm','real XLSX transform must be selected');
+        assert.equal(actual.verticalSource,'row_anchor','stale saved Y must be corrected before rendering');
         const width=b.width/emu,height=b.height/emu, cx=(b.x/emu+width/2)*s,cy=-(b.y/emu+height/2)*s;
         near(actual.center[0],cx,actual.name+' center X');
         near(actual.center[1],cy,actual.name+' center Y');
