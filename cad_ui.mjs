@@ -4,10 +4,10 @@ const EPS = 1e-7;
 export const INITIAL_REFERENCE_SPLIT = 0.5;
 
 // CAD cuboids retain a solid, translucent roof when selected.
-export const CUBOID_FACE_OPACITY = 0.43;
-export const CUBOID_SELECTED_OPACITY = 0.50;
+export const CUBOID_FACE_OPACITY = 0.93;
+export const CUBOID_SELECTED_OPACITY = 1.00;
 
-// Translucent cuboid faces reveal elevated ellipse measurement points.
+// Rectangle edges are outlined separately for rotation visibility.
 
 
 /**
@@ -152,6 +152,82 @@ export function fitSvgPair(frameA, frameB, aspectA, aspectB) {
     frameA.height/ratioA,frameB.height/ratioB,
   ));
   return {width,heightA:width*ratioA,heightB:width*ratioB};
+}
+
+/** Resolve the font stack for a DrawingML text run. */
+export function textboxFont(run) {
+  const points=Number(run?.font_size_pt);
+  const size=Math.max(1,Math.min(500,
+    Number.isFinite(points) && points>0 ? points : 11));
+  const px=+(size*96/72).toFixed(3);
+  const family=String(run?.font_family||'Calibri').replace(/["\\\r\n]/g,'').trim();
+  const east=String(run?.east_asian_font||'Microsoft YaHei')
+    .replace(/["\\\r\n]/g,'').trim();
+  return (run?.italic?'italic ':'')+(run?.bold?'bold ':'')+
+    px+'px "'+(family||'Calibri')+'", "'+(east||'Microsoft YaHei')+'", sans-serif';
+}
+
+/** Calculate DrawingML run positions in the original XLSX picture coordinates.
+    A measure(text,run) callback returns reference-pixel glyph widths.
+    Text and its picture then receive the same transform in Three.js. */
+export function layoutTextboxText(layout,width,height,measure) {
+  const w=Math.max(1,Number(width)||1),h=Math.max(1,Number(height)||1);
+  const margins=layout?.insets_px||{};
+  const clamp=(value,max)=>Math.max(0,Math.min(max,Number(value)||0));
+  const left=clamp(margins.left,w),right=clamp(margins.right,w);
+  const top=clamp(margins.top,h),bottom=clamp(margins.bottom,h);
+  const usable=Math.max(1,w-left-right);
+  const paragraphs=layout?.paragraphs||[];
+  const lines=[];
+  let glyphs=0;
+  for(const paragraph of paragraphs.slice(0,500)) {
+    const align=['left','center','right'].includes(paragraph?.align)
+      ? paragraph.align : 'left';
+    let line={parts:[],width:0,height:0,align};
+    const flush=()=>{
+      lines.push({...line,height:Math.max(line.height,14)});
+      line={parts:[],width:0,height:0,align};
+    };
+    for(const run of (paragraph?.runs||[]).slice(0,512)){
+      const text=String(run?.text||'');
+      const size=Number(run?.font_size_pt);
+      const lineHeight=Math.max(14,Math.min(500,
+        (Number.isFinite(size)&&size>0?size:11)*96/72*1.25));
+      for(const char of text) {
+        if(++glyphs>20000) break;
+        if(char==='\n') {flush();continue;}
+        const widthPx=Number(measure(char,run));
+        const advance=Number.isFinite(widthPx)?Math.max(0,widthPx):0;
+        if(line.width+advance>usable && line.parts.length) flush();
+        const last=line.parts[line.parts.length-1];
+        if(last?.run===run) {
+          last.text+=char;
+          last.width+=advance;
+        } else line.parts.push({text:char,run,width:advance});
+        line.width+=advance;
+        line.height=Math.max(line.height,lineHeight);
+      }
+      if(glyphs>20000) break;
+    }
+    flush();
+    if(glyphs>20000) break;
+  }
+  const totalHeight=lines.reduce((sum,line)=>sum+line.height,0);
+  const usableHeight=Math.max(0,h-top-bottom);
+  const anchor=layout?.anchor;
+  let y=top+(anchor==='middle'?Math.max(0,(usableHeight-totalHeight)/2)
+    :anchor==='bottom'?Math.max(0,usableHeight-totalHeight):0);
+  const commands=[];
+  for(const line of lines){
+    let x=left+(line.align==='center'?Math.max(0,(usable-line.width)/2)
+      :line.align==='right'?Math.max(0,usable-line.width):0);
+    for(const part of line.parts){
+      commands.push({text:part.text,x,y,run:part.run});
+      x+=part.width;
+    }
+    y+=line.height;
+  }
+  return commands;
 }
 
 /** Prefer the actual decoded XLSX picture dimensions, not the cell anchor ratio. */

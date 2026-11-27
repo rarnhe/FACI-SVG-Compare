@@ -7,6 +7,7 @@ import {
   requiredSvgRatio,canAddOverlay,SVG_COLORS,nextLegendColor,
   svgLegendName,svgSelectionKey,CUBOID_FACE_OPACITY,CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER,cadShapeRenderOrder,cadShapeZOffset,
+  textboxFont,layoutTextboxText,
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
 } from '../cad_ui.mjs';
 
@@ -262,11 +263,10 @@ test('SVG legend shows folder_sheet_rectangle-or-sensor_axis, never date',()=>{
   assert.equal(canAddOverlay(map,new Set(),key1),false);
 });
 
-test('cuboid uses 43% normal opacity and 50% selected opacity',()=>{
-  assert.equal(CUBOID_FACE_OPACITY,0.43);
-  assert.equal(CUBOID_SELECTED_OPACITY,0.50);
+test('cuboid uses 93% normal opacity and 100% selected opacity',()=>{
+  assert.equal(CUBOID_FACE_OPACITY,0.93);
+  assert.equal(CUBOID_SELECTED_OPACITY,1.00);
   assert.ok(CUBOID_SELECTED_OPACITY>CUBOID_FACE_OPACITY);
-  assert.ok(CUBOID_SELECTED_OPACITY<1);
 });
 
 
@@ -353,4 +353,54 @@ test('shape and raster background share exact corner alignment at different aspe
     assert.ok(Math.abs(aligned[0]/factor.width-0.6)<1e-9);
     assert.ok(Math.abs(aligned[1]/factor.height-0.4)<1e-9);
   }
+});
+
+
+test('textbox font maps DrawingML point sizes and styles into canvas CSS',()=>{
+  const font=textboxFont({
+    font_family:'Aptos Display',east_asian_font:'Microsoft YaHei',
+    font_size_pt:18,bold:true,italic:true,
+  });
+  assert.equal(font,'italic bold 24px "Aptos Display", "Microsoft YaHei", sans-serif');
+  assert.ok(textboxFont({font_size_pt:11}).includes('14.667px'));
+  // A malicious/unusual XLSX family string never breaks CSS font quoting.
+  assert.ok(!textboxFont({font_family:'test"broken',font_size_pt:11})
+    .includes('"broken'));
+});
+
+test('DrawingML text uses exact inset, vertical anchor, font runs and centering',()=>{
+  const first={text:'AB',font_size_pt:12,color:'#FF0000'};
+  const second={text:'测',font_size_pt:12,color:'#00AA00'};
+  const layout={
+    anchor:'middle',
+    insets_px:{left:4,right:6,top:2,bottom:2},
+    paragraphs:[{align:'center',runs:[first,second]}],
+  };
+  const output=layoutTextboxText(layout,100,70,()=>10);
+  assert.deepEqual(output.map(({text,x,y,run})=>({text,x,y,color:run.color})),[
+    {text:'AB',x:34,y:25,color:'#FF0000'},
+    {text:'测',x:54,y:25,color:'#00AA00'},
+  ]);
+});
+
+test('textbox line wraps within bounds and right-aligns second paragraph',()=>{
+  const r1={text:'ABCDE',font_size_pt:12};
+  const r2={text:'XY',font_size_pt:12};
+  const result=layoutTextboxText({
+    anchor:'top',insets_px:{left:2,right:2,top:3,bottom:3},
+    paragraphs:[{align:'left',runs:[r1]},{align:'right',runs:[r2]}],
+  },35,120,()=>10);
+  assert.deepEqual(result.map(c=>[c.text,c.x,c.y]),[
+    ['ABC',2,3],['DE',2,23],['XY',13,43],
+  ]);
+});
+
+test('textbox explicit newline and bottom anchor preserve original position',()=>{
+  const run={text:'A\nB',font_size_pt:12};
+  const out=layoutTextboxText({
+    anchor:'bottom',
+    insets_px:{left:0,right:0,top:4,bottom:6},
+    paragraphs:[{align:'left',runs:[run]}],
+  },100,90,()=>10);
+  assert.deepEqual(out.map(x=>[x.text,x.y]),[['A',44],['B',64]]);
 });

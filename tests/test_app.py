@@ -185,10 +185,10 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("selectOnButton(mesh.userData.cadObject,button)",viewer)
         parser=(STATIC_DIR/"xlsx_spatial.py").read_text(encoding="utf-8")
         self.assertNotIn("drawTopLeftText(",viewer)
-        self.assertNotIn("CanvasTexture",viewer)
-        self.assertNotIn("fillText(",viewer)
+        self.assertIn("new THREE.CanvasTexture(canvas)",viewer)
+        self.assertIn("context.fillText(part.text,part.x,part.y)",viewer)
         self.assertNotIn("frontZ",viewer)
-        self.assertNotIn("fontRef",parser)
+        self.assertIn('font_ref = first_child(style, "fontRef")',parser)
         self.assertNotIn('"text": style_color(',parser)
         self.assertIn('obj["text"] = shape_text(element)',parser)
 
@@ -358,7 +358,7 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("CUBOID_FACE_OPACITY",viewer)
         self.assertIn("CUBOID_SELECTED_OPACITY",viewer)
         self.assertIn("isTransparentCuboid=true",viewer)
-        self.assertNotIn("new THREE.EdgesGeometry(",viewer)
+        self.assertIn("new THREE.EdgesGeometry(cube)",viewer)
 
     def test_semantic_threejs_layer_order_and_legend_first_level_alignment(self):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
@@ -375,7 +375,7 @@ class TestStaticFrontend(unittest.TestCase):
         for expected in (
             "group.position.set(r.x+w/2,r.y-h/2,raisedZ+cadShapeZOffset(kind))",
             "group.renderOrder=priority",
-            "node.renderOrder=priority+(node.isLine || node.isLineSegments ? 0.25 : 0)",
+            "node.renderOrder=priority+(node.isLine || node.isLineSegments ? 0.25",
             "image.renderOrder=CAD_DRAW_ORDER.image",
             "group.renderOrder=CAD_DRAW_ORDER.image",
             "cadShapeRenderOrder(b.object.userData.cadObject?.shape_kind)",
@@ -385,7 +385,46 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("white-space:nowrap;text-align:left;cursor:grab", html)
         self.assertIn("#reference-log .reference-log-line{display:block;line-height:1.7;text-align:left", html)
         self.assertIn(".legend-menu-primary button{display:block;width:100%;text-align:left}", html)
-        self.assertNotIn("new THREE.EdgesGeometry(", viewer)
+        self.assertIn("new THREE.EdgesGeometry(cube)", viewer)
+
+    def test_drawingml_text_position_color_font_and_cuboid_edge_color_are_wired(self):
+        parser=(STATIC_DIR/"xlsx_spatial.py").read_text(encoding="utf-8")
+        viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
+        ui=(STATIC_DIR/"cad_ui.mjs").read_text(encoding="utf-8")
+        for expected in (
+            "def theme_text_fonts(z: ZipFile)",
+            "def textbox_text_layout(node: ET.Element",
+            "def text_property_style(node: ET.Element",
+            'obj["text_layout"] = textbox_text_layout(',
+            'obj["colors"] = {',
+            '"outline": style_color(outline, style, "line", palette, fills, lines)',
+            '"font_size_pt": 11.0',
+            '"insets_px": insets',
+            '"paragraphs": paragraphs',
+        ):
+            self.assertIn(expected,parser)
+        for expected in (
+            "function drawTextboxText(group,item,worldRect)",
+            "layoutTextboxText(layout,w,h",
+            "textboxFont(part.run)",
+            "context.fillText(part.text,part.x,part.y)",
+            "new THREE.CanvasTexture(canvas)",
+            "textMesh.position.z=0.9",
+            "textMesh.userData.isTextboxText=true",
+            "if(kind==='textbox') drawTextboxText(group,item,r)",
+            "new THREE.EdgesGeometry(cube)",
+            "color:borderColor,transparent:true,opacity:1",
+            "if(colors.outline!=='无/透明')",
+            "mesh.userData.isTransparentCuboid",
+        ):
+            self.assertIn(expected,viewer)
+        for expected in (
+            "CUBOID_FACE_OPACITY = 0.93",
+            "CUBOID_SELECTED_OPACITY = 1.00",
+            "export function textboxFont(run)",
+            "export function layoutTextboxText(layout,width,height,measure)",
+        ):
+            self.assertIn(expected,ui)
 
     def test_local_asset_directory_exists(self):
         self.assertTrue((STATIC_DIR / "assets").is_dir())

@@ -211,18 +211,131 @@ class TestGeometry(unittest.TestCase):
         ])
         self.assertEqual(shape2["vertices_px"][0], {"x": 10, "y": 20})
 
-    def test_theme_colors_exclude_unused_font_attributes(self):
+    def test_theme_colors_and_textbox_styles_are_separate(self):
         colors = self.parse()[0]["objects"][1]["colors"]
         self.assertEqual(colors, {
             "fill": "#5B9BD5", "outline": "#5B9BD5"
         })
         self.assertNotIn("text", colors)
+        textbox=shape(name="文本框15").replace(
+            '</xdr:nvSpPr>','<xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>')
+        obj=self.parse(one_cell(textbox))[0]["objects"][0]
+        self.assertIn("text_layout",obj)
+        self.assertEqual(obj["colors"]["outline"],"#5B9BD5")
 
     def test_explicit_no_fill(self):
         self.assertEqual(
             self.parse(one_cell(shape(fill=False)))[0]["objects"][0]["colors"]["fill"],
             "无/透明",
         )
+
+    def test_textbox_uses_explicit_run_font_size_color_and_layout_position(self):
+        import xml.sax.saxutils
+        textbox = shape(name="文本框B1").replace(
+            '</xdr:nvSpPr>',
+            '<xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>')
+        original='<xdr:txBody><a:p><a:r><a:rPr>'
+        start=textbox.index("<xdr:txBody>")
+        end=textbox.index("</xdr:txBody>",start)+len("</xdr:txBody>")
+        styled=(
+            '<xdr:txBody>'
+            '<a:bodyPr lIns="19050" rIns="38100" '
+            'tIns="28575" bIns="47625" anchor="ctr"/>'
+            '<a:p><a:pPr algn="ctr"><a:defRPr sz="1200">'
+            '<a:latin typeface="Arial"/></a:defRPr></a:pPr>'
+            '<a:r><a:rPr sz="1650" b="1">'
+            '<a:solidFill><a:srgbClr val="112233"/></a:solidFill>'
+            '<a:latin typeface="Aptos"/><a:ea typeface="Microsoft YaHei"/>'
+            '</a:rPr><a:t>深度B1</a:t></a:r>'
+            '<a:r><a:rPr sz="1400" i="1">'
+            '<a:solidFill><a:schemeClr val="accent1"/></a:solidFill>'
+            '</a:rPr><a:t> +Y</a:t></a:r></a:p>'
+            '<a:p><a:pPr algn="r"><a:defRPr sz="900"/></a:pPr>'
+            '<a:r><a:rPr/><a:t>第二行</a:t></a:r></a:p>'
+            '</xdr:txBody>')
+        textbox=textbox[:start]+styled+textbox[end:]
+        item=self.parse(one_cell(textbox))[0]["objects"][0]
+        self.assertEqual(item["shape_kind"],"textbox")
+        self.assertEqual(item["text"],"深度B1 +Y\n第二行")
+        layout=item["text_layout"]
+        self.assertEqual(layout["anchor"],"middle")
+        self.assertEqual(layout["insets_px"],{
+            "left":2,"right":4,"top":3,"bottom":5,
+        })
+        self.assertEqual([p["align"] for p in layout["paragraphs"]],
+                         ["center","right"])
+        first,second=layout["paragraphs"][0]["runs"]
+        self.assertEqual(first["font_family"],"Aptos")
+        self.assertEqual(first["east_asian_font"],"Microsoft YaHei")
+        self.assertEqual(first["font_size_pt"],16.5)
+        self.assertEqual(first["color"],"#112233")
+        self.assertTrue(first["bold"])
+        self.assertFalse(first["italic"])
+        self.assertEqual(second["font_family"],"Arial")
+        self.assertEqual(second["font_size_pt"],14)
+        self.assertEqual(second["color"],"#5B9BD5")
+        self.assertTrue(second["italic"])
+        self.assertEqual(layout["paragraphs"][1]["runs"][0]["font_size_pt"],9)
+        self.assertEqual(item["colors"]["outline"],"#5B9BD5")
+
+    def test_textbox_default_style_and_line_break_are_preserved(self):
+        textbox=shape(name="文本框19").replace(
+            '</xdr:nvSpPr>',
+            '<xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>')
+        start=textbox.index("<xdr:txBody>")
+        end=textbox.index("</xdr:txBody>",start)+len("</xdr:txBody>")
+        styled=(
+            '<xdr:txBody><a:bodyPr anchor="b"/>'
+            '<a:p><a:r><a:rPr sz="2400">'
+            '<a:solidFill><a:srgbClr val="DD00AA"/></a:solidFill>'
+            '<a:t>上</a:t></a:r><a:br/><a:r><a:rPr/>'
+            '<a:t>下</a:t></a:r></a:p></xdr:txBody>')
+        textbox=textbox[:start]+styled+textbox[end:]
+        item=self.parse(one_cell(textbox))[0]["objects"][0]
+        layout=item["text_layout"]
+        self.assertEqual(layout["anchor"],"bottom")
+        self.assertEqual(layout["insets_px"],{
+            "left":9.6,"right":9.6,"top":4.8,"bottom":4.8,
+        })
+        runs=layout["paragraphs"][0]["runs"]
+        self.assertEqual([run["text"] for run in runs],["上","\n","下"])
+        self.assertEqual(runs[0]["color"],"#DD00AA")
+        self.assertEqual(runs[0]["font_size_pt"],24)
+        self.assertEqual(runs[2]["font_size_pt"],11)
+
+    def test_theme_font_scheme_and_font_reference_defaults(self):
+        from xml.etree import ElementTree as ET
+        theme = (
+            '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            '<a:themeElements><a:fontScheme name="Custom">'
+            '<a:majorFont><a:latin typeface="Aptos Display"/>'
+            '<a:ea typeface="Microsoft YaHei"/></a:majorFont>'
+            '<a:minorFont><a:latin typeface="Aptos"/>'
+            '<a:ea typeface="SimSun"/></a:minorFont>'
+            '</a:fontScheme></a:themeElements></a:theme>')
+        with TemporaryDirectory() as tmp:
+            path=Path(tmp)/"fonts.zip"
+            with ZipFile(path,"w") as output:
+                output.writestr("xl/theme/theme1.xml",theme)
+            with ZipFile(path) as archive:
+                theme_fonts=spatial.theme_text_fonts(archive)
+        self.assertEqual(theme_fonts["major"],
+                         {"latin":"Aptos Display","ea":"Microsoft YaHei"})
+        self.assertEqual(theme_fonts["minor"],
+                         {"latin":"Aptos","ea":"SimSun"})
+        element=ET.fromstring(
+            f'<xdr:sp xmlns:xdr="{XDR}" xmlns:a="{A}">'
+            '<xdr:style><a:fontRef idx="major">'
+            '<a:schemeClr val="accent1"/></a:fontRef></xdr:style>'
+            '<xdr:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="1800"/>'
+            '<a:t>TEST</a:t></a:r></a:p></xdr:txBody></xdr:sp>')
+        layout=spatial.textbox_text_layout(element,
+            {"accent1":"5B9BD5"},theme_fonts)
+        run=layout["paragraphs"][0]["runs"][0]
+        self.assertEqual(run["font_family"],"Aptos Display")
+        self.assertEqual(run["east_asian_font"],"Microsoft YaHei")
+        self.assertEqual(run["font_size_pt"],18)
+        self.assertEqual(run["color"],"#5B9BD5")
 
     def test_rotation_is_applied_to_corners(self):
         item = self.parse(one_cell(shape(rot=90 * 60000)))[0]["objects"][0]

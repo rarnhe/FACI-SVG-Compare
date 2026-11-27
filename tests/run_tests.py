@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Restored XLSX embedded PNG/JPEG CAD backgrounds and read-only bounded image endpoint; displayed texture takes native image pixel aspect while each sheet's textbox/rectangle/ellipse use exactly the same X/Y mapping as the image; shared Fab/Subfab world width; no sheet-named SVG dependency; maintained title, textbox-scoped SVG catalog, legend, cuboid opacity and MIME/security regressions.",
+        "Restored DrawingML rich textbox font family, size, color and theme font references, paragraph alignment, body insets and textbox CanvasTexture rendering, plus original XLSX outline colors. Cuboids now use 93%/100% solid-face opacity with matching rectangle-colored EdgesGeometry outlines. PNG CAD backgrounds, dual sheet scaling, SVG overlays, shape selection, security and HTTP regression tests remain unchanged.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

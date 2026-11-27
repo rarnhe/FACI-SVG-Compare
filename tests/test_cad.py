@@ -63,6 +63,32 @@ class TestCadManifest(unittest.TestCase):
             self.assertEqual(item["bounds_emu"]["x"], -85 * 9525)
             self.assertEqual(item["bounds_emu"]["y"], -42 * 9525)
 
+    def test_textbox_style_and_outline_survive_cad_manifest(self):
+        shapes=import_module(f"{ROOT.name}.tests.test_xlsx_spatial")
+        box=shapes.shape(name="文本框A")
+        box=box.replace('</xdr:nvSpPr>',
+                        '<xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>')
+        box=box.replace('</a:r></a:p>',
+                        '<a:t>BODYv2</a:t></a:r></a:p>')
+        with TemporaryDirectory() as tmp:
+            folder=Path(tmp)
+            xlsx=fixture(folder/"book.xlsx",sheet_count=2,media=True,
+                         anchors=shapes.two_cell()+shapes.one_cell(box))
+            sheets=spatial.parse_xlsx(xlsx)
+            manifest=cad.build_cad_manifest(xlsx,sheets,folder)
+            obj=manifest["layers"][0]["objects"][1]
+            self.assertEqual(obj["shape_kind"],"textbox")
+            self.assertEqual(obj["text"],"BODYv2")
+            self.assertEqual(obj["colors"]["outline"],"#5B9BD5")
+            self.assertIn("text_layout",obj)
+            self.assertEqual(obj["text_layout"]["paragraphs"][0]["runs"][0]["text"],
+                             "BODYv2")
+            self.assertEqual(obj["text_layout"]["paragraphs"][0]["runs"][0]["color"],
+                             "#FFFFFF")
+            self.assertEqual(manifest["layers"][0]["objects"][0]["image_url"],
+                             "/viewer/cad-image/0/0")
+            self.assertNotIn("image_part",obj)
+
     def test_unsupported_embedded_extension_has_no_public_url(self):
         with TemporaryDirectory() as tmp:
             manifest = cad.build_cad_manifest(None, [{"sheet": "S", "objects": [

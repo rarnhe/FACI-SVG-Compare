@@ -338,8 +338,123 @@ def shape_text(node: ET.Element) -> str:
     return "\n".join(paragraphs)
 
 
+def theme_text_fonts(z: ZipFile) -> dict[str, dict[str, str]]:
+    """Resolve DrawingML major/minor Latin and East Asian theme typefaces."""
+    fonts = {
+        "major": {"latin": "Calibri", "ea": "Microsoft YaHei"},
+        "minor": {"latin": "Calibri", "ea": "Microsoft YaHei"},
+    }
+    if "xl/theme/theme1.xml" not in z.namelist():
+        return fonts
+    root = ET.fromstring(z.read("xl/theme/theme1.xml"))
+    scheme = find_descendant(root, "fontScheme")
+    for key, tag in (("major", "majorFont"), ("minor", "minorFont")):
+        family = first_child(scheme, tag)
+        for role in ("latin", "ea"):
+            entry = first_child(family, role)
+            if entry is not None and entry.get("typeface"):
+                fonts[key][role] = entry.attrib["typeface"]
+    return fonts
+
+
+def text_property_style(node: ET.Element | None, inherited: dict,
+                        palette: dict[str, str], fonts: dict) -> dict:
+    """Read DrawingML rPr/defRPr, keeping inherited defaults for omitted tags."""
+    result = inherited.copy()
+    if node is None:
+        return result
+    if node.get("sz"):
+        try:
+            size = int(node.attrib["sz"]) / 100
+            if 0 < size <= 500:
+                result["font_size_pt"] = size
+        except ValueError:
+            pass
+    for tag, field in (("b", "bold"), ("i", "italic")):
+        if tag in node.attrib:
+            result[field] = node.attrib[tag] in ("1", "true", "on")
+    for tag, field in (("latin", "font_family"), ("ea", "east_asian_font")):
+        font = first_child(node, tag)
+        if font is not None and font.get("typeface"):
+            result[field] = font.attrib["typeface"]
+    direct = get_color(first_child(node, "solidFill"), palette)
+    if direct:
+        result["color"] = direct
+    return result
+
+
+def textbox_text_layout(node: ET.Element, palette: dict[str, str],
+                        theme_fonts: dict[str, dict[str, str]]) -> dict:
+    """Text runs with per-run formatting and textbox-local insets/alignment.
+
+    Coordinates are reference pixels (96 DPI). The JS renderer paints these
+    in a transparent texture mapped onto the same XLSX rectangle as the box.
+    """
+    body = first_child(node, "txBody")
+    body_pr = first_child(body, "bodyPr")
+    style = first_child(node, "style")
+    font_ref = first_child(style, "fontRef")
+    family_key = font_ref.get("idx", "minor") if font_ref is not None else "minor"
+    theme_family = theme_fonts.get(family_key, theme_fonts["minor"])
+    defaults = {
+        "font_family": theme_family["latin"],
+        "east_asian_font": theme_family["ea"],
+        "font_size_pt": 11.0,
+        "color": get_color(font_ref, palette) or "#000000",
+        "bold": False,
+        "italic": False,
+    }
+    insets = {}
+    for label, attr, fallback in (
+        ("left", "lIns", 91440), ("right", "rIns", 91440),
+        ("top", "tIns", 45720), ("bottom", "bIns", 45720),
+    ):
+        try:
+            inset = int(body_pr.get(attr, str(fallback))) if body_pr is not None else fallback
+        except ValueError:
+            inset = fallback
+        insets[label] = max(0, inset) / EMUS_PER_PIXEL
+    anchor = body_pr.get("anchor", "t") if body_pr is not None else "t"
+    vertical = {"ctr": "middle", "b": "bottom"}.get(anchor, "top")
+    paragraphs = []
+    if body is not None:
+        for paragraph in body:
+            if local_name(paragraph.tag) != "p":
+                continue
+            p_pr = first_child(paragraph, "pPr")
+            p_defaults = text_property_style(first_child(p_pr, "defRPr"), defaults,
+                                             palette, theme_fonts)
+            alignment = (p_pr.get("algn", "l") if p_pr is not None else "l")
+            alignment = {"ctr": "center", "r": "right"}.get(alignment, "left")
+            runs = []
+            for item in paragraph:
+                tag = local_name(item.tag)
+                if tag in ("r", "fld"):
+                    content = first_child(item, "t")
+                    if content is not None and content.text:
+                        run = text_property_style(first_child(item, "rPr"), p_defaults,
+                                                  palette, theme_fonts)
+                        run["text"] = content.text
+                        runs.append(run)
+                elif tag == "br":
+                    run = p_defaults.copy()
+                    run["text"] = "\n"
+                    runs.append(run)
+            if not runs:
+                text = "".join(x.text or "" for x in paragraph.iter()
+                               if local_name(x.tag) == "t")
+                if text:
+                    run = text_property_style(first_child(paragraph, "endParaRPr"),
+                                              p_defaults, palette, theme_fonts)
+                    run["text"] = text
+                    runs.append(run)
+            paragraphs.append({"align": alignment, "runs": runs})
+    return {"anchor": vertical, "insets_px": insets, "paragraphs": paragraphs}
+
+
 def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, str],
                     fills: list[ET.Element], lines: list[ET.Element],
+                    theme_fonts: dict[str, dict[str, str]] | None = None,
                     drawing_rels: dict[str, tuple[str, str]] | None = None,
                     drawing_part: str = "", members: set[str] | None = None) -> list[dict]:
     objects = []
@@ -383,6 +498,12 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
                 obj["shape_kind"] = shape_kind(element) if tag == "sp" else "other"
                 obj["text"] = shape_text(element)
                 obj["alt_text"] = shape_alternative_text(element)
+                if obj["shape_kind"] == "textbox":
+                    obj["text_layout"] = textbox_text_layout(
+                        element, palette, theme_fonts or {
+                            "major": {"latin": "Calibri", "ea": "Microsoft YaHei"},
+                            "minor": {"latin": "Calibri", "ea": "Microsoft YaHei"},
+                        })
                 props = first_child(element, "spPr")
                 if props is None:
                     props = first_child(element, "grpSpPr")
@@ -405,6 +526,7 @@ def parse_xlsx(path: Path | str) -> list[dict]:
             workbook = ET.fromstring(z.read("xl/workbook.xml"))
             book_rels = relationships(z, "xl/workbook.xml")
             palette, fills, lines = parse_theme(z)
+            fonts = theme_text_fonts(z)
             sheets = []
             for sheet in workbook.iter():
                 if local_name(sheet.tag) != "sheet":
@@ -424,6 +546,7 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                     drawing = ET.fromstring(z.read(drawing_part))
                     objects.extend(drawing_objects(
                         drawing, metrics, palette, fills, lines,
+                        theme_fonts=fonts,
                         drawing_rels=relationships(z, drawing_part),
                         drawing_part=drawing_part, members=set(z.namelist()),
                     ))

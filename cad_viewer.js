@@ -9,6 +9,7 @@ import {
   recolorSvgMarkup, svgLegendName, svgSelectionKey,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER, cadShapeRenderOrder, cadShapeZOffset,
+  textboxFont, layoutTextboxText,
 } from './cad_ui.mjs';
 
 const EMU_TO_PX = 1 / 9525;
@@ -105,6 +106,63 @@ function makeOutline(points,color) {
   );
 }
 
+function drawTextboxText(group,item,worldRect) {
+  if(!item.text) return;
+  const w=Math.max(1,item.bounds_emu.width*EMU_TO_PX);
+  const h=Math.max(1,item.bounds_emu.height*EMU_TO_PX);
+  const layout=item.text_layout || {
+    anchor:'top',insets_px:{left:4,right:4,top:4,bottom:4},
+    paragraphs:item.text.split('\n').map(text=>({
+      align:'left',runs:[{text,font_family:'Calibri',
+        font_size_pt:11,color:'#000000'}],
+    })),
+  };
+  // Bounded CanvasTexture avoids blurry text and unbounded WebGL textures
+  // from exceptionally large DrawingML objects.
+  const resolution=Math.max(0.2,Math.min(2.5,
+    Math.min(4096/w,4096/h),window.devicePixelRatio||1.5));
+  const canvas=document.createElement('canvas');
+  canvas.width=Math.max(1,Math.ceil(w*resolution));
+  canvas.height=Math.max(1,Math.ceil(h*resolution));
+  const context=canvas.getContext('2d');
+  if(!context) return;
+  context.scale(resolution,resolution);
+  context.textBaseline='top';
+  const widths=new Map();
+  const commands=layoutTextboxText(layout,w,h,(text,run)=>{
+    const font=textboxFont(run);
+    context.font=font;
+    const key=font+'\u0000'+text;
+    if(!widths.has(key)) widths.set(key,context.measureText(text).width);
+    return widths.get(key);
+  });
+  context.save();
+  context.beginPath();
+  context.rect(0,0,w,h);
+  context.clip();
+  for(const part of commands) {
+    context.font=textboxFont(part.run);
+    context.fillStyle=/^#[\da-f]{6}$/i.test(part.run?.color||'')
+      ? part.run.color : '#000000';
+    context.fillText(part.text,part.x,part.y);
+  }
+  context.restore();
+  const texture=new THREE.CanvasTexture(canvas);
+  texture.colorSpace=THREE.SRGBColorSpace;
+  const textMesh=new THREE.Mesh(
+    new THREE.PlaneGeometry(worldRect.width,worldRect.height),
+    new THREE.MeshBasicMaterial({
+      map:texture,transparent:true,side:THREE.DoubleSide,
+      depthWrite:false,depthTest:false,
+    }),
+  );
+  // Slightly in front of the textbox plane, yet still in the textbox
+  // semantic layer, so a rotated cuboid/ellipse remains above the text.
+  textMesh.position.z=0.9;
+  textMesh.userData.isTextboxText=true;
+  group.add(textMesh);
+}
+
 function kindForElevation(item, rect, rectangles,layer) {
   return item.shape_kind==='ellipse'
     ? ellipseElevation(item,x=>toWorldRect(x,layer),rectangles) : 0;
@@ -162,6 +220,20 @@ function drawShape(layer,item,rectangles=[]) {
       clickTarget.renderOrder=1;
       clickTarget.userData.isTransparentCuboid=true;
       group.add(clickTarget);
+      // Outline all 12 edges using the original DrawingML line color.
+      // Draw after the solid faces so the cuboid remains readable on
+      // rotation, including near-parallel views.
+      if(colors.outline!=='无/透明') {
+        const edges=new THREE.LineSegments(
+          new THREE.EdgesGeometry(cube),
+          new THREE.LineBasicMaterial({
+            color:borderColor,transparent:true,opacity:1,
+            depthWrite:false,depthTest:false,
+          }),
+        );
+        edges.position.copy(clickTarget.position);
+        group.add(edges);
+      }
     } else {
       // Missing/invalid directive: zero height, no artificial thickness.
       clickTarget=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);
@@ -185,13 +257,15 @@ function drawShape(layer,item,rectangles=[]) {
     ];
     if(kind!=='textbox' || colors.outline!=='无/透明')
       group.add(makeOutline(vertices,borderColor));
+    if(kind==='textbox') drawTextboxText(group,item,r);
   }
   // Explicit render order overrides the reversed transparent-object
   // distance sort during rotation. All materials are transparent and
   // depthWrite:false; outlines remain above their own filled surfaces.
   group.traverse(node=>{
     if(node.isMesh || node.isLine || node.isLineSegments) {
-      node.renderOrder=priority+(node.isLine || node.isLineSegments ? 0.25 : 0);
+      node.renderOrder=priority+(node.isLine || node.isLineSegments ? 0.25
+        : node.userData.isTextboxText ? 0.1 : 0);
     }
   });
   clickTarget.userData.cadObject=item;
