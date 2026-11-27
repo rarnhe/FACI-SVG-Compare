@@ -11,7 +11,7 @@ import {
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
   SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
   cadOutlineSpec,recolorOctaveGeometry,octavePointScale,octavePointNodes,octaveLineNodes,
-  cadOutlineSegments,cadOutlineHaloColor,rectangleHasAltText,planarOutlineVertices,
+  cadOutlineSegments,rectangleHasAltText,planarOutlineVertices,
 } from '../cad_ui.mjs';
 
 const shape=(kind,x,y,width,height,text,rotation=0)=>({
@@ -533,11 +533,15 @@ test('octave recolors all separate lines and filled points without changing unpa
   for(const n of [background,textUse,clipPath,protectedPath]) assert.equal(n.attrs.style,undefined);
 });
 
-test('outline uses Excel color and width; equipment without border still has a visible contrast outline',()=>{
+test('outline uses exact Excel border or fill, never synthetic contrast colors',()=>{
   assert.deepEqual(cadOutlineSpec({shape_kind:'rectangle',colors:{outline:'#5B9BD5'},outline_width_px:3}),{color:'#5B9BD5',width:3});
   assert.deepEqual(cadOutlineSpec({shape_kind:'ellipse',colors:{outline:'#123456'},outline_width_px:0.5}),{color:'#123456',width:2});
-  assert.deepEqual(cadOutlineSpec({shape_kind:'rectangle',colors:{outline:'无/透明',fill:'#FFFFFF'}}),{color:'#7a7a7a',width:2});
+  assert.deepEqual(cadOutlineSpec({shape_kind:'rectangle',colors:{outline:'无/透明',fill:'#FFFFFF'}}),{color:'#FFFFFF',width:2});
   assert.equal(cadOutlineSpec({shape_kind:'textbox',colors:{outline:'无/透明'}}),null);
+  assert.deepEqual(cadOutlineSpec({shape_kind:'rectangle',outline_status:'color',colors:{outline:'#000000',fill:'#E8D7AC'}}),{color:'#000000',width:2});
+  assert.deepEqual(cadOutlineSpec({shape_kind:'ellipse',outline_status:'none',colors:{outline:'无/透明',fill:'#E8D7AC'}}),{color:'#E8D7AC',width:2});
+  assert.equal(cadOutlineSpec({shape_kind:'rectangle',outline_status:'unresolved',colors:{outline:'未解析',fill:'#E8D7AC'}}),null);
+  assert.equal(cadOutlineSpec({shape_kind:'rectangle',outline_status:'none',colors:{outline:'无/透明',fill:'无/透明'}}),null);
   assert.equal(cadOutlineSpec({shape_kind:'rectangle',colors:{outline:'#123456'},outline_width_px:10}).width,5);
 });
 
@@ -565,8 +569,6 @@ test('all independent CAD segment buffers preserve centers, directions and lengt
   assert.deepEqual(flat[0],{center:[25,30,0],direction:[1,0,0],length:10});
   assert.notEqual(cube[0],flat[0]);
   assert.deepEqual(cadOutlineSegments([0,0,0,0,0,0]),[]);
-  assert.equal(cadOutlineHaloColor('#FFFFFF'),'#202020');
-  assert.equal(cadOutlineHaloColor('#000000'),'#f5f5f5');
 });
 
 

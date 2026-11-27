@@ -65,7 +65,7 @@ def absolute(child=None):
 
 def fixture(path: Path, anchors: str | None = None, worksheet_xml: str | None = None,
             draw: bool = True, media: bool = False, sheet_count: int = 1,
-            second_anchors: str | None = None) -> Path:
+            second_anchors: str | None = None, theme_xml: str | None = None) -> Path:
     if anchors is None:
         anchors = two_cell() + one_cell() + absolute()
     if second_anchors is None:
@@ -119,10 +119,10 @@ def fixture(path: Path, anchors: str | None = None, worksheet_xml: str | None = 
                            '</Relationships>')
         if media:
             z.writestr("xl/media/image1.png", b"\x89PNG\r\n\x1a\nfixture")
-        z.writestr("xl/theme/theme1.xml",
+        z.writestr("xl/theme/theme1.xml", theme_xml or (
                    f'<a:theme xmlns:a="{A}"><a:themeElements><a:clrScheme name="Office">'
                    '<a:accent1><a:srgbClr val="5B9BD5"/></a:accent1>'
-                   '</a:clrScheme></a:themeElements></a:theme>')
+                   '</a:clrScheme></a:themeElements></a:theme>'))
 
     return path
 
@@ -450,3 +450,82 @@ class OutlineWidthTests(unittest.TestCase):
         self.assertEqual(spatial.outline_width_px(direct, style, theme), 3)
         self.assertEqual(spatial.outline_width_px(None, style, theme), 4)
         self.assertIsNone(spatial.outline_width_px(None, None, []))
+
+
+class ThemeOutlineColorTests(unittest.TestCase):
+    def setUp(self):
+        self.theme = (f'<a:theme xmlns:a="{A}"><a:themeElements><a:clrScheme name="Custom">'
+                      '<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>'
+                      '<a:lt1><a:srgbClr val="FAFAFA"/></a:lt1>'
+                      '<a:dk2><a:srgbClr val="123456"/></a:dk2>'
+                      '<a:lt2><a:srgbClr val="EEEEEE"/></a:lt2>'
+                      '<a:accent1><a:srgbClr val="5B9BD5"/></a:accent1>'
+                      '</a:clrScheme><a:fmtScheme name="Custom"><a:lnStyleLst>'
+                      '<a:ln w="28575"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>'
+                      '<a:ln w="38100"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>'
+                      '<a:ln><a:noFill/></a:ln>'
+                      '<a:ln><a:solidFill><a:schemeClr val="phClr"><a:shade val="50000"/></a:schemeClr></a:solidFill></a:ln>'
+                      '</a:lnStyleLst></a:fmtScheme></a:themeElements></a:theme>')
+
+    def parsed(self, line="", ref=""):
+        source = shape().replace(
+            '<a:ln><a:solidFill><a:srgbClr val="5B9BD5"/></a:solidFill></a:ln>', line)
+        if ref:
+            source = source.replace('</xdr:spPr>', '</xdr:spPr><xdr:style>'+ref+'</xdr:style>')
+        with TemporaryDirectory() as tmp:
+            path = fixture(Path(tmp)/"colors.xlsx", one_cell(source), theme_xml=self.theme)
+            return spatial.parse_xlsx(path)[0]["objects"][0]
+
+    def test_direct_black_and_logical_theme_aliases(self):
+        for val, expected in [('tx1','#000000'),('bg1','#FAFAFA'),
+                              ('tx2','#123456'),('bg2','#EEEEEE'),('dk1','#000000')]:
+            with self.subTest(val=val):
+                obj = self.parsed(f'<a:ln><a:solidFill><a:schemeClr val="{val}"/></a:solidFill></a:ln>')
+                self.assertEqual(obj["colors"]["outline"], expected)
+                self.assertEqual(obj["outline_status"], "color")
+        for color in ['<a:srgbClr val="000000"/>','<a:prstClr val="black"/>',
+                      '<a:sysClr val="windowText" lastClr="000000"/>']:
+            self.assertEqual(self.parsed(f'<a:ln><a:solidFill>{color}</a:solidFill></a:ln>')["colors"]["outline"],"#000000")
+
+    def test_lnref_placeholder_and_fixed_style_color(self):
+        ref = '<a:lnRef idx="1"><a:schemeClr val="tx1"/></a:lnRef>'
+        obj = self.parsed('<a:ln/>', ref)
+        self.assertEqual(obj["colors"]["outline"],"#000000")
+        self.assertEqual(obj["outline_width_px"],3)
+        self.assertEqual(self.parsed('<a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>',ref)["colors"]["outline"],"#000000")
+        fixed = self.parsed("",'<a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef>')
+        self.assertEqual(fixed["colors"]["outline"],"#000000")
+        self.assertEqual(fixed["outline_width_px"],4)
+        shaded = self.parsed("",'<a:lnRef idx="4"><a:srgbClr val="808080"/></a:lnRef>')
+        self.assertEqual(shaded["colors"]["outline"],"#404040")
+
+    def test_direct_overrides_and_no_border(self):
+        ref = '<a:lnRef idx="1"><a:schemeClr val="tx1"/></a:lnRef>'
+        obj = self.parsed('<a:ln><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>',ref)
+        self.assertEqual(obj["colors"]["outline"],"#FF0000")
+        cases = [('<a:ln><a:noFill/></a:ln>',ref),
+                 ('','<a:lnRef idx="3"><a:schemeClr val="tx1"/></a:lnRef>'),
+                 ('','<a:lnRef idx="0"><a:schemeClr val="tx1"/></a:lnRef>'),
+                 ('',''),
+                 ('<a:ln><a:solidFill><a:srgbClr val="000000"><a:alpha val="0"/></a:srgbClr></a:solidFill></a:ln>',ref)]
+        for line, inherited in cases:
+            with self.subTest(line=line,ref=inherited):
+                obj = self.parsed(line,inherited)
+                self.assertEqual(obj["colors"]["outline"],"无/透明")
+                self.assertEqual(obj["outline_status"],"none")
+                self.assertEqual(obj["colors"]["fill"],"#5B9BD5")
+
+    def test_unknown_color_is_not_no_border_and_does_not_inherit(self):
+        obj = self.parsed('<a:ln><a:solidFill><a:schemeClr val="unknown"/></a:solidFill></a:ln>',
+                          '<a:lnRef idx="1"><a:schemeClr val="tx1"/></a:lnRef>')
+        self.assertEqual(obj["colors"]["outline"],"未解析")
+        self.assertEqual(obj["outline_status"],"unresolved")
+        obj = self.parsed("",'<a:lnRef idx="99"><a:schemeClr val="tx1"/></a:lnRef>')
+        self.assertEqual(obj["outline_status"],"unresolved")
+
+    def test_explicit_logical_mapping_uses_workbook_rgb(self):
+        import xml.etree.ElementTree as ET
+        p = spatial.mapped_theme_palette({"dk1":"000000","dk2":"123456","lt1":"FFFFFF"},
+                                        ET.fromstring('<clrMap tx1="dk2" bg1="dk1"/>'))
+        self.assertEqual(spatial.get_color(ET.fromstring('<schemeClr val="tx1"/>'),p),"#123456")
+        self.assertEqual(spatial.get_color(ET.fromstring('<schemeClr val="bg1"/>'),p),"#000000")

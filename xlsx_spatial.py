@@ -27,6 +27,13 @@ DEFAULT_THEME = {
 }
 
 
+# Standard DrawingML logical aliases, resolved against the actual workbook
+# theme (not hard-coded RGB values). Optional explicit color maps override.
+THEME_COLOR_MAP = {"tx1": "dk1", "bg1": "lt1", "tx2": "dk2", "bg2": "lt2"}
+NO_PAINT = "无/透明"
+UNRESOLVED_PAINT = "未解析"
+
+
 class SpatialXlsxError(ValueError):
     """Invalid XLSX geometry or ambiguous input files."""
 
@@ -136,12 +143,21 @@ class SheetMetrics:
         return x, y
 
 
+def mapped_theme_palette(palette: dict[str, str], mapping: ET.Element | None = None) -> dict[str, str]:
+    result = palette.copy()
+    aliases = THEME_COLOR_MAP | (dict(mapping.attrib) if mapping is not None else {})
+    for logical, actual in aliases.items():
+        if actual in palette:
+            result[logical] = palette[actual]
+    return result
+
+
 def parse_theme(z: ZipFile) -> tuple[dict[str, str], list[ET.Element], list[ET.Element]]:
     palette = DEFAULT_THEME.copy()
     fills: list[ET.Element] = []
     lines: list[ET.Element] = []
     if "xl/theme/theme1.xml" not in z.namelist():
-        return palette, fills, lines
+        return mapped_theme_palette(palette), fills, lines
     root = ET.fromstring(z.read("xl/theme/theme1.xml"))
     for elem in root.iter():
         tag = local_name(elem.tag)
@@ -158,7 +174,7 @@ def parse_theme(z: ZipFile) -> tuple[dict[str, str], list[ET.Element], list[ET.E
             fills = list(elem)
         elif tag == "lnStyleLst":
             lines = list(elem)
-    return palette, fills, lines
+    return mapped_theme_palette(palette), fills, lines
 
 
 def apply_luminance(rgb: str, mod: int = 100000, offset: int = 0) -> str:
@@ -173,7 +189,9 @@ def apply_luminance(rgb: str, mod: int = 100000, offset: int = 0) -> str:
     return "".join(f"{round(c * 255):02X}" for c in colorsys.hls_to_rgb(h, l, s))
 
 
-def get_color(node: ET.Element | None, palette: dict[str, str]) -> str | None:
+def get_color(node: ET.Element | None, palette: dict[str, str],
+              placeholder: str | None = None) -> str | None:
+    """Resolve RGB/theme/system colors, including the style's phClr."""
     if node is None:
         return None
     for child in node.iter():
@@ -181,50 +199,103 @@ def get_color(node: ET.Element | None, palette: dict[str, str]) -> str | None:
         if kind == "srgbClr":
             rgb = child.get("val")
         elif kind == "schemeClr":
-            rgb = palette.get(child.get("val", ""))
+            key = child.get("val", "")
+            rgb = placeholder.lstrip("#") if key == "phClr" and placeholder else (
+                palette.get(key) or palette.get(THEME_COLOR_MAP.get(key, "")))
         elif kind == "sysClr":
-            rgb = child.get("lastClr") or child.get("val")
+            rgb = child.get("lastClr")
+        elif kind == "prstClr":
+            rgb = {"black": "000000", "white": "FFFFFF"}.get(child.get("val", ""))
         else:
             continue
         if not rgb or len(rgb) != 6:
             continue
-        mod, off = 100000, 0
+        try:
+            int(rgb, 16)
+        except ValueError:
+            continue
+        # Apply the transformations in XML order, including transforms on
+        # the resolved phClr itself, after the reference's own transforms.
+        rgb = rgb.upper()
         for adjust in child:
-            if local_name(adjust.tag) == "lumMod":
-                mod = int(adjust.get("val", "100000"))
-            elif local_name(adjust.tag) == "lumOff":
-                off = int(adjust.get("val", "0"))
-        return "#" + apply_luminance(rgb.upper(), mod, off)
+            tag = local_name(adjust.tag)
+            try:
+                value = int(adjust.get("val", "100000"))
+            except ValueError:
+                continue
+            if tag == "lumMod":
+                rgb = apply_luminance(rgb, mod=value)
+            elif tag == "lumOff":
+                rgb = apply_luminance(rgb, offset=value)
+            elif tag in {"tint", "shade"}:
+                factor = max(0, min(1, value / 100000))
+                channels = [int(rgb[i:i+2], 16) for i in (0, 2, 4)]
+                rgb = "".join(f"{round(c * factor + (255 * (1-factor) if tag == 'tint' else 0)):02X}"
+                              for c in channels)
+        return "#" + rgb
+    return None
+
+
+def direct_paint(node: ET.Element | None, palette: dict[str, str],
+                 placeholder: str | None = None) -> str | None:
+    """None = unspecified/inherit; NO_PAINT = explicitly absent;
+    UNRESOLVED_PAINT = specified but not representable as a solid RGB."""
+    if node is None:
+        return None
+    if first_child(node, "noFill") is not None:
+        return NO_PAINT
+    solid = first_child(node, "solidFill")
+    if solid is not None:
+        # A fully transparent solid paint is distinct from a failed lookup.
+        alpha = 100000
+        for transform in solid.iter():
+            tag = local_name(transform.tag)
+            if tag not in {"alpha", "alphaMod", "alphaOff"}:
+                continue
+            try:
+                value = int(transform.get("val", "100000"))
+            except ValueError:
+                continue
+            alpha = max(0, min(100000, value if tag == "alpha" else
+                               alpha * value / 100000 if tag == "alphaMod" else alpha + value))
+        if alpha == 0:
+            return NO_PAINT
+        return get_color(solid, palette, placeholder) or UNRESOLVED_PAINT
+    if any(first_child(node, tag) is not None
+           for tag in ("gradFill", "pattFill", "blipFill", "grpFill")):
+        return UNRESOLVED_PAINT
     return None
 
 
 def style_color(node: ET.Element | None, style: ET.Element | None, kind: str,
                 palette: dict[str, str], fills: list[ET.Element],
                 lines: list[ET.Element]) -> str:
-    if node is not None:
-        if first_child(node, "noFill") is not None:
-            return "无/透明"
-        solid = first_child(node, "solidFill")
-        direct = get_color(solid, palette)
-        if direct:
-            return direct
-    if style is not None:
-        ref_tag = {"fill": "fillRef", "line": "lnRef"}[kind]
-        ref = first_child(style, ref_tag)
-        if ref is not None:
-            color = get_color(ref, palette)
-            if color:
-                return color
-            try:
-                idx = int(ref.get("idx", "0"))
-            except ValueError:
-                idx = 0
-            style_list = fills if kind == "fill" else lines
-            if 0 < idx <= len(style_list):
-                color = get_color(style_list[idx - 1], palette)
-                if color:
-                    return color
-    return "无/透明"
+    ref = first_child(style, {"fill": "fillRef", "line": "lnRef"}[kind])
+    placeholder = get_color(ref, palette)
+    # A direct shape paint always overrides the inherited style, even when
+    # explicitly absent or unresolvable. Never substitute a different color.
+    direct = direct_paint(node, palette, placeholder)
+    if direct is not None:
+        return direct
+    if ref is None:
+        return NO_PAINT if node is None or kind == "fill" else UNRESOLVED_PAINT
+    try:
+        idx = int(ref.get("idx", "0"))
+    except ValueError:
+        return UNRESOLVED_PAINT
+    if idx == 0 or (kind == "fill" and idx == 1000):
+        return NO_PAINT
+    style_list = fills if kind == "fill" else lines
+    if 0 < idx <= len(style_list):
+        # The matrix entry decides the actual paint. lnRef color is only
+        # the substitution for phClr, not an override of fixed RGB/noFill.
+        inherited = direct_paint(style_list[idx - 1], palette, placeholder)
+        if inherited is not None:
+            return inherited
+        return UNRESOLVED_PAINT
+    # Legacy fill-only files may omit their style matrix. Preserve the
+    # reference color for fills; a missing line style must not be guessed.
+    return (placeholder or UNRESOLVED_PAINT) if kind == "fill" else UNRESOLVED_PAINT
 
 
 def outline_width_px(outline: ET.Element | None, style: ET.Element | None,
@@ -475,6 +546,10 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
                     theme_fonts: dict[str, dict[str, str]] | None = None,
                     drawing_rels: dict[str, tuple[str, str]] | None = None,
                     drawing_part: str = "", members: set[str] | None = None) -> list[dict]:
+    color_map = first_child(root, "clrMap")
+    override = first_child(first_child(root, "clrMapOvr"), "overrideClrMapping")
+    if color_map is not None or override is not None:
+        palette = mapped_theme_palette(palette, override if override is not None else color_map)
     objects = []
     for anchor in root:
         if local_name(anchor.tag) not in {"oneCellAnchor", "twoCellAnchor", "absoluteAnchor"}:
@@ -532,6 +607,11 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
                     "fill": style_color(props, style, "fill", palette, fills, lines),
                     "outline": style_color(outline, style, "line", palette, fills, lines),
                 }
+                obj["outline_status"] = (
+                    "none" if obj["colors"]["outline"] == NO_PAINT else
+                    "unresolved" if obj["colors"]["outline"] == UNRESOLVED_PAINT else
+                    "color"
+                )
             objects.append(obj)
     return objects
 

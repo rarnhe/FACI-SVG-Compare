@@ -615,21 +615,20 @@ export function restyleSvgMarkup(source,requested,kind='psd') {
 }
 
 
-// Thick screen-space borders for all equipment/sensor geometry. Keep the
-// actual DrawingML RGB when present. If it has no outline, derive a darker
-// fill-based contrast outline for equipment/sensors, but not textboxes.
+// XLSX is the sole source of outline colors. An explicitly absent
+// equipment/sensor border uses its exact fill RGB; an unresolved border
+// must not silently become a different color. Textboxes keep no border.
 export function cadOutlineSpec(item) {
   const colors=item.colors||{};
   const valid=value=>typeof value==='string' && /^#[0-9a-f]{6}$/i.test(value);
-  const original=valid(colors.outline);
   const equipment=['rectangle','ellipse'].includes(item.shape_kind);
-  if(!original && !equipment) return null;
-  const fill=valid(colors.fill)?colors.fill:'#607080';
-  const dark='#'+[1,3,5].map(i=>Math.round(parseInt(fill.slice(i,i+2),16)*0.48)
-    .toString(16).padStart(2,'0')).join('');
+  const status=item.outline_status??(valid(colors.outline)?'color':
+    colors.outline==='无/透明'?'none':'unresolved');
+  const color=status==='color' && valid(colors.outline)?colors.outline:
+    status==='none' && equipment && valid(colors.fill)?colors.fill:null;
+  if(!color) return null;
   const width=Number(item.outline_width_px);
-  return {color:original?colors.outline:dark,
-    width:Math.min(5,Math.max(2,Number.isFinite(width)?width:2))};
+  return {color,width:Math.min(5,Math.max(2,Number.isFinite(width)?width:2))};
 }
 
 
@@ -646,10 +645,6 @@ export function cadOutlineSegments(positions) {
       direction:delta.map(v=>v/length),length});
   }
   return segments;
-}
-export function cadOutlineHaloColor(color) {
-  const rgb=[1,3,5].map(i=>parseInt(color.slice(i,i+2),16));
-  return (rgb[0]*0.299+rgb[1]*0.587+rgb[2]*0.114)>145?'#202020':'#f5f5f5';
 }
 
 

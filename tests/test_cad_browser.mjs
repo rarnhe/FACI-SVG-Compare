@@ -20,12 +20,12 @@ function shape(name,kind,x,y,w,h,height,outline='#164070') {
 function objects() {
   return [
     {type:'image',bounds_emu:bounds(0,0,420,240),rotation_degrees:0},
-    shape('Cube A','rectangle',30,35,70,45,'z=0.5x'),
+    {...shape('Cube A','rectangle',30,35,70,45,'z=0.5x','#000000'),outline_status:'color'},
     shape('Cube B','rectangle',155,35,70,45,'z=0.5x','#204060'),
-    shape('Flat A','rectangle',30,135,70,45,''),
-    {...shape('Flat B','rectangle',155,135,70,45,'','#204060'),alt_text:undefined,
+    {...shape('Flat A','rectangle',30,135,70,45,'','#000000'),outline_status:'color'},
+    {...shape('Flat B','rectangle',155,135,70,45,'','无/透明'),outline_status:'none',alt_text:undefined,
       rotation_degrees:12,outline_width_px:4},
-    shape('Dot','ellipse',310,100,22,22,''),
+    {...shape('Dot','ellipse',310,100,22,22,'','无/透明'),outline_status:'none'},
   ];
 }
 const manifest={workbook:'synthetic.xlsx',layers:[{available:true,sheet:'Fab',objects:objects()},
@@ -75,7 +75,7 @@ test('Chromium renders every CAD outline and scales octave points around their c
             const item=body.userData.cadObject,group=body.parent;
             const edges=[];
             group.traverse(m=>{if(m.userData.isCadOutline) edges.push(m);});
-            const foreground=edges.find(m=>!m.userData.isCadOutlineHalo);
+            const foreground=edges[0];
             if(!foreground){result.push({name:item.name,missing:true});continue;}
             const spec=foreground.userData.outlineSegments;
             // Pick a horizontal/top edge (or a circumference segment), project
@@ -85,7 +85,8 @@ test('Chromium renders every CAD outline and scales octave points around their c
             const center=new THREE.Vector3(...segment.center);
             foreground.localToWorld(center);center.project(layer.camera);
             const x=Math.round((center.x+1)*W/2),y=Math.round((center.y+1)*H/2);
-            const rgb=item.colors.outline.slice(1).match(/../g).map(h=>parseInt(h,16));
+            const expectedColor=item.outline_status==='none'?item.colors.fill:item.colors.outline;
+            const rgb=expectedColor.slice(1).match(/../g).map(h=>parseInt(h,16));
             let hit=false;
             for(let dy=-4;dy<=4&&!hit;dy++)for(let dx=-4;dx<=4&&!hit;dx++){
               if(x+dx<0||x+dx>=W||y+dy<0||y+dy>=H)continue;
@@ -96,7 +97,8 @@ test('Chromium renders every CAD outline and scales octave points around their c
               culled:foreground.frustumCulled,allInstances:spec.length,
               flatGroup:foreground.parent.userData.isFlatRectangleOutline===true,
               outlineWidth:foreground.userData.outlineWidth,
-              localZ:segment.center[2]});
+              localZ:segment.center[2],expectedColor:expectedColor.toLowerCase(),
+              actualColor:'#'+foreground.material.color.getHexString()});
           }
         }
       }
@@ -105,7 +107,8 @@ test('Chromium renders every CAD outline and scales octave points around their c
     assert.equal(rendered.length,20);
     for(const r of rendered){
       assert.equal(r.missing,undefined,JSON.stringify(r));
-      assert.equal(r.meshes,2,JSON.stringify(r));
+      assert.equal(r.meshes,1,JSON.stringify(r));
+      assert.equal(r.actualColor,r.expectedColor,JSON.stringify(r));
       assert.equal(r.count,r.name.startsWith('Cube')?12:r.name.startsWith('Flat')?4:72,JSON.stringify(r));
       assert.equal(r.allInstances,r.count);
       assert.equal(r.culled,false);

@@ -7,7 +7,7 @@ import {
   pictureLayerScales, imageAspectRatio, fitSvgPane, clampMainDivider, clampReferenceSplit,
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
   restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
-  cadOutlineSpec, cadOutlineSegments, cadOutlineHaloColor,
+  cadOutlineSpec, cadOutlineSegments,
   rectangleHasAltText, planarOutlineVertices,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER, cadShapeRenderOrder, cadShapeZOffset,
@@ -126,35 +126,31 @@ function updateLayerOutlines(layer) {
   for(const mesh of layer.outlineMeshes) updateOutlineMesh(mesh,zoom);
   layer.outlineZoom=zoom;
 }
-function makeThickSegments(positions,outline,layer,halo=true) {
+function makeThickSegments(positions,outline,layer) {
   const segments=cadOutlineSegments(positions);
   if(!segments.length) return [];
-  const make=(color,width,isHalo)=>{
-    const material=new THREE.MeshBasicMaterial({
-      color:colorValue(color,0x334455),transparent:true,opacity:1,
-      depthTest:false,depthWrite:false,
-    });
-    const mesh=new THREE.InstancedMesh(outlineCylinder,material,segments.length);
-    mesh.frustumCulled=false;
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    Object.assign(mesh.userData,{isCadOutline:true,isCadOutlineHalo:isHalo,
-      outlineWidth:width,outlineSegments:segments});
-    updateOutlineMesh(mesh,layer.camera.zoom);
-    layer.outlineMeshes.push(mesh);
-    return mesh;
-  };
-  const meshes=[];
-  if(halo) meshes.push(make(cadOutlineHaloColor(outline.color),outline.width+2,true));
-  meshes.push(make(outline.color,outline.width,false));
-  return meshes;
+  // Only the original XLSX RGB (or exact fill RGB for a missing border).
+  // No contrast underlay, shading, or alternate color fallback.
+  const material=new THREE.MeshBasicMaterial({
+    color:parseInt(outline.color.slice(1),16),transparent:true,opacity:1,
+    depthTest:false,depthWrite:false,toneMapped:false,
+  });
+  const mesh=new THREE.InstancedMesh(outlineCylinder,material,segments.length);
+  mesh.frustumCulled=false;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  Object.assign(mesh.userData,{isCadOutline:true,
+    outlineWidth:outline.width,outlineSegments:segments});
+  updateOutlineMesh(mesh,layer.camera.zoom);
+  layer.outlineMeshes.push(mesh);
+  return [mesh];
 }
-function makeOutline(points,outline,layer,halo=true) {
+function makeOutline(points,outline,layer) {
   const positions=[];
   for(let i=0;i<points.length;i++) {
     const a=points[i],b=points[(i+1)%points.length];
     positions.push(a.x,a.y,a.z,b.x,b.y,b.z);
   }
-  return makeThickSegments(positions,outline,layer,halo);
+  return makeThickSegments(positions,outline,layer);
 }
 
 // Both sensor circles and rectangles without alternative text use the
@@ -240,6 +236,7 @@ function drawShape(layer,item,rectangles=[]) {
   const colors=item.colors || {};
   const fillColor=colorValue(colors.fill,kind==='textbox'?0xffffff:0x3599c3);
   const outline=cadOutlineSpec(item);
+  if(item.outline_status==='unresolved') console.warn('Unresolved XLSX outline:',layer.sheetName,item.name);
   const opacity=kind==='textbox'
     ? (colors.fill==='无/透明'?0:1)
     : colors.fill==='无/透明' ? 0.13 : 0.68;
@@ -315,7 +312,7 @@ function drawShape(layer,item,rectangles=[]) {
       new THREE.Vector3(-hw,hh,0.8),new THREE.Vector3(hw,hh,0.8),
       new THREE.Vector3(hw,-hh,0.8),new THREE.Vector3(-hw,-hh,0.8),
     ];
-    if(outline) group.add(...makeOutline(vertices,outline,layer,false));
+    if(outline) group.add(...makeOutline(vertices,outline,layer));
     if(kind==='textbox') drawTextboxText(group,item,r);
   }
   // Explicit render order overrides the reversed transparent-object
@@ -324,7 +321,7 @@ function drawShape(layer,item,rectangles=[]) {
   group.traverse(node=>{
     if(node.isMesh || node.isLine || node.isLineSegments) {
       node.renderOrder=priority+(node.userData.isCadOutline
-        ? (node.userData.isCadOutlineHalo?0.25:0.5)
+        ? 0.5
         : node.userData.isTextboxText ? 0.1 : 0);
     }
   });

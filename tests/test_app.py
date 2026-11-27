@@ -428,9 +428,13 @@ class TestStaticFrontend(unittest.TestCase):
             "group.add(...edges)",
             "updateLayerOutlines(layer)",
             "layer.outlineMeshes.push(mesh)",
+            "color:parseInt(outline.color.slice(1),16)",
+            "toneMapped:false",
             "mesh.userData.isTransparentCuboid",
         ):
             self.assertIn(expected,viewer)
+        self.assertNotIn("cadOutlineHaloColor",viewer)
+        self.assertNotIn("isCadOutlineHalo",viewer)
         for expected in (
             "CUBOID_FACE_OPACITY = 0.93",
             "CUBOID_SELECTED_OPACITY = 1.00",
