@@ -49,7 +49,7 @@ test('Chromium renders every CAD outline and scales octave points around their c
   await new Promise(ok=>server.listen(0,'127.0.0.1',ok));
   let browser;
   try{
-    browser=await chromium.launch({headless:true,args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
+    browser=await chromium.launch({channel:'chrome',headless:true,args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
     const page=await browser.newPage({viewport:{width:1400,height:950},deviceScaleFactor:1});
     const errors=[];
     page.on('pageerror',e=>errors.push(e.message));
@@ -65,7 +65,9 @@ test('Chromium renders every CAD outline and scales octave points around their c
       const result=[];
       for(const layer of layers) {
         for(const tilted of [false,true]){
-          if(tilted){const t=layer.controls.target;layer.camera.position.set(t.x+90,t.y-150,t.z+1200);layer.controls.update();}
+          const t=layer.controls.target;
+          layer.camera.position.set(t.x+(tilted?90:0),t.y+(tilted?-150:0),t.z+1200);
+          layer.controls.update();
           layer.renderer.render(layer.scene,layer.camera);
           const gl=layer.renderer.getContext(),W=gl.drawingBufferWidth,H=gl.drawingBufferHeight;
           for(const body of layer.clickable) {

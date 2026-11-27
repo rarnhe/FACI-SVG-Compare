@@ -52,7 +52,6 @@ jobs:
         run: |
           set -e
           npm install --no-save --no-package-lock --prefix "$CAD_BROWSER_DEPS" three@0.160.0 playwright@1.51.1
-          node "$CAD_BROWSER_DEPS/node_modules/playwright/cli.js" install chromium
           node --test tests/test_cad_browser.mjs
       - name: Execute tests and generate report
         id: tests
