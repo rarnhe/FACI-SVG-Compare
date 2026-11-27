@@ -225,6 +225,8 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("drawImage(layer,item,textures[i])",viewer)
         self.assertIn("const textures=await Promise.all(layerImages.map(item=>",viewer)
         self.assertIn("loadCadTexture(item?.image_url)",viewer)
+        self.assertIn("await image.decode()",viewer)
+        self.assertIn("if(!response.ok) throw new Error('HTTP '+response.status)",viewer)
         self.assertIn("overlaySelections.set(key,entry)",viewer)
         self.assertIn("displayedSvgWidth",viewer)
         self.assertIn("svgHistory.append(line)",viewer)

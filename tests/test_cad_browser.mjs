@@ -192,12 +192,20 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     browser=await chromium.launch({channel:'chrome',headless:true,args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
     const page=await browser.newPage({viewport:{width:1400,height:950},deviceScaleFactor:1});
     const errors=[];
+    const imageResponses=[];
     page.on('pageerror',e=>errors.push(e.message));
     page.on('console',m=>{if(m.type()==='error'&&/CAD layout failed|embedded picture could not|WebGLProgram/.test(m.text())) errors.push(m.text());});
+    page.on('response',res=>{if(res.url().includes('/cad-image/')) imageResponses.push({url:res.url(),status:res.status()});});
+    page.on('requestfailed',req=>{if(req.url().includes('/cad-image/')) imageResponses.push({url:req.url(),failure:req.failure()?.errorText});});
     await page.route('https://unpkg.com/three@0.160.0/**',async route=>{
       const rel=new URL(route.request().url()).pathname.split('/three@0.160.0/')[1];
       await route.fulfill({body:await readFile(resolve(threeRoot,rel)),contentType:'text/javascript',
         headers:{'access-control-allow-origin':'*'}});
+    });
+    let transientInjected=false;
+    await page.route('**/cad-image/0/0',async route=>{
+      if(!transientInjected){transientInjected=true;await route.fulfill({status:503,body:'transient test failure'});}
+      else await route.continue();
     });
     await page.goto(fixture.base+'/viewer/index.html');
     await page.waitForFunction(async()=>{
@@ -247,11 +255,13 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         context+': '+actual+' != '+expected);
     }
     assert.equal(measured.length,2);
+    assert.ok(transientInjected && imageResponses.some(r=>r.status===503),'bounded image retry exercised');
     near(measured[0].zoom,measured[1].zoom,'linked camera zoom');
     for(let i=0;i<2;i++){
       const m=measured[i], [w,h]=anchorSizes[i],s=420/w;
       near(m.sx,s,'scaleX');near(m.sy,s,'scaleY');
-      assert.ok(m.raster,'decoded background must be drawn');
+      assert.ok(m.raster,'decoded background must be drawn: '+JSON.stringify({layer:i,errors,imageResponses}));
+      assert.ok(imageResponses.some(r=>r.status===200&&r.url.endsWith('/cad-image/'+i+'/0')),'real workbook image HTTP response missing');
       assert.deepEqual(m.raster.native,i?[40,60]:[84,32]);
       assert.notEqual(m.raster.native[0]/m.raster.native[1],w/h);
       near(m.raster.w,w*s,'background width');near(m.raster.h,h*s,'background height');

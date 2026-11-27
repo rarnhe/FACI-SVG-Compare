@@ -343,14 +343,35 @@ function drawImage(layer,item,texture) {
   layer.scene.add(group);
 }
 
-function loadCadTexture(url) {
-  if (!url) return Promise.resolve(null);
-  return new Promise(resolve=>{
-    new THREE.TextureLoader().load(url,texture=>resolve(texture),undefined,error=>{
-      console.error('XLSX embedded picture could not be loaded:',url,error);
-      resolve(null);
-    });
-  });
+async function loadCadTexture(url) {
+  if (!url) return null;
+  // Check the real embedded-image response and complete decoding before
+  // constructing the texture. Retry a transient load/decode failure once.
+  // Raster dimensions remain texture metadata only, never CAD geometry.
+  let failure;
+  for(let attempt=0;attempt<2;attempt++){
+    let objectUrl;
+    try{
+      const response=await fetch(url,{cache:'no-store'});
+      if(!response.ok) throw new Error('HTTP '+response.status);
+      const blob=await response.blob();
+      if(!blob.size) throw new Error('empty embedded picture');
+      objectUrl=URL.createObjectURL(blob);
+      const image=new Image();
+      image.src=objectUrl;
+      await image.decode();
+      if(!image.naturalWidth || !image.naturalHeight) throw new Error('invalid decoded dimensions');
+      const texture=new THREE.Texture(image);
+      texture.needsUpdate=true;
+      return texture;
+    }catch(error){
+      failure=error;
+    }finally{
+      if(objectUrl) URL.revokeObjectURL(objectUrl);
+    }
+  }
+  console.error('XLSX embedded picture could not be loaded:',url,failure);
+  return null;
 }
 
 function createContextMenu(layer) {
