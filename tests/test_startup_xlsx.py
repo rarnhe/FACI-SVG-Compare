@@ -38,8 +38,23 @@ class TestStartupWithXlsx(TestCase):
             report = self.run_entrypoint(assets)
         self.assertIn("Three.js + Bokeh viewer:", report)
         self.assertIn("[Sheet: Sheet1] 图片 1，形状 1", report)
-        self.assertIn("左上: (85.000, 42.000)", report)
+        self.assertIn("左上: (80.000, 42.000)", report)
         self.assertIn("矩形14", report)
+
+    def test_strict_missing_geometry_stops_before_browser_or_server(self):
+        with TemporaryDirectory() as tmp:
+            assets=Path(tmp)/"assets"
+            assets.mkdir()
+            raw=('<xdr:twoCellAnchor>'+shapes.marker("from",1,1)+
+                 shapes.marker("to",2,2)+shapes.image("IncompletePicture")+'</xdr:twoCellAnchor>')
+            fixture(assets/"book.xlsx",sheet_count=2,anchors=raw)
+            with (patch.object(app,"STATIC_DIR",Path(tmp)),
+                  patch.object(app,"Server") as server,
+                  patch.object(app,"open_viewer") as browser):
+                with self.assertRaisesRegex(SystemExit,"IncompletePicture.*missing top-level xfrm"):
+                    app.main()
+                server.assert_not_called()
+                browser.assert_not_called()
 
     def test_without_xlsx_bokeh_still_starts(self):
         with TemporaryDirectory() as tmp:

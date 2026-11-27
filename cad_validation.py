@@ -80,6 +80,13 @@ def circle_relation(circle: dict, rectangle: Rectangle) -> str:
     return "partial"
 
 
+def intersecting_rectangles(objects: list[dict], circle: dict) -> list[dict]:
+    """Shared selection for validation and catalog, including tangency."""
+    return [obj for obj in objects
+            if obj.get("type") == "shape" and obj.get("shape_kind") == "rectangle"
+            and circle_relation(circle, Rectangle.from_object(obj)) != "outside"]
+
+
 def validate_sheet_collisions(sheet: dict, error_type=ValueError) -> None:
     """Refuse overlapping rectangles or circles meeting multiple rectangles."""
     shapes = sheet["objects"]
@@ -97,7 +104,8 @@ def validate_sheet_collisions(sheet: dict, error_type=ValueError) -> None:
     for circle in shapes:
         if circle.get("type") != "shape" or circle.get("shape_kind") != "ellipse":
             continue
-        matches = [r.label for r in rectangles if circle_relation(circle, r) != "outside"]
+        matches = [Rectangle.from_object(obj).label
+                   for obj in intersecting_rectangles(shapes, circle)]
         if len(matches) >= 2:
             raise error_type(
                 f"Sheet '{sheet['sheet']}': reconstructed circle "

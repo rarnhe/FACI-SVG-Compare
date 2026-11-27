@@ -3,6 +3,25 @@
 const ALT_HEIGHT = /^z\s*=\s*(\d+(?:\.\d+)?|\.\d+)\s*([xy])$/i;
 const EPS = 1e-9;
 
+// All top-level objects, irrespective of shape kind, use the same exact
+// image-relative EMU geometry. One scalar preserves every XY proportion.
+export function worldRectFromEmu(item,scale=1) {
+  const b=item.bounds_emu;
+  if(!b || ![b.x,b.y,b.width,b.height,scale,item.rotation_degrees??0].every(Number.isFinite)
+    || b.width<=0 || b.height<=0 || scale<=0)
+    throw new Error('Invalid saved XLSX geometry: '+(item.name||item.shape_kind||item.type));
+  const unit=scale/9525;
+  return {x:b.x*unit,y:-b.y*unit,width:b.width*unit,height:b.height*unit,
+    rotation:-(item.rotation_degrees??0)*Math.PI/180};
+}
+
+// Existing CAD convention: the reconstructed circle uses the saved
+// ellipse box center and its diagonal as diameter.
+export function reconstructedCircleRadius(width,height) {
+  return Math.hypot(width,height)/2;
+}
+
+
 /**
  * Rectangle's alternative text (DrawingML cNvPr@descr/title) defines height.
  * z=0.5x means half the x/width, z=0.2y means 0.2 * height.
@@ -54,7 +73,7 @@ export function circleRectangleRelation(ellipse, toRect, spec) {
   const rect = toRect(ellipse);
   const centerX = rect.x + rect.width / 2;
   const centerY = rect.y - rect.height / 2;
-  const radius = Math.hypot(rect.width, rect.height) / 2;
+  const radius = reconstructedCircleRadius(rect.width,rect.height);
   const local = localPoint(centerX, centerY, spec);
   const dx = Math.abs(local.x), dy = Math.abs(local.y);
   const halfW = spec.rect.width / 2, halfH = spec.rect.height / 2;

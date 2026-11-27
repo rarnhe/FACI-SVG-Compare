@@ -1,14 +1,17 @@
 """Extract Excel DrawingML objects as 2D positions relative to A1.
 
-X increases to the right, Y downwards. Geometry is kept in integer EMU,
-and reported in reference pixels at 96 DPI (9525 EMU / pixel).
+X increases to the right, Y downwards. Read saved absolute DrawingML
+X and extents from saved transforms; Y from worksheet row anchors normalized to the picture height when possible. Never use column metrics. Geometry is kept in
+integer EMU and reported in reference pixels at 96 DPI (9525 EMU / pixel).
 """
 
 from __future__ import annotations
 
 import colorsys
-from dataclasses import dataclass, field
-from math import cos, floor, radians, sin
+from bisect import bisect_left
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
+from math import cos, radians, sin
 from pathlib import Path
 import posixpath
 import xml.etree.ElementTree as ET
@@ -17,8 +20,6 @@ from zipfile import BadZipFile, ZipFile
 EMUS_PER_PIXEL = 9525
 EMUS_PER_POINT = 12700
 EMUS_PER_MM = 360000
-DEFAULT_COL_WIDTH = 8.43
-DEFAULT_ROW_HEIGHT_PT = 15.0
 DEFAULT_THEME = {
     "dk1": "000000", "lt1": "FFFFFF", "dk2": "1F497D", "lt2": "EEECE1",
     "accent1": "4472C4", "accent2": "ED7D31", "accent3": "A5A5A5",
@@ -54,20 +55,6 @@ def find_descendant(parent: ET.Element | None, tag: str) -> ET.Element | None:
     return next((child for child in parent.iter() if local_name(child.tag) == tag), None)
 
 
-def child_int(parent: ET.Element, name: str, default: int = 0) -> int:
-    child = first_child(parent, name)
-    return int(child.text) if child is not None and child.text else default
-
-
-def pixels_from_column_width(width: float) -> int:
-    """Excel column characters -> reference pixels; assumes MDW=7 (Calibri 11)."""
-    if width <= 0:
-        return 0
-    if width < 1:
-        return floor(width * 12 + 0.5)
-    return floor(width * 7 + 5)
-
-
 def resolve_part(source_part: str, target: str) -> str:
     """Resolve both absolute and relative OPC relationship targets."""
     if not target:
@@ -93,54 +80,6 @@ def relationships(z: ZipFile, source_part: str) -> dict[str, tuple[str, str]]:
         elem.attrib["Id"]: (elem.attrib.get("Type", ""), elem.attrib.get("Target", ""))
         for elem in root if local_name(elem.tag) == "Relationship" and "Id" in elem.attrib
     }
-
-
-@dataclass
-class SheetMetrics:
-    column_width_emu: int = pixels_from_column_width(DEFAULT_COL_WIDTH) * EMUS_PER_PIXEL
-    row_height_emu: int = round(DEFAULT_ROW_HEIGHT_PT * EMUS_PER_POINT)
-    columns: dict[int, int] = field(default_factory=dict)
-    rows: dict[int, int] = field(default_factory=dict)
-
-    @classmethod
-    def from_xml(cls, root: ET.Element) -> "SheetMetrics":
-        metrics = cls()
-        fmt = first_child(root, "sheetFormatPr")
-        if fmt is not None:
-            if "defaultColWidth" in fmt.attrib:
-                metrics.column_width_emu = pixels_from_column_width(
-                    float(fmt.attrib["defaultColWidth"])) * EMUS_PER_PIXEL
-            if "defaultRowHeight" in fmt.attrib:
-                metrics.row_height_emu = round(float(fmt.attrib["defaultRowHeight"]) * EMUS_PER_POINT)
-        cols = first_child(root, "cols")
-        if cols is not None:
-            for col in cols:
-                if local_name(col.tag) != "col":
-                    continue
-                width = 0 if col.get("hidden") == "1" else (
-                    pixels_from_column_width(float(col.get("width", DEFAULT_COL_WIDTH))) * EMUS_PER_PIXEL)
-                for idx in range(int(col.get("min", 1)), int(col.get("max", 1)) + 1):
-                    metrics.columns[idx] = width
-        sheet_data = first_child(root, "sheetData")
-        if sheet_data is not None:
-            for row in sheet_data:
-                if local_name(row.tag) != "row" or not row.get("r"):
-                    continue
-                idx = int(row.get("r"))
-                if row.get("hidden") == "1":
-                    metrics.rows[idx] = 0
-                elif "ht" in row.attrib:
-                    metrics.rows[idx] = round(float(row.get("ht")) * EMUS_PER_POINT)
-        return metrics
-
-    def xy(self, col0: int, row0: int, col_offset: int = 0, row_offset: int = 0) -> tuple[int, int]:
-        if col0 < 0 or row0 < 0:
-            raise SpatialXlsxError("Drawing marker has negative cell index")
-        x = col0 * self.column_width_emu + sum(
-            v - self.column_width_emu for idx, v in self.columns.items() if idx <= col0) + col_offset
-        y = row0 * self.row_height_emu + sum(
-            v - self.row_height_emu for idx, v in self.rows.items() if idx <= row0) + row_offset
-        return x, y
 
 
 def mapped_theme_palette(palette: dict[str, str], mapping: ET.Element | None = None) -> dict[str, str]:
@@ -316,45 +255,160 @@ def outline_width_px(outline: ET.Element | None, style: ET.Element | None,
         return None
 
 
-def marker_xy(marker: ET.Element, metrics: SheetMetrics) -> tuple[int, int]:
-    return metrics.xy(child_int(marker, "col"), child_int(marker, "row"),
-                      child_int(marker, "colOff"), child_int(marker, "rowOff"))
+class VerticalRowMetrics:
+    """Sparse row heights in exact EMU from saved XLSX point measurements.
+
+    Do not infer a default font or a default row height when the worksheet
+    omits it. Columns and horizontal offsets are never consulted here.
+    """
+    def __init__(self, root: ET.Element):
+        self.default = None
+        self.indices = []
+        self.prefix = [0]
+        fmt = first_child(root, "sheetFormatPr")
+        if fmt is None or "defaultRowHeight" not in fmt.attrib:
+            return
+        try:
+            default = self.height(fmt.attrib["defaultRowHeight"])
+            zero = fmt.get("zeroHeight") in {"1", "true"}
+            self.default = 0 if zero else default
+            overrides = {}
+            data = first_child(root, "sheetData")
+            if data is not None:
+                for row in data:
+                    if local_name(row.tag) != "row":
+                        continue
+                    index = int(row.attrib["r"]) - 1
+                    if not 0 <= index < 1048576:
+                        raise ValueError("invalid row index")
+                    hidden = row.get("hidden")
+                    if hidden in {"1", "true"}:
+                        h = 0
+                    elif zero and hidden is None and "ht" not in row.attrib:
+                        h = 0
+                    else:
+                        h = self.height(row.attrib["ht"]) if "ht" in row.attrib else default
+                    overrides[index] = h - self.default
+            self.indices = sorted(overrides)
+            for index in self.indices:
+                self.prefix.append(self.prefix[-1] + overrides[index])
+        except (KeyError, ValueError, InvalidOperation, OverflowError):
+            self.default = None
+
+    @staticmethod
+    def height(points: str) -> int:
+        value = Decimal(points)
+        if not value.is_finite() or value < 0 or value > 409.5:
+            raise ValueError("invalid saved row height")
+        return round(value * EMUS_PER_POINT)
+
+    def marker_y(self, marker: ET.Element | None) -> int | None:
+        if marker is None:
+            return None
+        row, offset = first_child(marker, "row"), first_child(marker, "rowOff")
+        if row is None or offset is None:
+            return None
+        try:
+            index, off = int(row.text), int(offset.text)
+        except (TypeError, ValueError):
+            return None
+        if not 0 <= index < 1048576:
+            return None
+        if index == 0:
+            return off
+        if self.default is None:
+            return None
+        return index * self.default + self.prefix[bisect_left(self.indices, index)] + off
 
 
-def anchor_rect(anchor: ET.Element, metrics: SheetMetrics) -> tuple[int, int, int, int]:
+def anchor_y(anchor: ET.Element, width: int, height: int, angle: float,
+             rows: VerticalRowMetrics | None) -> tuple[int, dict]:
+    """Resolve vertical position independently of a:xfrm/a:off@y.
+
+    For cell anchors the start row and offset determine the Y position,
+    even if the end span differs from the saved height. An unambiguous
+    rotated outer span can locate the center of the unrotated box.
+    Absolute anchors use their own y. Never read or fall back to saved off@y.
+    """
     kind = local_name(anchor.tag)
-    if kind in ("oneCellAnchor", "twoCellAnchor"):
-        start = first_child(anchor, "from")
-        if start is None:
-            raise SpatialXlsxError(f"{kind} without from marker")
-        x1, y1 = marker_xy(start, metrics)
-        if kind == "twoCellAnchor":
-            end = first_child(anchor, "to")
-            if end is None:
-                raise SpatialXlsxError("twoCellAnchor without to marker")
-            x2, y2 = marker_xy(end, metrics)
+    if kind == "absoluteAnchor":
+        y = emu_attribute(first_child(anchor, "pos"), "y", "xdr:pos")
+        return y, {"source": "absoluteAnchor", "resolved_y_emu": y,
+                   "saved_y_emu": y}
+    if rows is None:
+        raise SpatialXlsxError("missing worksheet row geometry for Y")
+    start = rows.marker_y(first_child(anchor, "from"))
+    if start is None:
+        raise SpatialXlsxError("cannot resolve Y from row/rowOff and saved row heights")
+    y = start
+    info = {"source": "row_anchor", "anchor_y_emu": start}
+    if kind == "twoCellAnchor":
+        end = rows.marker_y(first_child(anchor, "to"))
+        if end is not None and end > start:
+            span = end - start
+            info["anchor_span_emu"] = span
+            info["anchor_end_y_emu"] = end
+            rotated_span = abs(width * sin(radians(angle))) + abs(height * cos(radians(angle)))
+            # The start marker is authoritative. Only shift by half the
+            # difference when the markers clearly describe a rotated AABB.
+            if abs(span - height) > EMUS_PER_PIXEL and abs(span - rotated_span) <= EMUS_PER_PIXEL:
+                y = round((start + end - height) / 2)
+                info["source"] = "rotated_row_anchor"
+            elif abs(span - height) > EMUS_PER_PIXEL:
+                info["reason"] = "row span differs from saved height; start marker retained"
         else:
-            ext = first_child(anchor, "ext")
-            if ext is None:
-                raise SpatialXlsxError("oneCellAnchor without ext")
-            x2, y2 = x1 + int(ext.get("cx", "0")), y1 + int(ext.get("cy", "0"))
-    elif kind == "absoluteAnchor":
-        position, ext = first_child(anchor, "pos"), first_child(anchor, "ext")
-        if position is None or ext is None:
-            raise SpatialXlsxError("absoluteAnchor missing pos/ext")
-        x1, y1 = int(position.get("x", "0")), int(position.get("y", "0"))
-        x2, y2 = x1 + int(ext.get("cx", "0")), y1 + int(ext.get("cy", "0"))
-    else:
-        raise SpatialXlsxError(f"Unsupported anchor: {kind}")
-    return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+            info["reason"] = "end marker unavailable or invalid; start marker retained"
+    info["resolved_y_emu"] = y
+    return y, info
 
 
-def rotation_degrees(node: ET.Element) -> float:
+def object_transform(node: ET.Element) -> ET.Element | None:
+    """Only the top-level object's own transform, never a nested child's."""
     props = first_child(node, "spPr")
     if props is None:
         props = first_child(node, "grpSpPr")
-    xfrm = first_child(props, "xfrm")
-    return int(xfrm.get("rot", "0")) / 60000 if xfrm is not None else 0.0
+    if local_name(node.tag) == "graphicFrame":
+        return first_child(node, "xfrm")
+    return first_child(props, "xfrm")
+
+
+def emu_attribute(node: ET.Element | None, key: str, label: str) -> int:
+    if node is None or key not in node.attrib:
+        raise SpatialXlsxError(f"missing {label}@{key}")
+    try:
+        return int(node.attrib[key])
+    except ValueError as error:
+        raise SpatialXlsxError(f"invalid integer {label}@{key}: {node.attrib[key]!r}") from error
+
+
+def saved_horizontal_geometry(anchor: ET.Element, node: ET.Element) -> tuple[int, int, int, str]:
+    """Read X and original width/height, independently of vertical position.
+
+    Zero X is valid. No Y field or column-width estimate is used here.
+    """
+    if local_name(anchor.tag) == "absoluteAnchor":
+        off, ext = first_child(anchor, "pos"), first_child(anchor, "ext")
+        off_label, ext_label, source = "xdr:pos", "xdr:ext", "absoluteAnchor"
+    else:
+        xfrm = object_transform(node)
+        if xfrm is None:
+            raise SpatialXlsxError("missing top-level xfrm (absolute EMU geometry required)")
+        off, ext = first_child(xfrm, "off"), first_child(xfrm, "ext")
+        off_label, ext_label, source = "xfrm/off", "xfrm/ext", "xfrm"
+    x = emu_attribute(off, "x", off_label)
+    width = emu_attribute(ext, "cx", ext_label)
+    height = emu_attribute(ext, "cy", ext_label)
+    if width <= 0 or height <= 0:
+        raise SpatialXlsxError(f"{ext_label} must have positive cx and cy")
+    return x, width, height, source
+
+
+def rotation_degrees(node: ET.Element) -> float:
+    xfrm = object_transform(node)
+    try:
+        return int(xfrm.get("rot", "0")) / 60000 if xfrm is not None else 0.0
+    except ValueError as error:
+        raise SpatialXlsxError("invalid integer xfrm@rot") from error
 
 
 def vertices_from_rect(rect: tuple[int, int, int, int], angle: float) -> list[dict[str, float]]:
@@ -541,11 +595,12 @@ def textbox_text_layout(node: ET.Element, palette: dict[str, str],
     return {"anchor": vertical, "insets_px": insets, "paragraphs": paragraphs}
 
 
-def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, str],
+def drawing_objects(root: ET.Element, palette: dict[str, str],
                     fills: list[ET.Element], lines: list[ET.Element],
                     theme_fonts: dict[str, dict[str, str]] | None = None,
                     drawing_rels: dict[str, tuple[str, str]] | None = None,
-                    drawing_part: str = "", members: set[str] | None = None) -> list[dict]:
+                    drawing_part: str = "", members: set[str] | None = None,
+                    sheet_name: str = "", row_metrics: VerticalRowMetrics | None = None) -> list[dict]:
     color_map = first_child(root, "clrMap")
     override = first_child(first_child(root, "clrMapOvr"), "overrideClrMapping")
     if color_map is not None or override is not None:
@@ -554,19 +609,39 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
     for anchor in root:
         if local_name(anchor.tag) not in {"oneCellAnchor", "twoCellAnchor", "absoluteAnchor"}:
             continue
-        rect = anchor_rect(anchor, metrics)
         for element in anchor:
             tag = local_name(element.tag)
             if tag not in {"pic", "sp", "cxnSp", "grpSp", "graphicFrame"}:
                 continue
             nv = find_descendant(element, "cNvPr")
+            name = nv.get("name", "未命名对象") if nv is not None else "未命名对象"
             kind = "image" if tag == "pic" else "shape"
-            angle = rotation_degrees(element)
+            try:
+                x, width, height, geometry_source = saved_horizontal_geometry(anchor, element)
+                angle = rotation_degrees(element)
+                y, vertical = anchor_y(anchor, width, height, angle, row_metrics)
+                # Saved Y is diagnostic only, never a cell-anchor fallback.
+                if geometry_source == "xfrm":
+                    off = first_child(object_transform(element), "off")
+                    try:
+                        vertical["saved_y_emu"] = int(off.get("y", "")) if off is not None else None
+                    except ValueError:
+                        vertical["saved_y_emu"] = None
+                vertical["edit_as"] = anchor.get("editAs")
+                rect = (x, y, x + width, y + height)
+            except SpatialXlsxError as error:
+                raise SpatialXlsxError(
+                    f"Sheet '{sheet_name}', object '{name}' ({local_name(anchor.tag)}, "
+                    f"{drawing_part}): {error}; X uses saved geometry, "
+                    "Y requires a resolvable row or absolute anchor."
+                ) from error
             x1, y1, x2, y2 = rect
             obj = {
                 "type": kind,
-                "name": nv.get("name", "未命名对象") if nv is not None else "未命名对象",
+                "name": name,
                 "anchor": local_name(anchor.tag),
+                "geometry_source": geometry_source,
+                "vertical_geometry": vertical,
                 "bounds_emu": {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1},
                 "width_px": round((x2 - x1) / EMUS_PER_PIXEL, 3),
                 "height_px": round((y2 - y1) / EMUS_PER_PIXEL, 3),
@@ -574,6 +649,12 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
                 "vertices_px": vertices_from_rect(rect, angle),
             }
             if kind == "image":
+                # Raw OOXML percentages (100000 = 100%); diagnostic only.
+                crop = first_child(first_child(element, "blipFill"), "srcRect")
+                obj["picture_crop"] = {
+                    key: crop.get(key, "0") if crop is not None else "0"
+                    for key in ("l", "t", "r", "b")
+                }
                 blip = find_descendant(element, "blip")
                 embed_id = None if blip is None else next(
                     (value for key, value in blip.attrib.items() if local_name(key) == "embed"),
@@ -616,6 +697,77 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
     return objects
 
 
+def normalize_sheet_y(objects: list[dict]) -> None:
+    """One picture-derived vertical position mapping per worksheet.
+
+    Preserve X, extents, rotation and the existing picture origin.
+    Calibrate only when the picture has a positive, independent two-cell
+    vertical span and no rotation. Otherwise keep the prior sheet geometry
+    and explicitly diagnose the unavailable calibration. Absolute anchors
+    have no row markers; map their saved relative Y using the picture's
+    saved Y when available, otherwise leave the entire sheet uncalibrated
+    rather than mix incompatible reference frames.
+    """
+    images = [obj for obj in objects if obj["type"] == "image"]
+    if len(images) != 1:
+        return  # Existing workbook validation handles invalid image counts.
+    picture = images[0]
+    v = picture["vertical_geometry"]
+    start = v.get("anchor_y_emu")
+    span = v.get("anchor_span_emu")
+    height = picture["bounds_emu"]["height"]
+    origin = picture["bounds_emu"]["y"]
+    absolute = [o for o in objects if o["anchor"] == "absoluteAnchor"]
+    saved_origin = v.get("saved_y_emu")
+    reason = None
+    if picture["anchor"] != "twoCellAnchor" or start is None or not span or span <= 0:
+        reason = "picture has no positive independent two-cell Y span"
+    elif picture["rotation_degrees"] % 360 != 0:
+        reason = "rotated picture cannot establish an unambiguous vertical axis"
+    elif absolute and saved_origin is None:
+        reason = "absolute anchors require saved picture Y for a common reference"
+    if reason:
+        for obj in objects:
+            obj["vertical_geometry"].update(calibration_status="unavailable",
+                                            calibration_reason=reason)
+        return
+    ratio = Fraction(height, span)
+    for obj in objects:
+        b = obj["bounds_emu"]
+        info = obj["vertical_geometry"]
+        raw_y = b["y"]
+        if obj is picture:
+            y = origin
+        elif obj["anchor"] == "absoluteAnchor":
+            # Absolute coordinates already use the target EMU system.
+            y = origin + raw_y - saved_origin
+        else:
+            anchor_start = info["anchor_y_emu"]
+            y = origin + round((anchor_start - start) * ratio)
+            obj_span = info.get("anchor_span_emu")
+            angle = radians(obj["rotation_degrees"])
+            rotated_span = abs(b["width"] * sin(angle)) + abs(b["height"] * cos(angle))
+            # Test the calibrated span before interpreting a rotated AABB.
+            # Never scale the unrotated box height or its rotation correction.
+            if obj_span is not None:
+                mapped_span = float(obj_span * ratio)
+                if (abs(mapped_span - b["height"]) > EMUS_PER_PIXEL
+                        and abs(mapped_span - rotated_span) <= EMUS_PER_PIXEL):
+                    y = origin + round((anchor_start - start) * ratio
+                                       + obj_span * ratio / 2 - Fraction(b["height"], 2))
+                    info["rotation_anchor"] = "rotated_outer_bounds"
+        b["y"] = y
+        obj["vertices_px"] = vertices_from_rect(
+            (b["x"], y, b["x"] + b["width"], y + b["height"]), obj["rotation_degrees"])
+        info.update(
+            source="absoluteAnchor" if obj["anchor"] == "absoluteAnchor" else "normalized_row_anchor",
+            uncalibrated_y_emu=raw_y, resolved_y_emu=y,
+            relative_y_emu=y-origin, calibration_status="applied",
+            calibration_factor=float(ratio), picture_anchor_start_emu=start,
+            picture_anchor_end_emu=start+span, picture_height_emu=height,
+        )
+
+
 def parse_xlsx(path: Path | str) -> list[dict]:
     path = Path(path)
     try:
@@ -636,7 +788,11 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                 if rel is None or "worksheet" not in rel[0]:
                     raise SpatialXlsxError(f"Missing worksheet relationship for {name}")
                 sheet_part = resolve_part("xl/workbook.xml", rel[1])
-                metrics = SheetMetrics.from_xml(ET.fromstring(z.read(sheet_part)))
+                # Only explicit row geometry is used for Y; never read
+                # column width or font metrics.
+                if sheet_part not in z.namelist():
+                    raise SpatialXlsxError(f"Missing worksheet part for {name}: {sheet_part}")
+                row_metrics = VerticalRowMetrics(ET.fromstring(z.read(sheet_part)))
                 objects = []
                 for rel_type, target in relationships(z, sheet_part).values():
                     if not rel_type.endswith("/drawing"):
@@ -644,11 +800,13 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                     drawing_part = resolve_part(sheet_part, target)
                     drawing = ET.fromstring(z.read(drawing_part))
                     objects.extend(drawing_objects(
-                        drawing, metrics, palette, fills, lines,
+                        drawing, palette, fills, lines,
                         theme_fonts=fonts,
                         drawing_rels=relationships(z, drawing_part),
                         drawing_part=drawing_part, members=set(z.namelist()),
+                        sheet_name=name, row_metrics=row_metrics,
                     ))
+                normalize_sheet_y(objects)
                 sheets.append({"sheet": name, "objects": objects})
             return sheets
     except (BadZipFile, KeyError, ET.ParseError) as error:
@@ -715,6 +873,30 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                 f"  {obj['type'].upper()}: {obj['name']}  "
                 f"宽={obj['width_px']:.3f}px 高={obj['height_px']:.3f}px"
             )
+            lines.append(f"    几何来源: {obj.get('geometry_source', 'unknown')}")
+            vertical = obj.get("vertical_geometry", {})
+            if vertical:
+                resolved = vertical["resolved_y_emu"]
+                start = vertical.get("anchor_y_emu", resolved)
+                reason = vertical.get("reason", "")
+                lines.append(f"    Y来源: {vertical['source']} "
+                             f"saved={vertical.get('saved_y_emu')} anchor={start} "
+                             f"resolved={resolved} EMU"
+                             + (f" ({reason})" if reason else ""))
+                if vertical.get("calibration_status") == "applied":
+                    lines.append(
+                        f"    Y校准: k={vertical['calibration_factor']:.9f} "
+                        f"picture_from={vertical['picture_anchor_start_emu']} "
+                        f"picture_to={vertical['picture_anchor_end_emu']} "
+                        f"picture_height={vertical['picture_height_emu']} "
+                        f"before={vertical['uncalibrated_y_emu']} "
+                        f"relative={vertical['relative_y_emu']} EMU")
+                elif vertical.get("calibration_status") == "unavailable":
+                    lines.append("    Y校准未启用: " + vertical["calibration_reason"])
+            if obj["type"] == "image" and "picture_crop" in obj:
+                crop = obj["picture_crop"]
+                lines.append("    图片裁剪 srcRect: " + " ".join(
+                    f"{key}={value}" for key, value in crop.items()))
             for title, point in zip(("左上", "右上", "右下", "左下"), obj["vertices_px"]):
                 lines.append(f"    {title}: ({point['x']:.3f}, {point['y']:.3f}) px")
             if obj["rotation_degrees"]:

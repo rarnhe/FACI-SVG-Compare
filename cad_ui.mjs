@@ -1,4 +1,5 @@
 /** Pure CAD UI geometry and responsive layout helpers (no DOM dependencies). */
+import { reconstructedCircleRadius } from './cad_geometry.mjs';
 const EPS = 1e-7;
 
 export const INITIAL_REFERENCE_SPLIT = 0.5;
@@ -65,7 +66,7 @@ function circleInsideRect(circle, rect) {
   const c=center(circle), p=center(rect), x=c.x-p.x, y=c.y-p.y;
   const co=Math.cos(rect.rotation || 0), si=Math.sin(rect.rotation || 0);
   const lx=x*co+y*si, ly=-x*si+y*co;
-  const radius=Math.hypot(circle.width,circle.height)/2;
+  const radius=reconstructedCircleRadius(circle.width,circle.height);
   return Math.abs(lx)+radius <= rect.width/2+EPS &&
          Math.abs(ly)+radius <= rect.height/2+EPS;
 }
@@ -230,32 +231,18 @@ export function layoutTextboxText(layout,width,height,measure) {
   return commands;
 }
 
-/** Prefer the actual decoded XLSX picture dimensions, not the cell anchor ratio. */
-export function imageAspectRatio(image, anchor) {
-  const width=Number(image?.naturalWidth || image?.width);
-  const height=Number(image?.naturalHeight || image?.height);
-  if(Number.isFinite(width) && width>0 && Number.isFinite(height) && height>0)
-    return height/width;
-  const fallbackWidth=Number(anchor?.width),fallbackHeight=Number(anchor?.height);
-  return Number.isFinite(fallbackWidth) && fallbackWidth>0 &&
-         Number.isFinite(fallbackHeight) && fallbackHeight>0
-    ? fallbackHeight/fallbackWidth : 1;
-}
-
 /**
- * Use the embedded picture's actual pixel aspect while both CAD sheets share
- * one world-space image width (same units/pixel across both cameras).
- * Shape offsets follow the image axes so overlays never drift from their image.
+ * XLSX anchors are the sole geometric reference. A sheet's image and
+ * shapes share a single uniform scale, regardless of raster pixel aspect.
+ * Retain the common displayed image width and synchronized cameras.
  */
-export function pictureLayerScales(imageBounds, naturalAspectRatios) {
+export function pictureLayerScales(imageBounds) {
   const commonWidth=Math.max(1,...imageBounds.map(box=>box.width));
-  return imageBounds.map((box,i)=>{
-    const ratio=naturalAspectRatios[i] > 0 ? naturalAspectRatios[i] : box.height/box.width;
-    const height=commonWidth*ratio;
+  return imageBounds.map(box=>{
+    const scale=commonWidth/Math.max(1,box.width);
     return {
-      x:commonWidth/Math.max(1,box.width),
-      y:height/Math.max(1,box.height),
-      width:commonWidth,height,
+      x:scale,y:scale,
+      width:box.width*scale,height:box.height*scale,
     };
   });
 }
@@ -657,7 +644,7 @@ export function rectangleHasAltText(altText) {
 }
 export function planarOutlineVertices(kind,width,height,z=0.7) {
   if(kind==='ellipse') {
-    const radius=Math.hypot(width,height)/2;
+    const radius=reconstructedCircleRadius(width,height);
     return Array.from({length:72},(_,i)=>{
       const t=2*Math.PI*i/72;
       return [radius*Math.cos(t),radius*Math.sin(t),z];
