@@ -1,10 +1,10 @@
 // Linked Fab/Subfab Excel CAD viewer. Each picture starts at (0,0) in local XY.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
+import { rectangleHeight, rectangleSpecs, ellipseElevation, worldRectFromEmu, reconstructedCircleRadius } from './cad_geometry.mjs';
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
-  pictureLayerScales, imageAspectRatio, fitSvgPane, clampMainDivider, clampReferenceSplit,
+  pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
   restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
   cadOutlineSpec, cadOutlineSegments,
@@ -85,15 +85,7 @@ function synchronizeFrom(source) {
 }
 
 function toWorldRect(item,layer=null) {
-  const b=item.bounds_emu;
-  const sx=layer?.scaleX || 1, sy=layer?.scaleY || 1;
-  return {
-    x:b.x*EMU_TO_PX*sx,
-    y:-b.y*EMU_TO_PX*sy,
-    width:Math.max(0.1,b.width*EMU_TO_PX*sx),
-    height:Math.max(0.1,b.height*EMU_TO_PX*sy),
-    rotation:-(item.rotation_degrees || 0)*Math.PI/180,
-  };
+  return worldRectFromEmu(item,layer?.scaleX??1);
 }
 
 function colorValue(value,fallback) {
@@ -248,7 +240,7 @@ function drawShape(layer,item,rectangles=[]) {
   if(kind==='ellipse') {
     // Per drawing requirement: the diagonals meet at the center, and
     // upper-left -> lower-right is the diameter (not the minor axis).
-    const radius=Math.hypot(w,h)/2;
+    const radius=reconstructedCircleRadius(w,h);
     clickTarget=new THREE.Mesh(new THREE.CircleGeometry(radius,72),mat);
     clickTarget.position.z=0.5;
     clickTarget.renderOrder=2;
@@ -503,6 +495,8 @@ function installPicking(layer) {
     if(!rect.width || !rect.height) return null;
     mouse.set((clientX-rect.left)/rect.width*2-1,
               1-(clientY-rect.top)/rect.height*2);
+    layer.camera.updateMatrixWorld();
+    layer.scene.updateMatrixWorld(true);
     raycaster.setFromCamera(mouse,layer.camera);
     const targets=button===null ? layer.hoverable : layer.clickable.filter(mesh=>
       selectOnButton(mesh.userData.cadObject,button));
@@ -1033,9 +1027,8 @@ async function initialize() {
     workbookName=data.workbook || '';
     document.title=workbookName.replace(/\.xlsx$/i,'') || 'Fab / Subfab CAD';
 
-    // XLSX image anchors supply the origin and coordinate reference while
-    // the actual embedded raster image supplies the displayed aspect ratio.
-    // The same scale factors transform each shape AND its picture.
+    // XLSX image anchors supply the origin, size and displayed aspect.
+    // Decoded pixels are texture data only; never use them to rescale geometry.
     const layerImages=data.layers.map(src=>
       src?.objects?.find(item=>item.type==='image') || null);
     const textures=await Promise.all(layerImages.map(item=>
@@ -1044,12 +1037,9 @@ async function initialize() {
       width:(item?.bounds_emu?.width||9525)*EMU_TO_PX,
       height:(item?.bounds_emu?.height||9525)*EMU_TO_PX,
     }));
-    const ratios=textures.map((texture,i)=>
-      imageAspectRatio(texture?.image,bounds[i]));
-    // Shared world-space image width synchronizes both linked CAD cameras.
-    // Each sheet's image height is nativeAspect*sharedWidth; textboxes,
-    // rectangles and ellipses receive the EXACT SAME X/Y transforms.
-    const transforms=pictureLayerScales(bounds,ratios);
+    // Keep shared world-space image width, but apply one uniform scale
+    // per sheet to the picture, shapes, and all XY offsets.
+    const transforms=pictureLayerScales(bounds);
 
     const targets=[fab,subfab];
     for(let i=0;i<targets.length;i++) {
@@ -1058,7 +1048,7 @@ async function initialize() {
       layer.objects=layerData.objects;
       layer.sheetName=layerData.sheet || '';
       layer.scaleX=transforms[i].x;
-      layer.scaleY=transforms[i].y;
+      layer.scaleY=layer.scaleX;
       layer.images=layerImages[i] ? [layerImages[i]] : [];
       const rectangles=rectangleSpecs(layer.objects,obj=>toWorldRect(obj,layer));
       for(const item of layer.objects) {

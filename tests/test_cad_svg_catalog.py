@@ -127,20 +127,63 @@ class TestSvgCatalog(unittest.TestCase):
             self.assertIn("%2BY_PSD.svg",result["pairs"]["20260704101627"]["Y"]["psd"])
             self.assertNotIn("20260703101627",result["dates"])
 
-    def test_partially_overlapping_ellipse_is_not_fully_inside_rectangle(self):
+    def test_partial_ellipse_uses_rectangle_text_and_timestamp(self):
         objects=sample_objects()
         touching=object_at("ellipse","EdgeSensor",491,140,20,20)
-        # Circle crosses the rectangle's x=500 boundary.
-        self.assertIsNone(catalog.enclosing_rectangle(objects,touching))
+        self.assertIs(catalog.enclosing_rectangle(objects,touching),objects[1])
         self.assertIs(catalog.enclosing_textbox(objects,touching),objects[0])
         with TemporaryDirectory() as tmp:
             folder=Path(tmp)/"BODYv2"
             folder.mkdir()
-            (folder/"BODYv2_20260704101627_+Z_PSD.svg").write_text("<svg/>")
-            result=catalog.build_ellipse_svg_catalog(
-                Path(tmp),[{"sheet":"fab","objects":[*objects,touching]}],0,4)
-            self.assertEqual(result["target_kind"],"ellipse")
-            self.assertEqual(result["dates"],["20260704101627"])
+            for label,date,axis in [
+                ("20260704_SCN_B1","20260706101627","Z"),
+                ("20260704_SCN_B10","20260707101627","X"),
+                ("BODYv2","20260704101627","Y"),
+                ("EdgeSensor","20260705101627","X"),
+            ]:
+                for suffix in ("PSD","1-3-Octave"):
+                    (folder/f"{label}_{date}_+{axis}_{suffix}.svg").write_text("<svg/>")
+            sheets=[{"sheet":"fab","objects":[*objects,touching]}]
+            result=catalog.build_ellipse_svg_catalog(Path(tmp),sheets,0,4)
+            self.assertEqual(result["target_kind"],"rectangle")
+            self.assertEqual(result["search_identifier"],"20260704_SCN_B1")
+            self.assertEqual(result["identifier"],"20260704_SCN_B1")
+            self.assertEqual(result["dates"],["20260706101627"])
+            self.assertEqual(list(result["pairs"]["20260706101627"]),["Z"])
+            inside=catalog.build_ellipse_svg_catalog(Path(tmp),sheets,0,2)
+            self.assertEqual(result["pairs"],inside["pairs"])
+
+    def test_external_tangent_and_rotated_partial_choose_rectangle(self):
+        objects=sample_objects()
+        tangent=object_at("ellipse","Tangent",502,146,6,8)
+        separated=object_at("ellipse","Separated",502.01,146,6,8)
+        self.assertIs(catalog.enclosing_rectangle(objects,tangent),objects[1])
+        self.assertIsNone(catalog.enclosing_rectangle(objects,separated))
+        rotated=object_at("rectangle","Rotated",100,100,80,40)
+        rotated["rotation_degrees"]=45
+        # Near the center of the rotated right edge (140+28.28,120+28.28).
+        partial=object_at("ellipse","P",167,147,6,8)
+        self.assertIs(catalog.enclosing_rectangle([rotated],partial),rotated)
+
+    def test_ambiguous_multiple_intersections_are_rejected(self):
+        objects=[object_at("rectangle","Left",0,0,100,80),
+                 object_at("rectangle","Right",140,0,100,80)]
+        circle=object_at("ellipse","Both",100,40,40,40)
+        with self.assertRaisesRegex(ValueError,"multiple rectangles"):
+            catalog.enclosing_rectangle(objects,circle)
+
+    def test_empty_visible_rectangle_text_never_falls_back_to_shape_name(self):
+        objects=sample_objects()
+        objects[1]["text"]=""
+        objects[1]["name"]="FallbackName"
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/"BODYv2";folder.mkdir()
+            (folder/"FallbackName_20260704101627_+X_PSD.svg").write_text("<svg/>")
+            (folder/"BODYv2_20260704101627_+X_PSD.svg").write_text("<svg/>")
+            result=catalog.build_ellipse_svg_catalog(root,[{"sheet":"Fab","objects":objects}],0,2)
+            self.assertEqual(result["target_kind"],"rectangle")
+            self.assertEqual(result["search_identifier"],"")
+            self.assertEqual(result["dates"],[])
 
     def test_outside_ellipse_ignores_own_text_and_unrelated_date(self):
         with TemporaryDirectory() as tmp:

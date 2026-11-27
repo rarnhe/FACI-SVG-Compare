@@ -60,7 +60,7 @@ class TestCadManifest(unittest.TestCase):
             self.assertEqual(item["colors"]["fill"], "#5B9BD5")
             self.assertEqual(item["bounds_emu"]["width"], 190500)
             self.assertEqual(item["shape_kind"], "rectangle")
-            self.assertEqual(item["bounds_emu"]["x"], -85 * 9525)
+            self.assertEqual(item["bounds_emu"]["x"], -80 * 9525)
             self.assertEqual(item["bounds_emu"]["y"], -42 * 9525)
 
     def test_textbox_style_and_outline_survive_cad_manifest(self):

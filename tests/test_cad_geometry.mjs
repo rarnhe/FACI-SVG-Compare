@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   rectangleHeight, rectangleSpecs, rectangleOverlap,
   pointInsideRotatedRectangle, circleRectangleRelation, ellipseElevation,
+  worldRectFromEmu, reconstructedCircleRadius,
 } from '../cad_geometry.mjs';
 
 const rect=(x,y,width,height,rotation=0)=>({x,y,width,height,rotation});
@@ -84,4 +85,16 @@ test('a circle intersecting two disjoint rectangles is an error',()=>{
   assert.equal(rectangleOverlap(rs[0],rs[1]),false);
   assert.throws(()=>ellipseElevation(circle(100,-40,40,40),identity,rs),
     /multiple rectangles/);
+});
+
+test('all drawing kinds use the same exact EMU transform, including tiny dimensions',()=>{
+  const bounds_emu={x:190500,y:285750,width:1,height:2};
+  for(const shape_kind of ['textbox','rectangle','ellipse','image']){
+    const r=worldRectFromEmu({shape_kind,bounds_emu,rotation_degrees:32},1.5);
+    assert.equal(r.x,30);assert.equal(r.y,-45);
+    assert.equal(r.width,1.5/9525);assert.equal(r.height,3/9525);
+    assert.equal(r.rotation,-32*Math.PI/180);
+    assert.equal(reconstructedCircleRadius(r.width,r.height),Math.hypot(r.width,r.height)/2);
+  }
+  assert.throws(()=>worldRectFromEmu({bounds_emu:{...bounds_emu,width:0}}),/Invalid saved XLSX geometry/);
 });
