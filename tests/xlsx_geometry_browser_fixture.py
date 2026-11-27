@@ -33,9 +33,8 @@ def transform(x,y,w,h,rotation=0):
 
 
 def anchored(x,y,w,h,child):
-    # Simulate a workbook saved with font-dependent columns that do not
-    # match the 7px fallback MDW. Deliberately exaggerate horizontal marker
-    # spacing; the saved DrawingML is the independent exact geometry.
+    # Deliberately use markers inconsistent with the worksheet layout.
+    # Strict parsing must never consult the worksheet dimensions.
     left=x+80
     top=y+40
     right=left+w
@@ -78,7 +77,9 @@ def main():
         base=Path(tmp)
         raw=fixture(base/"raw.xlsx",anchors(420,240),sheet_count=2,
                     second_anchors=anchors(280,200),media=True,
-                    worksheet_xml='<sheetFormatPr defaultColWidth="10" defaultRowHeight="15"/><sheetData/>')
+                    worksheet_xml='<sheetFormatPr defaultColWidth="50" defaultRowHeight="60"/>'
+                                  '<cols><col min="1" max="5" hidden="1"/></cols>'
+                                  '<sheetData><row r="1" hidden="1"/></sheetData>')
         book=base/"geometry.xlsx"
         # Replace fixture dummy raster with independently sized real PNGs.
         with ZipFile(raw) as src, ZipFile(book,"w") as dst:

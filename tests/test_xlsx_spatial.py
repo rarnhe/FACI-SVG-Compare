@@ -4,7 +4,9 @@ from importlib import import_module
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import sys
+import re
 import unittest
+from unittest.mock import patch
 from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,9 +41,21 @@ def shape(name="矩形14", rot=0, fill=True):
             '</a:rPr></a:r></a:p></xdr:txBody></xdr:sp>')
 
 
+def with_saved_geometry(child, x, y, w, h):
+    """Fixtures explicitly store independent absolute EMU coordinates."""
+    transform=(f'<a:off x="{x*9525}" y="{y*9525}"/>'
+               f'<a:ext cx="{w*9525}" cy="{h*9525}"/>')
+    if "<a:xfrm" not in child:
+        return child.replace("<xdr:spPr/>",
+                             f"<xdr:spPr><a:xfrm>{transform}</a:xfrm></xdr:spPr>")
+    return re.sub(r'<a:xfrm([^>]*)/>',lambda match:
+                  f'<a:xfrm{match.group(1)}>{transform}</a:xfrm>',child,count=1)
+
+
 def two_cell(child=None):
     if child is None:
         child = image()
+    child=with_saved_geometry(child,80,42,135,28)
     return (f'<xdr:twoCellAnchor>{marker("from", 1, 1, 95250, 19050)}'
             f'{marker("to", 2, 2, 47625, 95250)}{child}'
             '</xdr:twoCellAnchor>')
@@ -50,6 +64,7 @@ def two_cell(child=None):
 def one_cell(child=None):
     if child is None:
         child = shape()
+    child=with_saved_geometry(child,0,0,20,30)
     return (f'<xdr:oneCellAnchor>{marker("from", 0, 0)}'
             f'<xdr:ext cx="190500" cy="285750"/>{child}'
             '</xdr:oneCellAnchor>')
@@ -70,7 +85,8 @@ def fixture(path: Path, anchors: str | None = None, worksheet_xml: str | None = 
         anchors = two_cell() + one_cell() + absolute()
     if second_anchors is None:
         second_anchors = (f'<xdr:oneCellAnchor>{marker("from", 4, 5, 238125, 47625)}'
-                          f'<xdr:ext cx="952500" cy="476250"/>{image("Subfab底图")}'
+                          f'<xdr:ext cx="952500" cy="476250"/>'
+                          f'{with_saved_geometry(image("Subfab底图"),353,125,100,50)}'
                           '</xdr:oneCellAnchor>')
     if worksheet_xml is None:
         worksheet_xml = ('<sheetFormatPr defaultRowHeight="15" defaultColWidth="8.43"/>'
@@ -194,7 +210,7 @@ class TestGeometry(unittest.TestCase):
             path = fixture(Path(tmp) / "luoD.xlsx", anchors, worksheet_xml, draw)
             return spatial.parse_xlsx(path)
 
-    def test_exact_from_to_with_pixel_offsets(self):
+    def test_exact_saved_geometry_independent_of_cell_markers(self):
         sheet = self.parse()[0]
         self.assertEqual(sheet["sheet"], "Sheet1")
         self.assertEqual(len(sheet["objects"]), 3)
@@ -345,20 +361,25 @@ class TestGeometry(unittest.TestCase):
             {"x": -5, "y": 25}, {"x": -5, "y": 5},
         ])
 
-    def test_hidden_columns_and_row_heights(self):
-        sheet = ('<sheetFormatPr defaultRowHeight="15" defaultColWidth="8.43"/>'
-                 '<cols><col min="1" max="1" hidden="1"/></cols>'
+    def test_hidden_columns_and_row_heights_do_not_change_geometry(self):
+        sheet = ('<sheetFormatPr defaultRowHeight="71" defaultColWidth="42"/>'
+                 '<cols><col min="1" max="3" hidden="1"/></cols>'
                  '<sheetData><row r="1" ht="40"/><row r="2" hidden="1"/></sheetData>')
-        pic = self.parse(two_cell(), worksheet_xml=sheet)[0]["objects"][0]
-        self.assertEqual(pic["vertices_px"][0]["x"], 10)
-        self.assertAlmostEqual(pic["vertices_px"][0]["y"], 55.333, places=3)
+        self.assertEqual(self.parse(two_cell(),worksheet_xml=sheet),self.parse(two_cell()))
 
-    def test_stored_column_width_has_no_duplicate_padding(self):
-        self.assertEqual(spatial.pixels_from_column_width(8.7109375),61)
-        self.assertEqual(spatial.pixels_from_column_width(10),70)
-        self.assertEqual(spatial.pixels_from_column_width(0.5),3)
-        self.assertEqual(spatial.pixels_from_column_width(0),0)
-        self.assertEqual(spatial.SheetMetrics().column_width_emu,64*9525)
+    def test_worksheet_xml_is_never_read_for_geometry(self):
+        with TemporaryDirectory() as tmp:
+            book=fixture(Path(tmp)/"no-metrics.xlsx",sheet_count=2)
+            read=ZipFile.read
+            def without_sheet_body(archive,name,*args,**kwargs):
+                if isinstance(name,str) and name.startswith("xl/worksheets/") and name.endswith(".xml"):
+                    self.fail(f"Worksheet XML body was read: {name}")
+                return read(archive,name,*args,**kwargs)
+            with patch.object(ZipFile,"read",without_sheet_body):
+                sheets=spatial.parse_xlsx(book)
+            self.assertEqual(sheets[0]["objects"][0]["width_px"],135)
+            self.assertEqual(sheets[1]["objects"][0]["width_px"],100)
+            self.assertFalse(hasattr(spatial,"SheetMetrics"))
 
     def test_two_cell_saved_shape_geometry_beats_estimated_columns(self):
         def transformed(child, x, y, w, h):
@@ -376,23 +397,55 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(objects[1]["vertices_px"],[
             {"x":200,"y":90},{"x":240,"y":90},{"x":240,"y":130},{"x":200,"y":130}])
 
-    def test_two_cell_transform_offset_placeholder_uses_anchor_position(self):
+    def test_zero_offset_is_accepted_at_origin_and_rejected_if_ambiguous(self):
         child=shape().replace('<a:xfrm rot="0"/>',
             '<a:xfrm><a:off x="0" y="0"/><a:ext cx="381000" cy="381000"/></a:xfrm>')
-        obj=self.parse(two_cell(child))[0]["objects"][0]
-        self.assertEqual(obj["geometry_source"],"xfrm_size")
-        self.assertEqual(obj["bounds_emu"],{"x":80*9525,"y":42*9525,"width":381000,"height":381000})
+        with self.assertRaisesRegex(spatial.SpatialXlsxError,
+                "Sheet 'Sheet1'.*object '矩形14'.*ambiguous zero xfrm/off"):
+            self.parse(two_cell(child))
+        obj=self.parse(one_cell(child))[0]["objects"][0]
+        self.assertEqual(obj["geometry_source"],"xfrm")
+        self.assertEqual(obj["bounds_emu"],{"x":0,"y":0,"width":381000,"height":381000})
 
-    def test_invalid_transform_extent_and_exact_anchors_fall_back(self):
-        for ext in ('cx="0" cy="381000"', 'cx="381000"', 'cx="bad" cy="381000"'):
-            child=shape().replace('<a:xfrm rot="0"/>',f'<a:xfrm><a:ext {ext}/></a:xfrm>')
-            obj=self.parse(two_cell(child))[0]["objects"][0]
-            self.assertEqual((obj["geometry_source"],obj["width_px"],obj["height_px"]),("anchor",135,28))
+    def test_missing_or_invalid_cell_transform_stops_instead_of_guessing(self):
+        cases = [
+            ("", "missing top-level xfrm"),
+            ("<a:xfrm/>", "missing xfrm/off@x"),
+            ('<a:xfrm><a:off x="10"/><a:ext cx="381000" cy="381000"/></a:xfrm>',"missing xfrm/off@y"),
+            ('<a:xfrm><a:off x="bad" y="20"/><a:ext cx="381000" cy="381000"/></a:xfrm>',"invalid integer xfrm/off@x"),
+            ('<a:xfrm><a:off x="10" y="20"/><a:ext cx="0" cy="381000"/></a:xfrm>',"must have positive"),
+            ('<a:xfrm><a:off x="10" y="20"/><a:ext cx="381000"/></a:xfrm>',"missing xfrm/ext@cy"),
+            ('<a:xfrm><a:off x="10" y="20"/><a:ext cx="bad" cy="381000"/></a:xfrm>',"invalid integer xfrm/ext@cx"),
+        ]
+        for transform,message in cases:
+            child=shape().replace('<a:xfrm rot="0"/>',transform)
+            for kind in ("oneCellAnchor","twoCellAnchor"):
+                raw=(f'<xdr:{kind}>'+marker("from",1,1)+
+                     (marker("to",2,2) if kind=="twoCellAnchor" else '<xdr:ext cx="190500" cy="285750"/>')
+                     +child+f'</xdr:{kind}>')
+                with self.subTest(kind=kind,message=message),self.assertRaisesRegex(
+                        spatial.SpatialXlsxError,message):
+                    self.parse(raw)
+
+    def test_one_cell_uses_complete_transform_and_absolute_uses_direct_anchor(self):
         valid=shape().replace('<a:xfrm rot="0"/>',
             '<a:xfrm><a:off x="952500" y="952500"/><a:ext cx="381000" cy="381000"/></a:xfrm>')
-        for anchor in (one_cell,absolute):
-            obj=self.parse(anchor(valid))[0]["objects"][0]
-            self.assertEqual((obj["geometry_source"],obj["width_px"],obj["height_px"]),("anchor",20,30))
+        obj=self.parse(one_cell(valid))[0]["objects"][0]
+        self.assertEqual((obj["geometry_source"],obj["width_px"],obj["height_px"]),("xfrm",40,40))
+        self.assertEqual(obj["bounds_emu"]["x"],952500)
+        obj=self.parse(absolute(valid))[0]["objects"][0]
+        self.assertEqual((obj["geometry_source"],obj["width_px"],obj["height_px"]),("absoluteAnchor",20,30))
+        self.assertEqual(obj["bounds_emu"]["x"],95250)
+
+    def test_incomplete_absolute_anchor_is_rejected(self):
+        raw=absolute().replace('cx="190500" cy="285750"','cx="190500"')
+        with self.assertRaisesRegex(spatial.SpatialXlsxError,"missing xdr:ext@cy"):
+            self.parse(raw)
+
+    def test_missing_picture_transform_reports_picture_name(self):
+        raw='<xdr:twoCellAnchor>'+marker("from",0,0)+marker("to",1,1)+image("MissingPicture")+'</xdr:twoCellAnchor>'
+        with self.assertRaisesRegex(spatial.SpatialXlsxError,"object 'MissingPicture'.*missing top-level xfrm"):
+            self.parse(raw)
 
     def test_image_and_rotated_shape_use_same_saved_emu_coordinates(self):
         pic=image().replace('<xdr:spPr/>',

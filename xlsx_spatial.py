@@ -1,14 +1,14 @@
 """Extract Excel DrawingML objects as 2D positions relative to A1.
 
-X increases to the right, Y downwards. Geometry is kept in integer EMU,
-and reported in reference pixels at 96 DPI (9525 EMU / pixel).
+X increases to the right, Y downwards. Read saved absolute DrawingML
+geometry only, without worksheet column/row metrics. Geometry is kept in
+integer EMU and reported in reference pixels at 96 DPI (9525 EMU / pixel).
 """
 
 from __future__ import annotations
 
 import colorsys
-from dataclasses import dataclass, field
-from math import cos, floor, radians, sin
+from math import cos, radians, sin
 from pathlib import Path
 import posixpath
 import xml.etree.ElementTree as ET
@@ -17,10 +17,6 @@ from zipfile import BadZipFile, ZipFile
 EMUS_PER_PIXEL = 9525
 EMUS_PER_POINT = 12700
 EMUS_PER_MM = 360000
-# Without a stored defaultColWidth, Excel's conventional Calibri 11
-# default is 64 reference pixels (8.43 characters in the Excel UI).
-DEFAULT_COL_WIDTH = 64 / 7
-DEFAULT_ROW_HEIGHT_PT = 15.0
 DEFAULT_THEME = {
     "dk1": "000000", "lt1": "FFFFFF", "dk2": "1F497D", "lt2": "EEECE1",
     "accent1": "4472C4", "accent2": "ED7D31", "accent3": "A5A5A5",
@@ -56,24 +52,6 @@ def find_descendant(parent: ET.Element | None, tag: str) -> ET.Element | None:
     return next((child for child in parent.iter() if local_name(child.tag) == tag), None)
 
 
-def child_int(parent: ET.Element, name: str, default: int = 0) -> int:
-    child = first_child(parent, name)
-    return int(child.text) if child is not None and child.text else default
-
-
-def pixels_from_column_width(width: float) -> int:
-    """Stored OOXML column width -> pixels, with MDW=7 (Calibri 11).
-
-    The stored width already includes padding; do not add it again.
-    ISO 29500 18.3.1.13 specifies floor(((256*w+floor(128/MDW))/256)*MDW).
-    The same formula applies to fractional widths below one character.
-    """
-    if width <= 0:
-        return 0
-    mdw = 7
-    return floor((256 * width + floor(128 / mdw)) / 256 * mdw)
-
-
 def resolve_part(source_part: str, target: str) -> str:
     """Resolve both absolute and relative OPC relationship targets."""
     if not target:
@@ -99,54 +77,6 @@ def relationships(z: ZipFile, source_part: str) -> dict[str, tuple[str, str]]:
         elem.attrib["Id"]: (elem.attrib.get("Type", ""), elem.attrib.get("Target", ""))
         for elem in root if local_name(elem.tag) == "Relationship" and "Id" in elem.attrib
     }
-
-
-@dataclass
-class SheetMetrics:
-    column_width_emu: int = pixels_from_column_width(DEFAULT_COL_WIDTH) * EMUS_PER_PIXEL
-    row_height_emu: int = round(DEFAULT_ROW_HEIGHT_PT * EMUS_PER_POINT)
-    columns: dict[int, int] = field(default_factory=dict)
-    rows: dict[int, int] = field(default_factory=dict)
-
-    @classmethod
-    def from_xml(cls, root: ET.Element) -> "SheetMetrics":
-        metrics = cls()
-        fmt = first_child(root, "sheetFormatPr")
-        if fmt is not None:
-            if "defaultColWidth" in fmt.attrib:
-                metrics.column_width_emu = pixels_from_column_width(
-                    float(fmt.attrib["defaultColWidth"])) * EMUS_PER_PIXEL
-            if "defaultRowHeight" in fmt.attrib:
-                metrics.row_height_emu = round(float(fmt.attrib["defaultRowHeight"]) * EMUS_PER_POINT)
-        cols = first_child(root, "cols")
-        if cols is not None:
-            for col in cols:
-                if local_name(col.tag) != "col":
-                    continue
-                width = 0 if col.get("hidden") == "1" else (
-                    pixels_from_column_width(float(col.get("width", DEFAULT_COL_WIDTH))) * EMUS_PER_PIXEL)
-                for idx in range(int(col.get("min", 1)), int(col.get("max", 1)) + 1):
-                    metrics.columns[idx] = width
-        sheet_data = first_child(root, "sheetData")
-        if sheet_data is not None:
-            for row in sheet_data:
-                if local_name(row.tag) != "row" or not row.get("r"):
-                    continue
-                idx = int(row.get("r"))
-                if row.get("hidden") == "1":
-                    metrics.rows[idx] = 0
-                elif "ht" in row.attrib:
-                    metrics.rows[idx] = round(float(row.get("ht")) * EMUS_PER_POINT)
-        return metrics
-
-    def xy(self, col0: int, row0: int, col_offset: int = 0, row_offset: int = 0) -> tuple[int, int]:
-        if col0 < 0 or row0 < 0:
-            raise SpatialXlsxError("Drawing marker has negative cell index")
-        x = col0 * self.column_width_emu + sum(
-            v - self.column_width_emu for idx, v in self.columns.items() if idx <= col0) + col_offset
-        y = row0 * self.row_height_emu + sum(
-            v - self.row_height_emu for idx, v in self.rows.items() if idx <= row0) + row_offset
-        return x, y
 
 
 def mapped_theme_palette(palette: dict[str, str], mapping: ET.Element | None = None) -> dict[str, str]:
@@ -322,83 +252,75 @@ def outline_width_px(outline: ET.Element | None, style: ET.Element | None,
         return None
 
 
-def marker_xy(marker: ET.Element, metrics: SheetMetrics) -> tuple[int, int]:
-    return metrics.xy(child_int(marker, "col"), child_int(marker, "row"),
-                      child_int(marker, "colOff"), child_int(marker, "rowOff"))
-
-
-def anchor_rect(anchor: ET.Element, metrics: SheetMetrics) -> tuple[int, int, int, int]:
-    kind = local_name(anchor.tag)
-    if kind in ("oneCellAnchor", "twoCellAnchor"):
-        start = first_child(anchor, "from")
-        if start is None:
-            raise SpatialXlsxError(f"{kind} without from marker")
-        x1, y1 = marker_xy(start, metrics)
-        if kind == "twoCellAnchor":
-            end = first_child(anchor, "to")
-            if end is None:
-                raise SpatialXlsxError("twoCellAnchor without to marker")
-            x2, y2 = marker_xy(end, metrics)
-        else:
-            ext = first_child(anchor, "ext")
-            if ext is None:
-                raise SpatialXlsxError("oneCellAnchor without ext")
-            x2, y2 = x1 + int(ext.get("cx", "0")), y1 + int(ext.get("cy", "0"))
-    elif kind == "absoluteAnchor":
-        position, ext = first_child(anchor, "pos"), first_child(anchor, "ext")
-        if position is None or ext is None:
-            raise SpatialXlsxError("absoluteAnchor missing pos/ext")
-        x1, y1 = int(position.get("x", "0")), int(position.get("y", "0"))
-        x2, y2 = x1 + int(ext.get("cx", "0")), y1 + int(ext.get("cy", "0"))
-    else:
-        raise SpatialXlsxError(f"Unsupported anchor: {kind}")
-    return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
-
-
-def drawing_rect(anchor: ET.Element, node: ET.Element,
-                 rect: tuple[int, int, int, int]) -> tuple[tuple[int, int, int, int], str]:
-    """Prefer saved object geometry for a read-only CAD snapshot.
-
-    A two-cell anchor can only reconstruct a size through spreadsheet
-    font/column metrics. Excel also saves the object's exact unrotated
-    DrawingML extents in EMU. Prefer the positive extent pair for top-level
-    pictures/shapes (not group-child transforms). Use its absolute offset
-    when available, except the common zero-offset placeholder at a nonzero
-    cell anchor. Keep oneCell/absolute anchor geometry authoritative since
-    those already specify exact EMU dimensions. Missing/zero/malformed
-    extents fall back to the complete cell-anchor rectangle.
-    """
-    if local_name(anchor.tag) != "twoCellAnchor" or local_name(node.tag) not in {"pic", "sp", "cxnSp"}:
-        return rect, "anchor"
-    xfrm = first_child(first_child(node, "spPr"), "xfrm")
-    ext = first_child(xfrm, "ext")
-    if ext is None:
-        return rect, "anchor"
-    try:
-        width, height = int(ext.attrib["cx"]), int(ext.attrib["cy"])
-    except (KeyError, ValueError):
-        return rect, "anchor"
-    if width <= 0 or height <= 0:
-        return rect, "anchor"
-    x, y = rect[:2]
-    off = first_child(xfrm, "off")
-    if off is not None:
-        try:
-            ox, oy = int(off.attrib["x"]), int(off.attrib["y"])
-            if (ox, oy) != (0, 0) or (x, y) == (0, 0):
-                x, y = ox, oy
-                return (x, y, x + width, y + height), "xfrm"
-        except (KeyError, ValueError):
-            pass
-    return (x, y, x + width, y + height), "xfrm_size"
-
-
-def rotation_degrees(node: ET.Element) -> float:
+def object_transform(node: ET.Element) -> ET.Element | None:
+    """Only the top-level object's own transform, never a nested child's."""
     props = first_child(node, "spPr")
     if props is None:
         props = first_child(node, "grpSpPr")
-    xfrm = first_child(props, "xfrm")
-    return int(xfrm.get("rot", "0")) / 60000 if xfrm is not None else 0.0
+    if local_name(node.tag) == "graphicFrame":
+        return first_child(node, "xfrm")
+    return first_child(props, "xfrm")
+
+
+def emu_attribute(node: ET.Element | None, key: str, label: str) -> int:
+    if node is None or key not in node.attrib:
+        raise SpatialXlsxError(f"missing {label}@{key}")
+    try:
+        return int(node.attrib[key])
+    except ValueError as error:
+        raise SpatialXlsxError(f"invalid integer {label}@{key}: {node.attrib[key]!r}") from error
+
+
+def drawing_rect(anchor: ET.Element, node: ET.Element) -> tuple[tuple[int, int, int, int], str]:
+    """Strict saved DrawingML geometry, independent of worksheet cell metrics.
+
+    An absolute anchor already specifies the complete absolute EMU rectangle.
+    For either cell-anchor type use the object's own complete saved transform.
+    Never derive a coordinate from column widths, row heights or font metrics.
+    Do not silently interpret a non-origin cell marker plus all-zero off as
+    a real absolute origin: that common placeholder is ambiguous.
+    """
+    kind = local_name(anchor.tag)
+    if kind == "absoluteAnchor":
+        off, ext = first_child(anchor, "pos"), first_child(anchor, "ext")
+        off_label, ext_label, source = "xdr:pos", "xdr:ext", "absoluteAnchor"
+    else:
+        xfrm = object_transform(node)
+        if xfrm is None:
+            raise SpatialXlsxError("missing top-level xfrm (absolute EMU geometry required)")
+        off, ext = first_child(xfrm, "off"), first_child(xfrm, "ext")
+        off_label, ext_label, source = "xfrm/off", "xfrm/ext", "xfrm"
+    x = emu_attribute(off, "x", off_label)
+    y = emu_attribute(off, "y", off_label)
+    width = emu_attribute(ext, "cx", ext_label)
+    height = emu_attribute(ext, "cy", ext_label)
+    if width <= 0 or height <= 0:
+        raise SpatialXlsxError(f"{ext_label} must have positive cx and cy")
+    if source == "xfrm" and (x, y) == (0, 0):
+        # Marker indices/offsets are inspected ONLY as a placeholder check;
+        # they are never converted to coordinates or used to recover geometry.
+        marker = first_child(anchor, "from")
+        if marker is not None:
+            for key in ("col", "row", "colOff", "rowOff"):
+                part = first_child(marker, key)
+                if part is not None and part.text is not None:
+                    try:
+                        value = int(part.text)
+                    except ValueError as error:
+                        raise SpatialXlsxError(f"invalid origin marker {key}") from error
+                    if value != 0:
+                        raise SpatialXlsxError(
+                            "ambiguous zero xfrm/off with nonzero cell marker; "
+                            "save a complete absolute transform in Excel")
+    return (x, y, x + width, y + height), source
+
+
+def rotation_degrees(node: ET.Element) -> float:
+    xfrm = object_transform(node)
+    try:
+        return int(xfrm.get("rot", "0")) / 60000 if xfrm is not None else 0.0
+    except ValueError as error:
+        raise SpatialXlsxError("invalid integer xfrm@rot") from error
 
 
 def vertices_from_rect(rect: tuple[int, int, int, int], angle: float) -> list[dict[str, float]]:
@@ -585,11 +507,12 @@ def textbox_text_layout(node: ET.Element, palette: dict[str, str],
     return {"anchor": vertical, "insets_px": insets, "paragraphs": paragraphs}
 
 
-def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, str],
+def drawing_objects(root: ET.Element, palette: dict[str, str],
                     fills: list[ET.Element], lines: list[ET.Element],
                     theme_fonts: dict[str, dict[str, str]] | None = None,
                     drawing_rels: dict[str, tuple[str, str]] | None = None,
-                    drawing_part: str = "", members: set[str] | None = None) -> list[dict]:
+                    drawing_part: str = "", members: set[str] | None = None,
+                    sheet_name: str = "") -> list[dict]:
     color_map = first_child(root, "clrMap")
     override = first_child(first_child(root, "clrMapOvr"), "overrideClrMapping")
     if color_map is not None or override is not None:
@@ -598,19 +521,26 @@ def drawing_objects(root: ET.Element, metrics: SheetMetrics, palette: dict[str, 
     for anchor in root:
         if local_name(anchor.tag) not in {"oneCellAnchor", "twoCellAnchor", "absoluteAnchor"}:
             continue
-        cell_rect = anchor_rect(anchor, metrics)
         for element in anchor:
             tag = local_name(element.tag)
             if tag not in {"pic", "sp", "cxnSp", "grpSp", "graphicFrame"}:
                 continue
             nv = find_descendant(element, "cNvPr")
+            name = nv.get("name", "未命名对象") if nv is not None else "未命名对象"
             kind = "image" if tag == "pic" else "shape"
-            angle = rotation_degrees(element)
-            rect, geometry_source = drawing_rect(anchor, element, cell_rect)
+            try:
+                rect, geometry_source = drawing_rect(anchor, element)
+                angle = rotation_degrees(element)
+            except SpatialXlsxError as error:
+                raise SpatialXlsxError(
+                    f"Sheet '{sheet_name}', object '{name}' ({local_name(anchor.tag)}, "
+                    f"{drawing_part}): {error}; strict DrawingML mode does not infer "
+                    "geometry from worksheet columns or rows."
+                ) from error
             x1, y1, x2, y2 = rect
             obj = {
                 "type": kind,
-                "name": nv.get("name", "未命名对象") if nv is not None else "未命名对象",
+                "name": name,
                 "anchor": local_name(anchor.tag),
                 "geometry_source": geometry_source,
                 "bounds_emu": {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1},
@@ -682,7 +612,10 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                 if rel is None or "worksheet" not in rel[0]:
                     raise SpatialXlsxError(f"Missing worksheet relationship for {name}")
                 sheet_part = resolve_part("xl/workbook.xml", rel[1])
-                metrics = SheetMetrics.from_xml(ET.fromstring(z.read(sheet_part)))
+                # Only resolve the worksheet's drawing relationships. Do
+                # not even open its XML body (rows, columns, cells, styles).
+                if sheet_part not in z.namelist():
+                    raise SpatialXlsxError(f"Missing worksheet part for {name}: {sheet_part}")
                 objects = []
                 for rel_type, target in relationships(z, sheet_part).values():
                     if not rel_type.endswith("/drawing"):
@@ -690,10 +623,11 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                     drawing_part = resolve_part(sheet_part, target)
                     drawing = ET.fromstring(z.read(drawing_part))
                     objects.extend(drawing_objects(
-                        drawing, metrics, palette, fills, lines,
+                        drawing, palette, fills, lines,
                         theme_fonts=fonts,
                         drawing_rels=relationships(z, drawing_part),
                         drawing_part=drawing_part, members=set(z.namelist()),
+                        sheet_name=name,
                     ))
                 sheets.append({"sheet": name, "objects": objects})
             return sheets
@@ -761,7 +695,7 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                 f"  {obj['type'].upper()}: {obj['name']}  "
                 f"宽={obj['width_px']:.3f}px 高={obj['height_px']:.3f}px"
             )
-            lines.append(f"    几何来源: {obj.get('geometry_source', 'anchor')}")
+            lines.append(f"    几何来源: {obj.get('geometry_source', 'unknown')}")
             for title, point in zip(("左上", "右上", "右下", "左下"), obj["vertices_px"]):
                 lines.append(f"    {title}: ({point['x']:.3f}, {point['y']:.3f}) px")
             if obj["rotation_degrees"]:
