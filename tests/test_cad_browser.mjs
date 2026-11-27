@@ -207,9 +207,10 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         layer.controls.update();
         layer.renderer.render(layer.scene,layer.camera);
         const rect=layer.renderer.domElement.getBoundingClientRect();
-        const project=p=>{
+        const viewport=layer.renderer.getSize(new THREE.Vector2());
+        const project=(p,width,height)=>{
           const q=p.clone().project(layer.camera);
-          return [q.x*rect.width/2,q.y*rect.height/2];
+          return [q.x*width/2,q.y*height/2];
         };
         const shapes=layer.hoverable.map(mesh=>{
           const item=mesh.userData.cadObject;
@@ -221,10 +222,13 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
             [width/2,-height/2],[-width/2,-height/2],
           ].map(([x,y])=>mesh.localToWorld(new THREE.Vector3(x,y,0))):[];
           return {name:item.name,width,height,depth,radius,center:center.toArray(),
-            corners:corners.map(p=>p.toArray()),screen:corners.map(project),
+            corners:corners.map(p=>p.toArray()),
+            screen:corners.map(p=>project(p,viewport.x,viewport.y)),
+            cssScreen:corners.map(p=>project(p,rect.width,rect.height)),
             text:text?{width:text.geometry.parameters.width,height:text.geometry.parameters.height}:null};
         });
         return {sx:layer.scaleX,sy:layer.scaleY,zoom:layer.camera.zoom,
+          viewport:[viewport.x,viewport.y],cssViewport:[rect.width,rect.height],
           raster:raster?{w:raster.geometry.parameters.width,h:raster.geometry.parameters.height,
             native:[raster.material.map.image.width,raster.material.map.image.height],
             center:raster.getWorldPosition(new THREE.Vector3()).toArray()}:null,shapes};
@@ -266,7 +270,18 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
           near(p[1],cy+s*(x*Math.sin(angle)+y*Math.cos(angle)),actual.name+' rotated Y');
         }
         const edge=(a,b)=>Math.hypot(actual.screen[a][0]-actual.screen[b][0],actual.screen[a][1]-actual.screen[b][1]);
+        // WebGL's logical viewport is integer-sized; the CSS box can be
+        // fractional. The actual orthographic geometry must be exact, while
+        // CSS presentation may differ by the viewport's subpixel rounding.
         near(edge(0,1)/edge(1,2),width/height,actual.name+' screen aspect');
+        const cssEdge=(a,b)=>Math.hypot(actual.cssScreen[a][0]-actual.cssScreen[b][0],actual.cssScreen[a][1]-actual.cssScreen[b][1]);
+        const factors=m.cssViewport.map((size,j)=>size/m.viewport[j]);
+        const distortion=Math.max(...factors)/Math.min(...factors);
+        const relativeAspect=(cssEdge(0,1)/cssEdge(1,2))/(width/height);
+        assert.ok(relativeAspect>=1/distortion-1e-5&&relativeAspect<=distortion+1e-5,
+          actual.name+' CSS aspect exceeds measured viewport rounding');
+        assert.ok(m.cssViewport.every((size,j)=>Math.abs(size-m.viewport[j])<=1),
+          'CSS vs WebGL viewport differs by more than one pixel');
         if(actual.name==='Cube') near(actual.depth,35*s,'cuboid height');
         if(actual.name==='Label'){
           assert.ok(actual.text,'textbox text texture exists');
