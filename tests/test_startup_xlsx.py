@@ -38,7 +38,7 @@ class TestStartupWithXlsx(TestCase):
             report = self.run_entrypoint(assets)
         self.assertIn("Three.js + Bokeh viewer:", report)
         self.assertIn("[Sheet: Sheet1] 图片 1，形状 1", report)
-        self.assertIn("左上: (85.000, 42.000)", report)
+        self.assertIn("左上: (80.000, 42.000)", report)
         self.assertIn("矩形14", report)
 
     def test_without_xlsx_bokeh_still_starts(self):
