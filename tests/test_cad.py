@@ -90,7 +90,7 @@ class TestCadManifest(unittest.TestCase):
                 self.assertEqual(layer["objects"][0]["bounds_emu"]["y"],0)
                 payload,mime=cad.extract_embedded_image(xlsx,sheets,i,0)
                 self.assertEqual(mime,"image/png")
-                self.assertTrue(payload.startswith(b"\\x89PNG\\r\\n\\x1a\\n"))
+                self.assertTrue(payload.startswith(b"\x89PNG\r\n\x1a\n"))
 
     def test_embedded_image_reader_rejects_invalid_part_and_oversize(self):
         from unittest.mock import patch
