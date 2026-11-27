@@ -11,9 +11,9 @@ import re
 from urllib.parse import quote
 
 if __package__:
-    from .cad_validation import Rectangle, circle_relation
+    from .cad_validation import Rectangle, circle_relation, intersecting_rectangles
 else:
-    from cad_validation import Rectangle, circle_relation
+    from cad_validation import Rectangle, circle_relation, intersecting_rectangles
 
 TIMESTAMP = re.compile(r"_(\d{14})_")
 AXIS = re.compile(r"(?:^|[_-])\+([XYZ])(?=[_.-])", re.IGNORECASE)
@@ -46,19 +46,11 @@ def enclosing_textbox(objects: list[dict], ellipse: dict) -> dict | None:
 
 
 def enclosing_rectangle(objects: list[dict], ellipse: dict) -> dict | None:
-    """Only a circle COMPLETELY inside a rectangle is its child.
-
-    An ellipse partly crossing the boundary is outside the rectangle
-    for catalog matching, and uses its enclosing textbox label.
-    """
-    found = [
-        obj for obj in objects
-        if obj.get("type") == "shape" and obj.get("shape_kind") == "rectangle"
-        and circle_relation(ellipse, Rectangle.from_object(obj)) == "inside"
-    ]
-    return min(found, key=lambda obj: (
-        obj["bounds_emu"]["width"] * obj["bounds_emu"]["height"]
-    ), default=None)
+    """Any contact (inside, partial, tangency) qualifies as rectangle search."""
+    found = intersecting_rectangles(objects, ellipse)
+    if len(found) > 1:
+        raise ValueError("CAD ellipse intersects multiple rectangles")
+    return found[0] if found else None
 
 
 def name_matches(candidate: str, identifier: str) -> bool:
@@ -85,13 +77,14 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
     rectangle = enclosing_rectangle(objects, ellipse)
     label = lambda obj: ((obj.get("text") or obj.get("name") or "").strip()
                          if obj is not None else "")
-    folder_name = label(textbox)
+    visible = lambda obj: ((obj.get("text") or "").strip() if obj is not None else "")
+    folder_name = visible(textbox)
     rectangle_name = label(rectangle)
     ellipse_name = label(ellipse)
     identifier = rectangle_name if rectangle is not None else ellipse_name
     # Outside any rectangle, match the PARENT TEXTBOX's name in the
     # filename, but still show the selected sensor name in the legend.
-    search_identifier = rectangle_name if rectangle is not None else folder_name
+    search_identifier = visible(rectangle) if rectangle is not None else folder_name
     root = svg_directory(asset_dir, folder_name)
     result = {
         "folder": folder_name,
@@ -113,7 +106,7 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
         key=lambda p: p.name.casefold()
     )
     # A timestamp is valid only when the same SVG filename matches
-    # the rectangle (inside case) or the textbox (outside case).
+    # the rectangle (inside/partial case) or the textbox (outside case).
     matching_entries = [
         p for p in entries if name_matches(p.name, search_identifier)
     ]

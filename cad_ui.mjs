@@ -1,4 +1,5 @@
 /** Pure CAD UI geometry and responsive layout helpers (no DOM dependencies). */
+import { rectangleSpecs, circleRectangleRelation, reconstructedCircleRadius } from './cad_geometry.mjs';
 const EPS = 1e-7;
 
 export const INITIAL_REFERENCE_SPLIT = 0.5;
@@ -65,7 +66,7 @@ function circleInsideRect(circle, rect) {
   const c=center(circle), p=center(rect), x=c.x-p.x, y=c.y-p.y;
   const co=Math.cos(rect.rotation || 0), si=Math.sin(rect.rotation || 0);
   const lx=x*co+y*si, ly=-x*si+y*co;
-  const radius=Math.hypot(circle.width,circle.height)/2;
+  const radius=reconstructedCircleRadius(circle.width,circle.height);
   return Math.abs(lx)+radius <= rect.width/2+EPS &&
          Math.abs(ly)+radius <= rect.height/2+EPS;
 }
@@ -106,8 +107,20 @@ export function shapeAncestors(items, selected, toRect) {
 export function selectionParts(items,selected,toRect) {
   if(!selected || selected.type!=='shape') return [];
   const ancestors=shapeAncestors(items,selected,toRect);
-  const parentTextboxes=ancestors.filter(x=>x.shape_kind==='textbox');
-  const parentRectangles=ancestors.filter(x=>x.shape_kind==='rectangle');
+  let parentTextboxes=ancestors.filter(x=>x.shape_kind==='textbox');
+  let parentRectangles=ancestors.filter(x=>x.shape_kind==='rectangle');
+  if(selected.shape_kind==='ellipse'){
+    // Same parent policy as the SVG catalog: the circle itself must be
+    // contained by a textbox; any contact with one rectangle qualifies.
+    const boxes=items.filter(x=>x.type==='shape'&&x.shape_kind==='textbox');
+    const enclosing=boxes.filter(x=>circleInsideRect(toRect(selected),toRect(x)));
+    enclosing.sort((a,b)=>{const ar=toRect(a),br=toRect(b);
+      return ar.width*ar.height-br.width*br.height;});
+    parentTextboxes=enclosing.slice(0,1);
+    parentRectangles=items.filter(x=>x.type==='shape'&&x.shape_kind==='rectangle')
+      .filter(x=>circleRectangleRelation(selected,toRect,rectangleSpecs([x],toRect)[0])!=='outside');
+    if(parentRectangles.length>1) throw new Error('Reconstructed circle intersects multiple rectangles');
+  }
   const parts=[];
   if(parentTextboxes.length) parts.push({
     kind:'textbox',text:shapeLabel(parentTextboxes[parentTextboxes.length-1]),
@@ -643,7 +656,7 @@ export function rectangleHasAltText(altText) {
 }
 export function planarOutlineVertices(kind,width,height,z=0.7) {
   if(kind==='ellipse') {
-    const radius=Math.hypot(width,height)/2;
+    const radius=reconstructedCircleRadius(width,height);
     return Array.from({length:72},(_,i)=>{
       const t=2*Math.PI*i/72;
       return [radius*Math.cos(t),radius*Math.sin(t),z];

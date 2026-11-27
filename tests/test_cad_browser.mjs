@@ -229,6 +229,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
             [width/2,-height/2],[-width/2,-height/2],
           ].map(([x,y])=>mesh.localToWorld(new THREE.Vector3(x,y,0))):[];
           return {name:item.name,source:item.geometry_source,width,height,depth,radius,center:center.toArray(),
+            fill:'#'+mesh.material.color.getHexString(),opacity:mesh.material.opacity,hasFill:mesh.userData.hasXlsxFill,
             corners:corners.map(p=>p.toArray()),
             screen:corners.map(p=>project(p,viewport.x,viewport.y)),
             cssScreen:corners.map(p=>project(p,rect.width,rect.height)),
@@ -262,6 +263,13 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         const width=b.width/emu,height=b.height/emu, cx=(b.x/emu+width/2)*s,cy=-(b.y/emu+height/2)*s;
         near(actual.center[0],cx,actual.name+' center X');
         near(actual.center[1],cy,actual.name+' center Y');
+        if(['Square','Rotated'].includes(actual.name)){
+          assert.equal(actual.hasFill,false,actual.name);
+          assert.equal(actual.opacity,0,actual.name);
+        }else{
+          assert.equal(actual.hasFill,true,actual.name);
+          assert.equal(actual.fill,'#e8d7ac',actual.name);
+        }
         if(item.shape_kind==='ellipse'){
           near(actual.radius,Math.hypot(width,height)*s/2,actual.name+' circle radius');
           const z={Inside:35,Partial:17.5,Outside:0}[actual.name]*s+1.5;
@@ -298,6 +306,54 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         }
       }
     }
+    // Exercise actual picking, catalog HTTP, date/axis menus and paired SVG
+    // images, not just a synthetic catalog result. Distinct visible text
+    // and object names prove that searches use DrawingML text.
+    const fetched=[];
+    page.on('request',req=>{const u=new URL(req.url());
+      if(u.pathname.startsWith('/viewer/assets/BODYv2/')) fetched.push(decodeURIComponent(u.pathname));});
+    async function clickShape(i,name,button='right'){
+      const pos=await page.evaluate(async({i,name})=>{
+        const {layers}=await import('/viewer/cad_viewer.js');
+        const THREE=await import('three');
+        const l=layers[i],mesh=l.hoverable.find(m=>m.userData.cadObject.name===name);
+        const t=l.controls.target;
+        l.camera.position.set(t.x,t.y,t.z+1200);l.controls.update();
+        l.scene.updateMatrixWorld(true);l.camera.updateMatrixWorld();
+        const p=mesh.getWorldPosition(new THREE.Vector3()).project(l.camera);
+        const r=l.renderer.domElement.getBoundingClientRect();
+        return {x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2};
+      },{i,name});
+      await page.mouse.click(pos.x,pos.y,{button});
+    }
+    async function choose(i,name,dates,date,axis,label,count){
+      const stage=page.locator(i?'#subfab-stage':'#fab-stage');
+      const menu=stage.locator('.cad-context-menu');
+      await clickShape(i,name);
+      await menu.locator('button').first().waitFor({state:'visible'});
+      assert.deepEqual(await menu.locator('button span:first-child').allTextContents(),dates,name);
+      await menu.getByRole('menuitem',{name:new RegExp(date)}).click();
+      await stage.locator('.cad-submenu').getByRole('menuitem',{name:axis,exact:true}).click();
+      await page.waitForFunction(({label,count})=>
+        document.querySelectorAll('#psd-overlays img').length===count &&
+        document.querySelectorAll('#octave-overlays img').length===count &&
+        document.getElementById('reference-log').textContent.includes(label),{label,count});
+      await menu.waitFor({state:'hidden'});
+    }
+    await choose(0,'Inside',['20260704101627','20260706101627'],'20260704101627','X','BODYv2_Sheet1_R_Cube_+X',1);
+    await choose(0,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet1_R_Cube_+Z',2);
+    await choose(0,'Outside',['20260705101627'],'20260705101627','Y','BODYv2_Sheet1_Outside_+Y',3);
+    await choose(1,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet2_R_Cube_+Z',4);
+    for(const [label,date,axis] of [['R_Cube','20260704101627','X'],['R_Cube','20260706101627','Z'],['BODYv2','20260705101627','Y']])
+      for(const suffix of ['PSD','1-3-Octave'])
+        assert.ok(fetched.includes('/viewer/assets/BODYv2/'+label+'_'+date+'_+'+axis+'_'+suffix+'.svg'));
+    assert.equal(fetched.length,6,'only six distinct immutable SVG sources');
+    await clickShape(0,'Square','left');
+    const noFillSelection=await page.evaluate(async()=>{
+      const {layers}=await import('/viewer/cad_viewer.js');
+      return {name:layers[0].selectedMesh.userData.cadObject.name,opacity:layers[0].selectedMesh.material.opacity};
+    });
+    assert.deepEqual(noFillSelection,{name:'Square',opacity:0});
     assert.deepEqual(errors,[]);
   }finally{
     await browser?.close();

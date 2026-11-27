@@ -565,3 +565,15 @@ test('empty alternative text uses same planar outline coordinates as sensor geom
   assert.equal(circle[0][2],vertices[0][2]);
   assert.equal(circle[0][0],Math.hypot(80,40)/2);
 });
+
+test('hover shows the same rectangle for inside and partial sensors, not outside sensors',()=>{
+  const body=shape('textbox',0,0,300,300,'BODY');
+  const rect=shape('rectangle',30,-30,100,100,'R1');
+  const partial=shape('ellipse',127,-65,10,10,'Partial');
+  const outside=shape('ellipse',180,-65,10,10,'Outside');
+  const inside=shape('ellipse',60,-65,10,10,'Inside');
+  const items=[body,rect,partial,outside,inside];
+  for(const sensor of [inside,partial])
+    assert.deepEqual(selectionParts(items,sensor,toRect).map(p=>p.text),['BODY','R1',sensor.text]);
+  assert.deepEqual(selectionParts(items,outside,toRect).map(p=>p.text),['BODY','Outside']);
+});

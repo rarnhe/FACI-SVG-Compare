@@ -468,6 +468,19 @@ class TestGeometry(unittest.TestCase):
             self.assertEqual(layer["objects"][1]["vertices_px"],[
                 {"x":50,"y":10},{"x":50,"y":50},{"x":30,"y":50},{"x":30,"y":10}])
 
+    def test_all_three_shape_kinds_use_identical_saved_geometry(self):
+        children=[
+            shape("Label").replace('</xdr:nvSpPr>','<xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>'),
+            shape("R").replace('<a:xfrm rot="0"/>','<a:xfrm rot="0"/><a:prstGeom prst="rect"/>'),
+            shape("E").replace('<a:xfrm rot="0"/>','<a:xfrm rot="0"/><a:prstGeom prst="ellipse"/>'),
+        ]
+        objects=self.parse("".join(two_cell(with_saved_geometry(c,80,42,120,60)) for c in children))[0]["objects"]
+        self.assertEqual([o["shape_kind"] for o in objects],["textbox","rectangle","ellipse"])
+        for o in objects:
+            self.assertEqual(o["geometry_source"],"xfrm")
+            self.assertEqual(o["bounds_emu"],objects[0]["bounds_emu"])
+            self.assertEqual(o["vertices_px"],objects[0]["vertices_px"])
+
     def test_emu_preserves_geometry(self):
         item = self.parse(one_cell())[0]["objects"][0]
         self.assertEqual(item["bounds_emu"], {

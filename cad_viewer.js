@@ -1,7 +1,7 @@
 // Linked Fab/Subfab Excel CAD viewer. Each picture starts at (0,0) in local XY.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
+import { rectangleHeight, rectangleSpecs, ellipseElevation, worldRectFromEmu, reconstructedCircleRadius } from './cad_geometry.mjs';
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
@@ -85,20 +85,12 @@ function synchronizeFrom(source) {
 }
 
 function toWorldRect(item,layer=null) {
-  const b=item.bounds_emu;
-  const sx=layer?.scaleX || 1, sy=layer?.scaleY || 1;
-  return {
-    x:b.x*EMU_TO_PX*sx,
-    y:-b.y*EMU_TO_PX*sy,
-    width:Math.max(0.1,b.width*EMU_TO_PX*sx),
-    height:Math.max(0.1,b.height*EMU_TO_PX*sy),
-    rotation:-(item.rotation_degrees || 0)*Math.PI/180,
-  };
+  return worldRectFromEmu(item,layer?.scaleX??1);
 }
 
-function colorValue(value,fallback) {
+function colorValue(value) {
   return typeof value==='string' && /^#[0-9a-f]{6}$/i.test(value)
-    ? parseInt(value.slice(1),16) : fallback;
+    ? parseInt(value.slice(1),16) : null;
 }
 
 // Use actual instanced mesh cylinders, not WebGL line widths. All edges
@@ -234,21 +226,21 @@ function drawShape(layer,item,rectangles=[]) {
   group.rotation.z=r.rotation;
   group.renderOrder=priority;
   const colors=item.colors || {};
-  const fillColor=colorValue(colors.fill,kind==='textbox'?0xffffff:0x3599c3);
+  const fillColor=colorValue(colors.fill);
+  const hasFill=fillColor!==null;
+  if(!hasFill && colors.fill!=='无/透明') console.warn('Unresolved XLSX fill:',layer.sheetName,item.name);
   const outline=cadOutlineSpec(item);
   if(item.outline_status==='unresolved') console.warn('Unresolved XLSX outline:',layer.sheetName,item.name);
-  const opacity=kind==='textbox'
-    ? (colors.fill==='无/透明'?0:1)
-    : colors.fill==='无/透明' ? 0.13 : 0.68;
+  const opacity=hasFill ? (kind==='textbox'?1:0.68) : 0;
   const mat=new THREE.MeshBasicMaterial({
-    color:fillColor,transparent:true,opacity,
+    color:fillColor??0,transparent:true,opacity,
     side:THREE.DoubleSide,depthWrite:false,
   });
   let clickTarget;
   if(kind==='ellipse') {
     // Per drawing requirement: the diagonals meet at the center, and
     // upper-left -> lower-right is the diameter (not the minor axis).
-    const radius=Math.hypot(w,h)/2;
+    const radius=reconstructedCircleRadius(w,h);
     clickTarget=new THREE.Mesh(new THREE.CircleGeometry(radius,72),mat);
     clickTarget.position.z=0.5;
     clickTarget.renderOrder=2;
@@ -261,7 +253,7 @@ function drawShape(layer,item,rectangles=[]) {
     if (depth>0) {
       const cube=new THREE.BoxGeometry(w,h,depth);
       const translucent=new THREE.MeshBasicMaterial({
-        color:fillColor,transparent:true,opacity:CUBOID_FACE_OPACITY,
+        color:fillColor??0,transparent:true,opacity:hasFill?CUBOID_FACE_OPACITY:0,
         side:THREE.FrontSide,wireframe:false,depthTest:true,depthWrite:false,
       });
       clickTarget=new THREE.Mesh(cube,translucent);
@@ -326,6 +318,7 @@ function drawShape(layer,item,rectangles=[]) {
     }
   });
   clickTarget.userData.cadObject=item;
+  clickTarget.userData.hasXlsxFill=hasFill;
   layer.hoverable.push(clickTarget);
   if (kind !== 'textbox') layer.clickable.push(clickTarget);
   layer.scene.add(group);
@@ -503,6 +496,8 @@ function installPicking(layer) {
     if(!rect.width || !rect.height) return null;
     mouse.set((clientX-rect.left)/rect.width*2-1,
               1-(clientY-rect.top)/rect.height*2);
+    layer.camera.updateMatrixWorld();
+    layer.scene.updateMatrixWorld(true);
     raycaster.setFromCamera(mouse,layer.camera);
     const targets=button===null ? layer.hoverable : layer.clickable.filter(mesh=>
       selectOnButton(mesh.userData.cadObject,button));
@@ -549,8 +544,8 @@ function installPicking(layer) {
       layer.selectedMesh.material.opacity=layer.selectedMesh.userData.originalOpacity;
     if(mesh.userData.originalOpacity===undefined)
       mesh.userData.originalOpacity=mesh.material.opacity;
-    mesh.material.opacity=mesh.userData.isTransparentCuboid
-      ? CUBOID_SELECTED_OPACITY : 0.95;
+    mesh.material.opacity=mesh.userData.hasXlsxFill
+      ? (mesh.userData.isTransparentCuboid ? CUBOID_SELECTED_OPACITY : 0.95) : 0;
     layer.selectedMesh=mesh;
     if(event.button===2) void openContextMenu(layer,event.clientX,event.clientY,
                                             mesh.userData.cadObject);
@@ -1054,7 +1049,7 @@ async function initialize() {
       layer.objects=layerData.objects;
       layer.sheetName=layerData.sheet || '';
       layer.scaleX=transforms[i].x;
-      layer.scaleY=transforms[i].y;
+      layer.scaleY=layer.scaleX;
       layer.images=layerImages[i] ? [layerImages[i]] : [];
       const rectangles=rectangleSpecs(layer.objects,obj=>toWorldRect(obj,layer));
       for(const item of layer.objects) {

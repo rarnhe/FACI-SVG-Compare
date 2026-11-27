@@ -50,12 +50,16 @@ def anchored(x,y,w,h,child):
 def shape(name,kind,x,y,w,h,number,rotation=0,alt=""):
     tx=' txBox="1"' if kind=="textbox" else ""
     geom="ellipse" if kind=="ellipse" else "rect"
+    text={"Label":"BODYv2","Cube":"R_Cube"}.get(name,name)
+    fill=('<a:noFill/>' if name=="Square" else
+          '<a:solidFill><a:schemeClr val="unknown"/></a:solidFill>' if name=="Rotated" else
+          '<a:solidFill><a:srgbClr val="E8D7AC"/></a:solidFill>')
     return anchored(x,y,w,h,
         f'<xdr:sp><xdr:nvSpPr><xdr:cNvPr id="{number}" name="{name}" descr="{alt}"/>'
         f'<xdr:cNvSpPr{tx}/></xdr:nvSpPr><xdr:spPr>{transform(x,y,w,h,rotation)}'
-        f'<a:prstGeom prst="{geom}"/><a:solidFill><a:srgbClr val="E8D7AC"/></a:solidFill>'
+        f'<a:prstGeom prst="{geom}"/>{fill}'
         '<a:ln><a:solidFill><a:srgbClr val="164070"/></a:solidFill></a:ln></xdr:spPr>'
-        f'<xdr:txBody><a:bodyPr/><a:p><a:r><a:t>{name}</a:t></a:r></a:p></xdr:txBody></xdr:sp>')
+        f'<xdr:txBody><a:bodyPr/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></xdr:txBody></xdr:sp>')
 
 
 def anchors(w,h):
@@ -94,9 +98,22 @@ def main():
                 dst.writestr(f"xl/media/image{i}.png",base64.b64decode(png))
         sheets=spatial.parse_xlsx(book)
         spatial.validate_two_layer_workbook(sheets)
+        # Use production catalog and static handlers with private fixture assets.
+        assets=base/"assets";folder=assets/"BODYv2";folder.mkdir(parents=True)
+        svg='<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180"><path id="curve" d="M10 60 L100 40 L200 90" stroke="#123456" stroke-width="2" fill="none"/><circle cx="100" cy="40" r="3" fill="#123456"/></svg>'
+        for label,date,axis in [
+            ("R_Cube","20260704101627","X"),("R_Cube","20260706101627","Z"),
+            ("BODYv2","20260705101627","Y"),("Partial","20260707101627","Y"),
+            ("R_Cube10","20260708101627","X"),("Cube","20260709101627","X"),
+        ]:
+            for suffix in ("PSD","1-3-Octave"):
+                (folder/f"{label}_{date}_+{axis}_{suffix}.svg").write_text(svg,encoding="utf-8")
+        app.STATIC_DIR=base
         state={"workbook":book,"sheets":sheets,
-               "manifest":service.build_cad_manifest(book,sheets,base)}
+               "manifest":service.build_cad_manifest(book,sheets,assets)}
         application=Application([
+            (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)",app.EllipseSvgCatalogHandler,{"state":state}),
+            (r"/viewer/assets/(.*)",app.NoCacheIndexHandler,{"path":str(assets)}),
             (r"/viewer/cad-layout\.json",app.CadManifestHandler,{"state":state}),
             (r"/viewer/cad-image/([0-9]+)/([0-9]+)",app.CadImageHandler,{"state":state}),
             (r"/viewer/(.*)",app.NoCacheIndexHandler,{"path":str(ROOT)}),
