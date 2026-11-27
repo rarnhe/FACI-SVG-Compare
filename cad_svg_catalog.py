@@ -48,8 +48,8 @@ def enclosing_textbox(objects: list[dict], ellipse: dict) -> dict | None:
 def enclosing_rectangle(objects: list[dict], ellipse: dict) -> dict | None:
     """Only a circle COMPLETELY inside a rectangle is its child.
 
-    An ellipse partly crossing the boundary uses its own visible text for
-    the SVG catalog, just like an ellipse outside every rectangle.
+    An ellipse partly crossing the boundary is outside the rectangle
+    for catalog matching, and uses its enclosing textbox label.
     """
     found = [
         obj for obj in objects
