@@ -111,7 +111,7 @@ test('both splitter clamps keep each area visible, including narrow displays',()
 });
 
 
-test('two embedded CAD pictures preserve native aspect and share exactly one width',()=>{
+test('two sheet SVG backdrops preserve their viewBox ratios and share one CAD width',()=>{
   const sizes=pictureLayerScales(
     [{width:1400,height:500},{width:900,height:900}],
     [0.5,0.75],
@@ -262,10 +262,11 @@ test('SVG legend shows folder_sheet_rectangle-or-sensor_axis, never date',()=>{
   assert.equal(canAddOverlay(map,new Set(),key1),false);
 });
 
-test('cuboid has translucent face and never becomes opaque on selection',()=>{
-  assert.ok(CUBOID_FACE_OPACITY>0 && CUBOID_FACE_OPACITY<0.5);
+test('cuboid uses 43% normal opacity and 50% selected opacity',()=>{
+  assert.equal(CUBOID_FACE_OPACITY,0.43);
+  assert.equal(CUBOID_SELECTED_OPACITY,0.50);
   assert.ok(CUBOID_SELECTED_OPACITY>CUBOID_FACE_OPACITY);
-  assert.ok(CUBOID_SELECTED_OPACITY<0.5);
+  assert.ok(CUBOID_SELECTED_OPACITY<1);
 });
 
 
@@ -288,4 +289,28 @@ test('CAD transparent render order is stable for any XLSX enumeration order',()=
   assert.deepEqual(names.slice().sort((a,b)=>cadShapeRenderOrder(a)-cadShapeRenderOrder(b)),
     ['textbox','textbox','other','rectangle','ellipse','ellipse']);
   assert.equal(cadShapeRenderOrder('shape-unknown'),CAD_DRAW_ORDER.other);
+});
+
+
+test('SVG background and all XLSX shapes use identical x/y scale factors',()=>{
+  // XLSX image boxes set the local origin and source coordinates only.
+  // The visible background takes its dimensions from the SVG viewBox ratio.
+  const bounds=[{width:1200,height:480},{width:600,height:300}];
+  const aspectFromSvg=[0.6,1.5]; // NOT the XLSX embedded-picture ratios.
+  const scales=pictureLayerScales(bounds,aspectFromSvg);
+  assert.deepEqual(scales.map(s=>s.width),[1200,1200]);
+  assert.deepEqual(scales.map(s=>s.height),[720,1800]);
+  for(let i=0;i<2;i++){
+    const pic=bounds[i],svg=scales[i];
+    // Any shape's local offset transforms in exactly the same coordinate
+    // system as its SVG background, so relative placements never drift.
+    const x=pic.width/4,y=pic.height/3;
+    const shape={x:x*svg.x,y:y*svg.y,width:pic.width/8*svg.x,
+                 height:pic.height/8*svg.y};
+    assert.ok(Math.abs(shape.x/svg.width-0.25)<1e-9);
+    assert.ok(Math.abs(shape.y/svg.height-1/3)<1e-9);
+    assert.ok(Math.abs(shape.width/svg.width-1/8)<1e-9);
+    assert.ok(Math.abs(shape.height/svg.height-1/8)<1e-9);
+    assert.ok(Math.abs(svg.height/svg.width-aspectFromSvg[i])<1e-9);
+  }
 });

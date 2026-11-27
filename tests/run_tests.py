@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Stable Three.js image/textbox/rectangle/ellipse transparent render order and Z separation under camera rotation and arbitrary XLSX object ordering; hover priority follows shape stacking; legend entries and first-level menu buttons left-aligned; existing color-only SVG overlay, geometry, MIME/HTTP and CAD regression tests.",
+        "Sheet-matched SVG CAD backdrops with XLSX image-anchor-only geometry and common SVG-derived x/y transforms; title strips .xlsx suffix; outside-rectangle ellipse matches textbox text plus timestamp; no-results message updated; cuboid alpha 0.43/0.50; private PNG image URL removed; existing SVG overlays, legend, geometry, MIME and HTTP regressions.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

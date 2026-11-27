@@ -89,6 +89,9 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
     rectangle_name = label(rectangle)
     ellipse_name = label(ellipse)
     identifier = rectangle_name if rectangle is not None else ellipse_name
+    # Outside any rectangle, match the PARENT TEXTBOX's name in the
+    # filename, but still show the selected sensor name in the legend.
+    search_identifier = rectangle_name if rectangle is not None else folder_name
     root = svg_directory(asset_dir, folder_name)
     result = {
         "folder": folder_name,
@@ -96,11 +99,12 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
         "rectangle": rectangle_name,
         "ellipse": ellipse_name,
         "identifier": identifier,
+        "search_identifier": search_identifier,
         "target_kind": "rectangle" if rectangle is not None else "ellipse",
         "dates": [],
         "pairs": {},
     }
-    if root is None or not identifier:
+    if root is None or not search_identifier:
         return result
 
     entries = sorted(
@@ -108,10 +112,10 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
          and p.suffix.lower() == ".svg"),
         key=lambda p: p.name.casefold()
     )
-    # A date is meaningful only when the SAME SVG filename also contains
-    # the current rectangle's text (case A) or ellipse's text (case B).
+    # A timestamp is valid only when the same SVG filename matches
+    # the rectangle (inside case) or the textbox (outside case).
     matching_entries = [
-        p for p in entries if name_matches(p.name, identifier)
+        p for p in entries if name_matches(p.name, search_identifier)
     ]
     result["dates"] = sorted({
         match.group(1) for file in matching_entries

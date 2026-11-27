@@ -3,9 +3,12 @@ const EPS = 1e-7;
 
 export const INITIAL_REFERENCE_SPLIT = 0.5;
 
+// CAD cuboids retain a solid, translucent roof when selected.
+export const CUBOID_FACE_OPACITY = 0.43;
+export const CUBOID_SELECTED_OPACITY = 0.50;
+
 // Translucent cuboid faces reveal elevated ellipse measurement points.
-export const CUBOID_FACE_OPACITY = 0.23;
-export const CUBOID_SELECTED_OPACITY = 0.30;
+
 
 /**
  * Stable visual stacking order, independent of XLSX object enumeration or

@@ -200,7 +200,7 @@ function drawShape(layer,item,rectangles=[]) {
   layer.scene.add(group);
 }
 
-function drawImage(layer,item,texture) {
+function drawSvgBackground(layer,item,texture) {
   if(!texture) return;
   const r=toWorldRect(item,layer);
   const group=new THREE.Group();
@@ -220,11 +220,11 @@ function drawImage(layer,item,texture) {
   layer.scene.add(group);
 }
 
-function loadCadTexture(url) {
+function loadSheetSvgTexture(url) {
   if (!url) return Promise.resolve(null);
   return new Promise(resolve=>{
     new THREE.TextureLoader().load(url,texture=>resolve(texture),undefined,error=>{
-      console.error('XLSX image could not be loaded:',url,error);
+      console.error('Sheet SVG background could not be loaded:',url,error);
       resolve(null);
     });
   });
@@ -330,7 +330,7 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
     menu.replaceChildren();
     if(!catalog.dates?.length) {
       const empty=document.createElement('div');
-      empty.textContent='无可用时间标签';
+      empty.textContent='无可用测试结果';
       empty.style.padding='7px 10px';
       menu.append(empty);
     } else {
@@ -889,21 +889,37 @@ async function initialize() {
     if(!response.ok) throw new Error('CAD layout HTTP '+response.status);
     const data=await response.json();
     workbookName=data.workbook || '';
-    document.title=workbookName || 'Fab / Subfab CAD';
+    document.title=workbookName.replace(/\.xlsx$/i,'') || 'Fab / Subfab CAD';
 
+    // XLSX picture anchors define sheet-local origin and shape alignment;
+    // the picture's embedded pixels are NEVER used as a backdrop.
     const layerImages=data.layers.map(src=>
       src?.objects?.find(item=>item.type==='image') || null);
-    const textures=await Promise.all(layerImages.map(item=>loadCadTexture(item?.image_url)));
+    const backgrounds=data.layers.map(src=>src?.background_svg || null);
+    const textures=await Promise.all(backgrounds.map((info,i)=>{
+      if(!info?.available) {
+        if(data.layers[i]?.available)
+          console.warn('Missing assets SVG matching worksheet:',data.layers[i]?.sheet);
+        return Promise.resolve(null);
+      }
+      return loadSheetSvgTexture(info.url);
+    }));
     const bounds=layerImages.map(item=>({
       width:(item?.bounds_emu?.width||9525)*EMU_TO_PX,
       height:(item?.bounds_emu?.height||9525)*EMU_TO_PX,
     }));
     const ratios=textures.map((texture,i)=>{
+      // Use the SVG's viewBox ratio from the local catalog even if the
+      // browser reports a fallback 300x150 intrinsic image size.
+      const svgRatio=backgrounds[i]?.aspect_ratio;
+      if(Number.isFinite(svgRatio) && svgRatio>0) return svgRatio;
       const picture=texture?.image;
       const width=picture?.naturalWidth||picture?.width;
       const height=picture?.naturalHeight||picture?.height;
       return width && height ? height/width : bounds[i].height/bounds[i].width;
     });
+    // Both sheets use one common CAD width; every shape is scaled with
+    // EXACTLY the same per-layer X/Y factors as its SVG backdrop.
     const transforms=pictureLayerScales(bounds,ratios);
 
     const targets=[fab,subfab];
@@ -917,7 +933,7 @@ async function initialize() {
       layer.images=layerImages[i] ? [layerImages[i]] : [];
       const rectangles=rectangleSpecs(layer.objects,obj=>toWorldRect(obj,layer));
       for(const item of layer.objects) {
-        if(item.type==='image') drawImage(layer,item,textures[i]);
+        if(item.type==='image') drawSvgBackground(layer,item,textures[i]);
         if(item.type==='shape') drawShape(layer,item,rectangles);
       }
     }

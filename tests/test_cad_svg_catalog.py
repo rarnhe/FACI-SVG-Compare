@@ -99,17 +99,17 @@ class TestSvgCatalog(unittest.TestCase):
             self.assertNotIn("20260703101627",result["dates"])
             self.assertEqual(sorted(result["pairs"]["20260704101627"]),["X"])
 
-    def test_ellipse_outside_rectangle_inside_textbox_uses_ellipse_text(self):
+    def test_ellipse_outside_rectangle_uses_textbox_text_and_timestamp(self):
         with TemporaryDirectory() as tmp:
             directory=Path(tmp)/"BODYv2"
             directory.mkdir()
             names=[
-                "Other_20260704101627_+Y_PSD.svg",
-                "Other_20260704101627_+Y_1-3-Octave.svg",
-                "Other_20260702101627_+X_PSD.svg",
-                "Other_20260702101627_+X_1-3-Octave.svg",
+                "BODYv2_20260704101627_+Y_PSD.svg",
+                "BODYv2_20260704101627_+Y_1-3-Octave.svg",
+                "BODYv2_20260702101627_+X_PSD.svg",
+                "BODYv2_20260702101627_+X_1-3-Octave.svg",
                 "20260704_SCN_B1_20260701101627_+X_PSD.svg",
-                "unrelated_20260703101627_+X_PSD.svg",
+                "Other_20260703101627_+X_PSD.svg",
             ]
             for name in names:
                 (directory/name).write_text("<svg/>",encoding="utf-8")
@@ -121,9 +121,11 @@ class TestSvgCatalog(unittest.TestCase):
             self.assertEqual(result["rectangle"],"")
             self.assertEqual(result["ellipse"],"Other")
             self.assertEqual(result["identifier"],"Other")
+            self.assertEqual(result["search_identifier"],"BODYv2")
             self.assertEqual(result["dates"],["20260702101627","20260704101627"])
             self.assertEqual(list(result["pairs"]["20260704101627"]),["Y"])
             self.assertIn("%2BY_PSD.svg",result["pairs"]["20260704101627"]["Y"]["psd"])
+            self.assertNotIn("20260703101627",result["dates"])
 
     def test_partially_overlapping_ellipse_is_not_fully_inside_rectangle(self):
         objects=sample_objects()
@@ -134,11 +136,25 @@ class TestSvgCatalog(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             folder=Path(tmp)/"BODYv2"
             folder.mkdir()
-            (folder/"EdgeSensor_20260704101627_+Z_PSD.svg").write_text("<svg/>")
+            (folder/"BODYv2_20260704101627_+Z_PSD.svg").write_text("<svg/>")
             result=catalog.build_ellipse_svg_catalog(
                 Path(tmp),[{"sheet":"fab","objects":[*objects,touching]}],0,4)
             self.assertEqual(result["target_kind"],"ellipse")
             self.assertEqual(result["dates"],["20260704101627"])
+
+    def test_outside_ellipse_ignores_own_text_and_unrelated_date(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            directory=root/"BODYv2"
+            directory.mkdir()
+            (directory/"Other_20260704101627_+Z_PSD.svg").write_text("<svg/>")
+            (directory/"Other_20260704101627_+Z_1-3-Octave.svg").write_text("<svg/>")
+            result=catalog.build_ellipse_svg_catalog(
+                root,[{"sheet":"Fab","objects":sample_objects()}],0,3)
+            self.assertEqual(result["identifier"],"Other")
+            self.assertEqual(result["search_identifier"],"BODYv2")
+            self.assertEqual(result["dates"],[])
+            self.assertEqual(result["pairs"],{})
 
     def test_wrong_sheet_index_object_type_and_path_traversal_rejected(self):
         with TemporaryDirectory() as tmp:
