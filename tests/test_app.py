@@ -379,7 +379,7 @@ class TestStaticFrontend(unittest.TestCase):
         for expected in (
             "group.position.set(r.x+w/2,r.y-h/2,raisedZ+cadShapeZOffset(kind))",
             "group.renderOrder=priority",
-            "node.renderOrder=priority+(node.userData.isCadOutline || node.isLine || node.isLineSegments ? 0.25",
+            "node.renderOrder=priority+(node.userData.isCadOutline",
             "image.renderOrder=CAD_DRAW_ORDER.image",
             "group.renderOrder=CAD_DRAW_ORDER.image",
             "cadShapeRenderOrder(b.object.userData.cadObject?.shape_kind)",
@@ -417,12 +417,14 @@ class TestStaticFrontend(unittest.TestCase):
             "textMesh.userData.isTextboxText=true",
             "if(kind==='textbox') drawTextboxText(group,item,r)",
             "new THREE.EdgesGeometry(cube)",
-            "new LineSegments2(geometry,material)",
-            "linewidth:outline.width",
+            "new THREE.InstancedMesh(outlineCylinder,material,segments.length)",
+            "mesh.frustumCulled=false",
             "const outline=cadOutlineSpec(item)",
-            "if(outline) group.add(makeOutline(circumference,outline,layer))",
-            "if(outline) group.add(makeOutline([",
-            "node.material.resolution.set(width,height)",
+            "if(outline) group.add(...makeOutline(circumference,outline,layer))",
+            "if(outline) group.add(...makeOutline([",
+            "group.add(...edges)",
+            "updateLayerOutlines(layer)",
+            "layer.outlineMeshes.push(mesh)",
             "mesh.userData.isTransparentCuboid",
         ):
             self.assertIn(expected,viewer)

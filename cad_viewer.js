@@ -1,23 +1,20 @@
 // Linked Fab/Subfab Excel CAD viewer. Each picture starts at (0,0) in local XY.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
-import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, imageAspectRatio, fitSvgPane, clampMainDivider, clampReferenceSplit,
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
   restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
-  cadOutlineSpec,
+  cadOutlineSpec, cadOutlineSegments, cadOutlineHaloColor,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER, cadShapeRenderOrder, cadShapeZOffset,
   textboxFont, layoutTextboxText,
 } from './cad_ui.mjs';
 
 const EMU_TO_PX = 1 / 9525;
-const layers = [];
+export const layers = []; // read-only binding for browser integration tests
 const pointerStart = new WeakMap();
 let workbookName = '';
 let syncing = false;
@@ -57,7 +54,7 @@ function createLayer(stageId) {
   controls.update();
   stage.prepend(renderer.domElement);
   const layer = {
-    stage,scene,renderer,camera,controls,clickable:[],hoverable:[],objects:[],images:[],
+    stage,scene,renderer,camera,controls,clickable:[],hoverable:[],objects:[],images:[],outlineMeshes:[],outlineZoom:null,
     sheetName:'',selectedMesh:null,scaleX:1,scaleY:1,layerIndex:stageId==='fab-stage'?0:1,
     selectedInfo:document.getElementById(
       stageId==='fab-stage'?'fab-selected-info':'subfab-selected-info'),
@@ -103,25 +100,60 @@ function colorValue(value,fallback) {
     ? parseInt(value.slice(1),16) : fallback;
 }
 
-function makeThickSegments(positions,outline,layer) {
-  const geometry=new LineSegmentsGeometry();
-  geometry.setPositions(positions);
-  const material=new LineMaterial({
-    color:colorValue(outline.color,0x334455),linewidth:outline.width,
-    worldUnits:false,transparent:true,opacity:1,depthTest:false,depthWrite:false,
-  });
-  material.resolution.set(Math.max(1,layer.stage.clientWidth),Math.max(1,layer.stage.clientHeight));
-  const line=new LineSegments2(geometry,material);
-  line.userData.isCadOutline=true;
-  return line;
+// Use actual instanced mesh cylinders, not WebGL line widths. All edges
+// (including vertical ones) have a visible screen-space thickness at
+// arbitrary camera angles. Each shape owns its own instance buffer.
+const outlineCylinder=new THREE.CylinderGeometry(1,1,1,10,1,false);
+const outlineUp=new THREE.Vector3(0,1,0);
+function updateOutlineMesh(mesh,zoom) {
+  const radius=mesh.userData.outlineWidth/(2*Math.max(0.01,zoom));
+  const transform=new THREE.Object3D();
+  for(let i=0;i<mesh.userData.outlineSegments.length;i++) {
+    const segment=mesh.userData.outlineSegments[i];
+    transform.position.fromArray(segment.center);
+    transform.quaternion.setFromUnitVectors(outlineUp,new THREE.Vector3(...segment.direction));
+    // Slight overlap at joints closes gaps on rectangles and circles.
+    transform.scale.set(radius,segment.length+radius*0.8,radius);
+    transform.updateMatrix();
+    mesh.setMatrixAt(i,transform.matrix);
+  }
+  mesh.instanceMatrix.needsUpdate=true;
 }
-function makeOutline(points,outline,layer) {
+function updateLayerOutlines(layer) {
+  const zoom=layer.camera.zoom;
+  if(layer.outlineZoom===zoom) return;
+  for(const mesh of layer.outlineMeshes) updateOutlineMesh(mesh,zoom);
+  layer.outlineZoom=zoom;
+}
+function makeThickSegments(positions,outline,layer,halo=true) {
+  const segments=cadOutlineSegments(positions);
+  if(!segments.length) return [];
+  const make=(color,width,isHalo)=>{
+    const material=new THREE.MeshBasicMaterial({
+      color:colorValue(color,0x334455),transparent:true,opacity:1,
+      depthTest:false,depthWrite:false,
+    });
+    const mesh=new THREE.InstancedMesh(outlineCylinder,material,segments.length);
+    mesh.frustumCulled=false;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    Object.assign(mesh.userData,{isCadOutline:true,isCadOutlineHalo:isHalo,
+      outlineWidth:width,outlineSegments:segments});
+    updateOutlineMesh(mesh,layer.camera.zoom);
+    layer.outlineMeshes.push(mesh);
+    return mesh;
+  };
+  const meshes=[];
+  if(halo) meshes.push(make(cadOutlineHaloColor(outline.color),outline.width+2,true));
+  meshes.push(make(outline.color,outline.width,false));
+  return meshes;
+}
+function makeOutline(points,outline,layer,halo=true) {
   const positions=[];
   for(let i=0;i<points.length;i++) {
     const a=points[i],b=points[(i+1)%points.length];
     positions.push(a.x,a.y,a.z,b.x,b.y,b.z);
   }
-  return makeThickSegments(positions,outline,layer);
+  return makeThickSegments(positions,outline,layer,halo);
 }
 
 function drawTextboxText(group,item,worldRect) {
@@ -222,7 +254,7 @@ function drawShape(layer,item,rectangles=[]) {
       const t=2*Math.PI*i/72;
       circumference.push(new THREE.Vector3(radius*Math.cos(t),radius*Math.sin(t),0.7));
     }
-    if(outline) group.add(makeOutline(circumference,outline,layer));
+    if(outline) group.add(...makeOutline(circumference,outline,layer));
   } else if(kind==='rectangle') {
     // Translucent solid (NOT a wireframe): both roof and side faces remain
     // visible while allowing elevated ellipse measurement points to show.
@@ -245,8 +277,8 @@ function drawShape(layer,item,rectangles=[]) {
         const geometry=new THREE.EdgesGeometry(cube);
         const edges=makeThickSegments(geometry.attributes.position.array,outline,layer);
         geometry.dispose();
-        edges.position.copy(clickTarget.position);
-        group.add(edges);
+        for(const mesh of edges) mesh.position.copy(clickTarget.position);
+        group.add(...edges);
       }
     } else {
       // Missing/invalid directive: zero height, no artificial thickness.
@@ -254,7 +286,7 @@ function drawShape(layer,item,rectangles=[]) {
       clickTarget.position.z=0;
       group.add(clickTarget);
       const hw=w/2,hh=h/2;
-      if(outline) group.add(makeOutline([
+      if(outline) group.add(...makeOutline([
         new THREE.Vector3(-hw,hh,0.2),new THREE.Vector3(hw,hh,0.2),
         new THREE.Vector3(hw,-hh,0.2),new THREE.Vector3(-hw,-hh,0.2),
       ],outline,layer));
@@ -269,7 +301,7 @@ function drawShape(layer,item,rectangles=[]) {
       new THREE.Vector3(-hw,hh,0.8),new THREE.Vector3(hw,hh,0.8),
       new THREE.Vector3(hw,-hh,0.8),new THREE.Vector3(-hw,-hh,0.8),
     ];
-    if(outline) group.add(makeOutline(vertices,outline,layer));
+    if(outline) group.add(...makeOutline(vertices,outline,layer,false));
     if(kind==='textbox') drawTextboxText(group,item,r);
   }
   // Explicit render order overrides the reversed transparent-object
@@ -277,7 +309,8 @@ function drawShape(layer,item,rectangles=[]) {
   // depthWrite:false; outlines remain above their own filled surfaces.
   group.traverse(node=>{
     if(node.isMesh || node.isLine || node.isLineSegments) {
-      node.renderOrder=priority+(node.userData.isCadOutline || node.isLine || node.isLineSegments ? 0.25
+      node.renderOrder=priority+(node.userData.isCadOutline
+        ? (node.userData.isCadOutlineHalo?0.25:0.5)
         : node.userData.isTextboxText ? 0.1 : 0);
     }
   });
@@ -538,9 +571,6 @@ function resizeCadLayers() {
       const width=Math.max(1,layer.stage.clientWidth);
       const height=Math.max(1,layer.stage.clientHeight);
       layer.renderer.setSize(width,height,false);
-      layer.scene.traverse(node=>{
-        if(node.userData.isCadOutline) node.material.resolution.set(width,height);
-      });
       layer.camera.left=-width/2;layer.camera.right=width/2;
       layer.camera.top=height/2;layer.camera.bottom=-height/2;
       layer.camera.zoom=Math.max(0.01,Math.min(100,layer.camera.zoom*factor));
@@ -1038,6 +1068,9 @@ async function initialize() {
 initialize();
 function animate() {
   requestAnimationFrame(animate);
-  for(const layer of layers) layer.renderer.render(layer.scene,layer.camera);
+  for(const layer of layers) {
+    updateLayerOutlines(layer);
+    layer.renderer.render(layer.scene,layer.camera);
+  }
 }
 animate();

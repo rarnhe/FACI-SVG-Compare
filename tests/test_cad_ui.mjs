@@ -10,7 +10,8 @@ import {
   textboxFont,layoutTextboxText,
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
   SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
-  cadOutlineSpec,recolorOctaveGeometry,
+  cadOutlineSpec,recolorOctaveGeometry,octavePointScale,octavePointNodes,octaveLineNodes,
+  cadOutlineSegments,cadOutlineHaloColor,
 } from '../cad_ui.mjs';
 
 const shape=(kind,x,y,width,height,text,rotation=0)=>({
@@ -417,8 +418,11 @@ test('SVG legend independent styles, original restoration and strict validation'
   assert.deepEqual(mergeSvgStyle(dash,{color:'#E41A1C'}),
     {color:'#E41A1C',lineWidth:5,lineStyle:'8 5'});
   assert.deepEqual(mergeSvgStyle(dash,{lineWidth:null,lineStyle:null}),base);
-  assert.deepEqual(SVG_LINE_WIDTHS,[3,4,5,6,7]);
-  assert.equal(SVG_LINE_TYPES.length,5);
+  assert.deepEqual(SVG_LINE_WIDTHS,[3,4,5]);
+  assert.equal(SVG_LINE_TYPES.length,4);
+  assert.ok(!SVG_LINE_TYPES.some(t=>t.label==='原始线型'));
+  assert.throws(()=>mergeSvgStyle(base,{lineWidth:6}),RangeError);
+  assert.throws(()=>mergeSvgStyle(base,{lineWidth:7}),RangeError);
   assert.ok(!SVG_LINE_TYPES.some(t=>t.label==='点线'));
   assert.throws(()=>mergeSvgStyle(base,{lineWidth:2}),RangeError);
   assert.throws(()=>mergeSvgStyle(base,{lineStyle:'1 5'}),RangeError);
@@ -533,4 +537,32 @@ test('outline uses Excel color and width; equipment without border still has a v
   assert.deepEqual(cadOutlineSpec({shape_kind:'rectangle',colors:{outline:'无/透明',fill:'#FFFFFF'}}),{color:'#7a7a7a',width:2});
   assert.equal(cadOutlineSpec({shape_kind:'textbox',colors:{outline:'无/透明'}}),null);
   assert.equal(cadOutlineSpec({shape_kind:'rectangle',colors:{outline:'#123456'},outline_width_px:10}).width,5);
+});
+
+
+test('octave point size is proportional to original line width and resets without accumulation',()=>{
+  const {xml,curve,cssCurve}=svgFixture();
+  curve.attrs.style='stroke-width:2';
+  cssCurve.attrs.style='stroke-width:2';
+  const lines=octaveLineNodes(xml);
+  assert.deepEqual(lines,[curve,cssCurve]);
+  assert.equal(octavePointScale(xml,lines,3),1.5);
+  assert.equal(octavePointScale(xml,lines,4),2);
+  assert.equal(octavePointScale(xml,lines,5),2.5);
+  assert.equal(octavePointScale(xml,lines,null),1);
+  assert.equal(octavePointScale(xml,[],4),4);
+});
+
+test('all independent CAD segment buffers preserve centers, directions and lengths',()=>{
+  const a=new Float32Array([0,0,0,10,0,0,10,0,0,10,20,0,10,20,0,10,20,5]);
+  const b=new Float32Array([20,30,0,30,30,0,30,30,0,30,40,0,30,40,0,20,40,0,20,40,0,20,30,0]);
+  const cube=cadOutlineSegments(a),flat=cadOutlineSegments(b);
+  assert.equal(cube.length,3);
+  assert.equal(flat.length,4);
+  assert.deepEqual(cube[2],{center:[10,20,2.5],direction:[0,0,1],length:5});
+  assert.deepEqual(flat[0],{center:[25,30,0],direction:[1,0,0],length:10});
+  assert.notEqual(cube[0],flat[0]);
+  assert.deepEqual(cadOutlineSegments([0,0,0,0,0,0]),[]);
+  assert.equal(cadOutlineHaloColor('#FFFFFF'),'#202020');
+  assert.equal(cadOutlineHaloColor('#000000'),'#f5f5f5');
 });

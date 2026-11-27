@@ -43,6 +43,17 @@ jobs:
         shell: bash
         continue-on-error: true
         run: node --test tests/test_cad_geometry.mjs tests/test_cad_ui.mjs
+      - name: Test actual Chromium WebGL outlines and octave points
+        id: browser
+        shell: bash
+        continue-on-error: true
+        env:
+          CAD_BROWSER_DEPS: ${{ runner.temp }}/cad-browser
+        run: |
+          set -e
+          npm install --no-save --no-package-lock --prefix "$CAD_BROWSER_DEPS" three@0.160.0 playwright@1.51.1
+          node "$CAD_BROWSER_DEPS/node_modules/playwright/cli.js" install chromium
+          node --test tests/test_cad_browser.mjs
       - name: Execute tests and generate report
         id: tests
         if: always()
@@ -55,8 +66,8 @@ jobs:
           if [[ ! -f test_report.md ]]; then
             printf '# Test Report\n\n- Result: **FAIL**\n- Reason: test runner or environment failed before generating the report.\n' > test_report.md
           fi
-          if [[ '${{ steps.install.outcome }}' != 'success' ]] || [[ '${{ steps.javascript.outcome }}' != 'success' ]] || [[ '${{ steps.geometry.outcome }}' != 'success' ]]; then
-            sed -i 's/Result: \*\*PASS\*\*/Result: **FAIL** (dependency, JS syntax, or geometry validation failed)/' test_report.md
+          if [[ '${{ steps.install.outcome }}' != 'success' ]] || [[ '${{ steps.javascript.outcome }}' != 'success' ]] || [[ '${{ steps.geometry.outcome }}' != 'success' ]] || [[ '${{ steps.browser.outcome }}' != 'success' ]]; then
+            sed -i 's/Result: \*\*PASS\*\*/Result: **FAIL** (dependency, JS syntax, or geometry or browser validation failed)/' test_report.md
           fi
       - name: Upload test report
         if: always()
@@ -79,4 +90,4 @@ jobs:
         if: always()
         shell: bash
         run: |
-          [[ '${{ steps.install.outcome }}' == 'success' ]] && [[ '${{ steps.tests.outcome }}' == 'success' ]] && [[ '${{ steps.javascript.outcome }}' == 'success' ]] && [[ '${{ steps.geometry.outcome }}' == 'success' ]]
+          [[ '${{ steps.install.outcome }}' == 'success' ]] && [[ '${{ steps.tests.outcome }}' == 'success' ]] && [[ '${{ steps.javascript.outcome }}' == 'success' ]] && [[ '${{ steps.geometry.outcome }}' == 'success' ]] && [[ '${{ steps.browser.outcome }}' == 'success' ]]

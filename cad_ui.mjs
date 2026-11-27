@@ -364,9 +364,8 @@ export function recolorSvgMarkup(source,color) {
 
 
 // Legend styles are independent; null restores the original width/dash pattern.
-export const SVG_LINE_WIDTHS=Object.freeze([3,4,5,6,7]);
+export const SVG_LINE_WIDTHS=Object.freeze([3,4,5]);
 export const SVG_LINE_TYPES=Object.freeze([
-  {label:'原始线型',value:null},
   {label:'实线',value:'none'},
   {label:'虚线',value:'8 5'},
   {label:'点划线',value:'10 4 1 4'},
@@ -378,13 +377,13 @@ export function mergeSvgStyle(previous,patch={}) {
     lineStyle:previous.lineStyle??null,...patch};
   if(!SVG_COLORS.includes(style.color) ||
     (style.lineWidth!==null && !SVG_LINE_WIDTHS.includes(style.lineWidth)) ||
-    !SVG_LINE_TYPES.some(type=>type.value===style.lineStyle))
+    (style.lineStyle!==null && !SVG_LINE_TYPES.some(type=>type.value===style.lineStyle)))
     throw new RangeError('Unsupported SVG style');
   return {color:style.color,lineWidth:style.lineWidth,lineStyle:style.lineStyle};
 }
 
 const PROTECTED_SVG=/^(?:defs|mask|clippath|filter|marker|pattern|symbol|lineargradient|radialgradient|metadata|title|desc|text|tspan)$/i;
-const AUXILIARY_SVG=/(?:^|[\s_.-])(?:axes?|axis|grid(?:lines?)?|ticks?|spines?|legend|labels?|background|frame|border|patch|matplotlib\.axis)(?=$|[\s_.-]|\d)/i;
+const AUXILIARY_SVG=/(?:^|[\s_.-])(?:axes?|axis|grid(?:lines?)?|[xy]?ticks?|spines?|legend|labels?|background|frame|border|patch|matplotlib\.axis)(?=$|[\s_.-]|\d)/i;
 const CURVE_SVG=/(?:^|[\s_.-])(?:curve|series|trace|spectrum|psd|octave|data-series|line2d)(?=$|[\s_.-]|\d)/i;
 function svgLineRole(node) {
   let marked=false;
@@ -517,29 +516,81 @@ export function recolorOctaveGeometry(xml,color) {
     if(node.localName?.toLowerCase()==='marker') visit(node,true);
   }
 }
+// Width is in SVG user units. Compare with the median original data-line
+// stroke width (SVG default = 1); never compound a previous edit.
+function svgLength(value,fallback=null) {
+  const m=/^\s*(\d+(?:\.\d+)?|\.\d+)\s*(px|pt|pc|mm|cm|in)?\s*$/i.exec(String(value??''));
+  if(!m) return fallback;
+  const n=Number(m[1])*({px:1,pt:96/72,pc:16,mm:96/25.4,cm:96/2.54,in:96}[m[2]?.toLowerCase()]??1);
+  return Number.isFinite(n)&&n>0?n:fallback;
+}
+export function octavePointScale(xml,curves,lineWidth) {
+  if(lineWidth===null || lineWidth===undefined) return 1;
+  const rules=paintRules(xml,'stroke-width');
+  const widths=curves.map(n=>svgLength(resolvedPaint(n,rules,'stroke-width'),1)).sort((a,b)=>a-b);
+  const middle=Math.floor(widths.length/2);
+  const baseline=widths.length?(widths.length%2?widths[middle]:(widths[middle-1]+widths[middle])/2):1;
+  return lineWidth/baseline;
+}
+export function octaveLineNodes(xml) {
+  const rules=paintRules(xml);
+  return Array.from(xml.getElementsByTagName('*')).filter(node=>
+    /^(?:line|path|polyline)$/i.test(node.localName||'') &&
+    svgLineRole(node)!=='protected' &&
+    recolorablePaint(resolvedPaint(node,rules)) &&
+    !/[zZ]\s*$/.test(node.getAttribute('d')||''));
+}
+export function octavePointNodes(xml) {
+  const stroke=paintRules(xml),fill=paintRules(xml,'fill');
+  return Array.from(xml.getElementsByTagName('*')).filter(node=>{
+    const kind=(node.localName||'').toLowerCase();
+    if(!octavePaintable(node) || svgLineRole(node)==='protected') return false;
+    const point=/^(?:circle|ellipse|polygon|use)$/.test(kind) ||
+      (kind==='path' && /[zZ]\s*$/.test(node.getAttribute('d')||'')) ||
+      (kind==='rect' && /(?:point|dot|marker)/i.test([node.getAttribute('class'),node.getAttribute('id')].join(' ')));
+    if(!point) return false;
+    const line=resolvedPaint(node,stroke),inside=resolvedPaint(node,fill,'fill');
+    return recolorablePaint(line) || inside===null || recolorablePaint(inside);
+  });
+}
+export function scaleOctavePoints(xml,points,factor) {
+  if(!Number.isFinite(factor) || factor<=0 || Math.abs(factor-1)<1e-9) return;
+  // Scale each visible instance around its own bounding-box center, not
+  // around the chart origin. A fresh wrapper preserves the existing node
+  // transform, x/y, and shared definition (including multiple <use>s).
+  for(const point of points) {
+    const parent=point.parentNode;
+    if(!parent) continue;
+    const wrapper=xml.createElementNS('http://www.w3.org/2000/svg','g');
+    wrapper.setAttribute('data-octave-point-scale',String(factor));
+    wrapper.setAttribute('style','transform-box:fill-box;transform-origin:center;transform:scale('+factor+')');
+    parent.insertBefore(wrapper,point);
+    wrapper.appendChild(point);
+  }
+  // strokeWidth markers follow their parent stroke automatically.
+  // User-space markers instead need their viewport enlarged explicitly.
+  for(const marker of Array.from(xml.getElementsByTagName('marker'))) {
+    if(marker.getAttribute('markerUnits')!=='userSpaceOnUse') continue;
+    const w=svgLength(marker.getAttribute('markerWidth'),3);
+    const h=svgLength(marker.getAttribute('markerHeight'),3);
+    if(!marker.hasAttribute('viewBox')) marker.setAttribute('viewBox','0 0 '+w+' '+h);
+    marker.setAttribute('markerWidth',String(w*factor));
+    marker.setAttribute('markerHeight',String(h*factor));
+  }
+}
 export function restyleSvgMarkup(source,requested,kind='psd') {
   const style=mergeSvgStyle(requested);
   const xml=new DOMParser().parseFromString(source,'image/svg+xml');
   if(xml.getElementsByTagName('parsererror').length ||
      xml.documentElement?.localName!=='svg') throw new Error('Cannot parse original SVG source');
-  let curves=svgCurveNodes(xml);
-  if(kind==='octave' && !curves.length) {
-    const rules=paintRules(xml);
-    curves=Array.from(xml.getElementsByTagName('*')).filter(node=>
-      /^(?:line|path|polyline)$/i.test(node.localName||'') &&
-      svgLineRole(node)!=='protected' &&
-      recolorablePaint(resolvedPaint(node,rules)) &&
-      !/[zZ]\s*$/.test(node.getAttribute('d')||''));
-  }
-  // The original color-only fallback is retained for legacy SVGs lacking
-  // recognizable curves; never guess which auxiliary lines to resize.
-  if(!curves.length) {
+  const curves=kind==='octave'?octaveLineNodes(xml):svgCurveNodes(xml);
+  const points=kind==='octave'?octavePointNodes(xml):[];
+  const pointScale=kind==='octave'?octavePointScale(xml,curves,style.lineWidth):1;
+  // PSD retains its conservative fallback; octave also supports plots
+  // composed entirely of filled data points.
+  if(!curves.length && kind!=='octave') {
     if(style.lineWidth!==null || style.lineStyle!==null)
       throw new Error('未识别到可修改线型或线宽的频谱曲线');
-    if(kind==='octave') {
-      recolorOctaveGeometry(xml,style.color);
-      return new XMLSerializer().serializeToString(xml);
-    }
     return recolorSvgMarkup(source,style.color);
   }
   for(const node of curves) {
@@ -556,7 +607,10 @@ export function restyleSvgMarkup(source,requested,kind='psd') {
     // rules. Original attributes/geometry/fill remain intact.
     applySvgPaint(node,properties);
   }
-  if(kind==='octave') recolorOctaveGeometry(xml,style.color);
+  if(kind==='octave') {
+    recolorOctaveGeometry(xml,style.color);
+    scaleOctavePoints(xml,points,pointScale);
+  }
   return new XMLSerializer().serializeToString(xml);
 }
 
@@ -576,4 +630,24 @@ export function cadOutlineSpec(item) {
   const width=Number(item.outline_width_px);
   return {color:original?colors.outline:dark,
     width:Math.min(5,Math.max(2,Number.isFinite(width)?width:2))};
+}
+
+
+// Independent geometry for every outline: one centered segment per edge,
+// with no shared mutable instance transforms or screen-line shader state.
+export function cadOutlineSegments(positions) {
+  const segments=[];
+  for(let i=0;i+5<positions.length;i+=6) {
+    const a=Array.from(positions.slice(i,i+3)),b=Array.from(positions.slice(i+3,i+6));
+    if(![...a,...b].every(Number.isFinite)) continue;
+    const delta=b.map((v,j)=>v-a[j]),length=Math.hypot(...delta);
+    if(length<=1e-9) continue;
+    segments.push({center:a.map((v,j)=>(v+b[j])/2),
+      direction:delta.map(v=>v/length),length});
+  }
+  return segments;
+}
+export function cadOutlineHaloColor(color) {
+  const rgb=[1,3,5].map(i=>parseInt(color.slice(i,i+2),16));
+  return (rgb[0]*0.299+rgb[1]*0.587+rgb[2]*0.114)>145?'#202020':'#f5f5f5';
 }
