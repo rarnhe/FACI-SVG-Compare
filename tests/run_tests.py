@@ -31,7 +31,7 @@ def format_report(result, seconds, exception=None):
         "",
         "## Scope",
         "",
-        "Sheet-matched SVG CAD backdrops with XLSX image-anchor-only geometry and common SVG-derived x/y transforms; title strips .xlsx suffix; outside-rectangle ellipse matches textbox text plus timestamp; no-results message updated; cuboid alpha 0.43/0.50; private PNG image URL removed; existing SVG overlays, legend, geometry, MIME and HTTP regressions.",
+        "Restored XLSX embedded PNG/JPEG CAD backgrounds and read-only bounded image endpoint; displayed texture takes native image pixel aspect while each sheet's textbox/rectangle/ellipse use exactly the same X/Y mapping as the image; shared Fab/Subfab world width; no sheet-named SVG dependency; maintained title, textbox-scoped SVG catalog, legend, cuboid opacity and MIME/security regressions.",
         "Browser/WebGL visual behavior requires manual verification.",
         "",
     ]

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   INITIAL_REFERENCE_SPLIT, shapeLabel, selectOnButton,
   containsShape, shapeAncestors, selectionParts, fitSvgPair, fitSvgPane,
-  clampMainDivider, clampReferenceSplit, pictureLayerScales,
+  clampMainDivider, clampReferenceSplit, pictureLayerScales, imageAspectRatio,
   requiredSvgRatio,canAddOverlay,SVG_COLORS,nextLegendColor,
   svgLegendName,svgSelectionKey,CUBOID_FACE_OPACITY,CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER,cadShapeRenderOrder,cadShapeZOffset,
@@ -111,7 +111,7 @@ test('both splitter clamps keep each area visible, including narrow displays',()
 });
 
 
-test('two sheet SVG backdrops preserve their viewBox ratios and share one CAD width',()=>{
+test('two XLSX images preserve native ratios and share one CAD world width',()=>{
   const sizes=pictureLayerScales(
     [{width:1400,height:500},{width:900,height:900}],
     [0.5,0.75],
@@ -292,25 +292,65 @@ test('CAD transparent render order is stable for any XLSX enumeration order',()=
 });
 
 
-test('SVG background and all XLSX shapes use identical x/y scale factors',()=>{
-  // XLSX image boxes set the local origin and source coordinates only.
-  // The visible background takes its dimensions from the SVG viewBox ratio.
+test('embedded PNG/JPEG backgrounds and XLSX shapes use identical x/y scale factors',()=>{
+  // XLSX image anchors define the local origin; decoded raster dimensions
+  // determine the picture's display aspect ratio.
   const bounds=[{width:1200,height:480},{width:600,height:300}];
-  const aspectFromSvg=[0.6,1.5]; // NOT the XLSX embedded-picture ratios.
-  const scales=pictureLayerScales(bounds,aspectFromSvg);
+  const decodedImages=[{naturalWidth:2000,naturalHeight:1200},
+    {naturalWidth:600,naturalHeight:900}];
+  const aspects=decodedImages.map((image,i)=>imageAspectRatio(image,bounds[i]));
+  assert.deepEqual(aspects,[0.6,1.5]); // NOT the XLSX anchors' ratios.
+  const scales=pictureLayerScales(bounds,aspects);
   assert.deepEqual(scales.map(s=>s.width),[1200,1200]);
   assert.deepEqual(scales.map(s=>s.height),[720,1800]);
   for(let i=0;i<2;i++){
-    const pic=bounds[i],svg=scales[i];
+    const pic=bounds[i],display=scales[i];
     // Any shape's local offset transforms in exactly the same coordinate
     // system as its SVG background, so relative placements never drift.
     const x=pic.width/4,y=pic.height/3;
-    const shape={x:x*svg.x,y:y*svg.y,width:pic.width/8*svg.x,
-                 height:pic.height/8*svg.y};
-    assert.ok(Math.abs(shape.x/svg.width-0.25)<1e-9);
-    assert.ok(Math.abs(shape.y/svg.height-1/3)<1e-9);
-    assert.ok(Math.abs(shape.width/svg.width-1/8)<1e-9);
-    assert.ok(Math.abs(shape.height/svg.height-1/8)<1e-9);
-    assert.ok(Math.abs(svg.height/svg.width-aspectFromSvg[i])<1e-9);
+    const shape={x:x*display.x,y:y*display.y,
+                 width:pic.width/8*display.x,height:pic.height/8*display.y};
+    assert.ok(Math.abs(shape.x/display.width-0.25)<1e-9);
+    assert.ok(Math.abs(shape.y/display.height-1/3)<1e-9);
+    assert.ok(Math.abs(shape.width/display.width-1/8)<1e-9);
+    assert.ok(Math.abs(shape.height/display.height-1/8)<1e-9);
+    assert.ok(Math.abs(display.height/display.width-aspects[i])<1e-9);
+  }
+});
+
+
+test('imageAspectRatio selects decoded XLSX picture rather than drawing anchor size',()=>{
+  const anchor={width:1400,height:700}; // anchor ratio=0.5
+  assert.equal(imageAspectRatio({naturalWidth:1920,naturalHeight:1080},anchor),1080/1920);
+  assert.equal(imageAspectRatio({width:640,height:480},anchor),480/640);
+  assert.equal(imageAspectRatio({naturalWidth:0,naturalHeight:0},anchor),0.5);
+  assert.equal(imageAspectRatio(null,anchor),0.5);
+  assert.equal(imageAspectRatio(null,{width:0,height:100}),1);
+  assert.equal(imageAspectRatio({naturalWidth:NaN,naturalHeight:20},anchor),0.5);
+});
+
+test('shape and raster background share exact corner alignment at different aspect ratios',()=>{
+  const anchors=[{width:1600,height:900},{width:800,height:800}];
+  const decoded=[{naturalWidth:1600,naturalHeight:600},
+                 {naturalWidth:1200,naturalHeight:1800}];
+  const scales=pictureLayerScales(anchors,
+    decoded.map((im,i)=>imageAspectRatio(im,anchors[i])));
+  // Two pictures maintain a common displayed width without squashing pixels.
+  assert.equal(scales[0].width,1600);
+  assert.equal(scales[1].width,1600);
+  assert.equal(scales[0].height,600);
+  assert.equal(scales[1].height,2400);
+  for(let i=0;i<2;i++){
+    const {width:w,height:h}=anchors[i],factor=scales[i];
+    // A rectangle exactly matching the XLSX picture anchor must match
+    // all four displayed raster corners, not just its top-left.
+    const corners=[[0,0],[w,0],[w,h],[0,h]];
+    const scaled=corners.map(([x,y])=>[x*factor.x,y*factor.y]);
+    assert.deepEqual(scaled,[[0,0],[factor.width,0],
+      [factor.width,factor.height],[0,factor.height]]);
+    const point={x:0.6*w,y:0.4*h};
+    const aligned=[point.x*factor.x,point.y*factor.y];
+    assert.ok(Math.abs(aligned[0]/factor.width-0.6)<1e-9);
+    assert.ok(Math.abs(aligned[1]/factor.height-0.4)<1e-9);
   }
 });

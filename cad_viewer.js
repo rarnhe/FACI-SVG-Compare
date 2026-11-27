@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rectangleHeight, rectangleSpecs, ellipseElevation } from './cad_geometry.mjs';
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
-  pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
+  pictureLayerScales, imageAspectRatio, fitSvgPane, clampMainDivider, clampReferenceSplit,
   requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
   recolorSvgMarkup, svgLegendName, svgSelectionKey,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
@@ -200,7 +200,7 @@ function drawShape(layer,item,rectangles=[]) {
   layer.scene.add(group);
 }
 
-function drawSvgBackground(layer,item,texture) {
+function drawImage(layer,item,texture) {
   if(!texture) return;
   const r=toWorldRect(item,layer);
   const group=new THREE.Group();
@@ -220,11 +220,11 @@ function drawSvgBackground(layer,item,texture) {
   layer.scene.add(group);
 }
 
-function loadSheetSvgTexture(url) {
+function loadCadTexture(url) {
   if (!url) return Promise.resolve(null);
   return new Promise(resolve=>{
     new THREE.TextureLoader().load(url,texture=>resolve(texture),undefined,error=>{
-      console.error('Sheet SVG background could not be loaded:',url,error);
+      console.error('XLSX embedded picture could not be loaded:',url,error);
       resolve(null);
     });
   });
@@ -891,35 +891,22 @@ async function initialize() {
     workbookName=data.workbook || '';
     document.title=workbookName.replace(/\.xlsx$/i,'') || 'Fab / Subfab CAD';
 
-    // XLSX picture anchors define sheet-local origin and shape alignment;
-    // the picture's embedded pixels are NEVER used as a backdrop.
+    // XLSX image anchors supply the origin and coordinate reference while
+    // the actual embedded raster image supplies the displayed aspect ratio.
+    // The same scale factors transform each shape AND its picture.
     const layerImages=data.layers.map(src=>
       src?.objects?.find(item=>item.type==='image') || null);
-    const backgrounds=data.layers.map(src=>src?.background_svg || null);
-    const textures=await Promise.all(backgrounds.map((info,i)=>{
-      if(!info?.available) {
-        if(data.layers[i]?.available)
-          console.warn('Missing assets SVG matching worksheet:',data.layers[i]?.sheet);
-        return Promise.resolve(null);
-      }
-      return loadSheetSvgTexture(info.url);
-    }));
+    const textures=await Promise.all(layerImages.map(item=>
+      loadCadTexture(item?.image_url)));
     const bounds=layerImages.map(item=>({
       width:(item?.bounds_emu?.width||9525)*EMU_TO_PX,
       height:(item?.bounds_emu?.height||9525)*EMU_TO_PX,
     }));
-    const ratios=textures.map((texture,i)=>{
-      // Use the SVG's viewBox ratio from the local catalog even if the
-      // browser reports a fallback 300x150 intrinsic image size.
-      const svgRatio=backgrounds[i]?.aspect_ratio;
-      if(Number.isFinite(svgRatio) && svgRatio>0) return svgRatio;
-      const picture=texture?.image;
-      const width=picture?.naturalWidth||picture?.width;
-      const height=picture?.naturalHeight||picture?.height;
-      return width && height ? height/width : bounds[i].height/bounds[i].width;
-    });
-    // Both sheets use one common CAD width; every shape is scaled with
-    // EXACTLY the same per-layer X/Y factors as its SVG backdrop.
+    const ratios=textures.map((texture,i)=>
+      imageAspectRatio(texture?.image,bounds[i]));
+    // Shared world-space image width synchronizes both linked CAD cameras.
+    // Each sheet's image height is nativeAspect*sharedWidth; textboxes,
+    // rectangles and ellipses receive the EXACT SAME X/Y transforms.
     const transforms=pictureLayerScales(bounds,ratios);
 
     const targets=[fab,subfab];
@@ -933,7 +920,7 @@ async function initialize() {
       layer.images=layerImages[i] ? [layerImages[i]] : [];
       const rectangles=rectangleSpecs(layer.objects,obj=>toWorldRect(obj,layer));
       for(const item of layer.objects) {
-        if(item.type==='image') drawSvgBackground(layer,item,textures[i]);
+        if(item.type==='image') drawImage(layer,item,textures[i]);
         if(item.type==='shape') drawShape(layer,item,rectangles);
       }
     }

@@ -22,11 +22,9 @@ python -m OneThreeOctave-SVG-Compare
 
 ```text
 assets/
-├── luoD.xlsx
-├── Fab.svg                 # 与首个 Sheet 同名：左侧上栏 CAD 背景
-├── Subfab.svg              # 与第二个 Sheet 同名：左侧下栏 CAD 背景
-├── PSD_base.svg            # 右侧上栏参考底图
-└── 1-3-Octave_base.svg     # 右侧下栏参考底图
+├── luoD.xlsx              # 两个 Sheet 各有一张内嵌图片，直接作为左侧背景
+├── PSD_base.svg           # 右侧 PSD 参考底图
+└── 1-3-Octave_base.svg    # 右侧倍频程参考底图
 ```
 
 请将旧的 `OneThreeOctave_base.svg` **在本地改名为 `1-3-Octave_base.svg`**。实际 XLSX 与 SVG 尚未提交到仓库，自动化测试使用临时样本。
@@ -37,7 +35,7 @@ assets/
 - 若存在 XLSX，则整个 `assets/` **只能存在一个有效 .xlsx**；忽略 `~$` 等 Excel 临时文件。
 - 该 XLSX 必须包含**恰好两个 Sheet**：第一个为 Fab、第二个为 Subfab。
 - **每个 Sheet 必须恰好包含一张 DrawingML 图片**；0 张或超过 1 张会停止启动并显示错误。
-- Sheet 中的单张 DrawingML 图片**只作定位锚点和原始范围参照**；程序不会提取或渲染其 PNG/JPG 像素，且不再提供 `/viewer/cad-image` 图片路由。**真实的左侧背景**从 `assets/<Sheet名>.svg` 读取（文件名不区分大小写且必须唯一）；没有对应 SVG 时不显示旧 PNG，形状仍按锚点绘制。原始 XLSX 文件不通过 HTTP 暴露。
+- 每个 Sheet 的单张 DrawingML 图片**作为左侧对应 CAD 分栏的真实背景**。服务端按需通过只读 `/viewer/cad-image/<层号>/<图片序号>` 提取该 PNG/JPG 等媒体，限制文件类型和解压后大小，客户端读取图片的真实像素宽高比。该图片在 XLSX 内的锚点左上角仍是形状坐标原点；原始 XLSX 文件不通过 HTTP 暴露。无需额外准备与 Sheet 同名的 SVG 背景。
 
 ## CAD 坐标与联动
 
@@ -46,7 +44,7 @@ assets/
 - 滚轮：两层同步缩放。
 - 右键拖动：两层同步平移。
 - 左键拖动：两层同步旋转。
-- 两个 CAD 区域改为**同名 Sheet 的 SVG 背景**。每个 SVG 优先从 `viewBox` 获取真实高宽比；缺失时退回 `width/height` 或浏览器测量。两层沿用**共同的 CAD 参考宽度**，SVG 的绘制高度按各自高宽比计算；`文本框/矩形/椭圆` 与背景使用**完全相同的每层 X/Y 坐标转换**（以 XLSX 图片锚点左上角为原点），因此图元在 SVG 背景上的相对位置保持一致。原 SVG 不会被修改。
+- 两个 CAD 区域各自使用**XLSX Sheet 内嵌图片**作为背景。先解码图片，再依据 `naturalWidth/naturalHeight` 获取图片的**真实长宽比**；无法读取时仅以 XLSX 图片锚点宽高比作为几何回退（不使用 Sheet 同名 SVG）。上下两栏以**共同的世界坐标图片宽度**保持两层相机缩放一致；每张图片的显示高度 = 共同宽度 × 图片真实高宽比。图片、文本框、矩形、椭圆**全部通过同一层的 X/Y 变换**，使各个图元在背景中的相对位置与 Excel 中一致，同时图片本身不被拉伸变形。
 - 仅上方 Fab 左上角显示带圆角边框的鼠标提示「滚轮缩放·右键拖动平移·左键拖动旋转」；与右上 ↺ 同为白色背景、14px 字号、36px 高，顶部对齐。Fab 与 Subfab 中间添加 8px、与主分隔条同色的固定横线（不可拖动）。
 - **文本框仅作为视觉与层级提示，不参与点击命中。** 矩形等普通形状使用左键短按选中；椭圆只允许右键短按选中；右键拖动依旧平移，不弹出菜单。
 - 鼠标**悬停文本框、矩形或测点**，左下角按实际几何包含关系显示 `**BODYv2**·20260704_SCN_B1·测点名称`（第一项文本框加粗）。不再显示工作簿与 Sheet 名；移到空白隐藏。文本框仅参与悬停，不参与鼠标点击选中。
@@ -90,4 +88,4 @@ python tests/run_tests.py
 
 与 `.github/workflows/test.yml` 使用相同的 unittest 测试组，分别由 Ubuntu/Python 3.12 和 Windows/Python 3.14 运行，并验证 `cad_viewer.js` 的模块语法。新增 XLSX alt/title 属性测试、BODYv2 子目录时间戳与成对图片安全匹配测试、图像比例尺与分隔条限位测试。测试覆盖图纸解析、零点转换、图片唯一性、形状分类、矩形 X/Y 高度后缀、旋转矩形面积重叠校验、圆与矩形的完全包含/部分相交/完全分离及多矩形相交终止、网页静态资源、两处拖动布局和 Bokeh 旧接口。另使用 `node --test tests/test_cad_geometry.mjs tests/test_cad_ui.mjs` 对实际浏览器共享的几何、层级选中与响应式 SVG 适配算法执行独立 JS 单元测试。通过与失败都自动生成并上传 `test_report.md`；main 的自动报告回写不会再次触发 CI。
 
-**真实 XLSX 图纸的图元与两张 SVG 的显示效果仍需要 Windows 浏览器视觉验证**，CI 无法代替实际资源检查。
+**真实 XLSX 内嵌图片与图元的相对位置，以及右侧两张 SVG 的叠加效果仍需要 Windows 浏览器视觉验证**，CI 无法代替实际资源检查。

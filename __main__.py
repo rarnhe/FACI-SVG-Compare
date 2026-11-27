@@ -30,13 +30,13 @@ if __package__:
     from .xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
     )
-    from .cad_service import build_cad_manifest
+    from .cad_service import build_cad_manifest, extract_embedded_image
     from .cad_svg_catalog import build_ellipse_svg_catalog
 else:
     from xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
     )
-    from cad_service import build_cad_manifest
+    from cad_service import build_cad_manifest, extract_embedded_image
     from cad_svg_catalog import build_ellipse_svg_catalog
 
 HOST = "127.0.0.1"
@@ -104,6 +104,27 @@ class EllipseSvgCatalogHandler(RequestHandler):
             return
         self.set_header("Cache-Control", "no-store")
         self.write(payload)
+
+
+class CadImageHandler(RequestHandler):
+    """Read only XLSX picture parts selected by trusted sheet/object indices."""
+
+    def initialize(self, state):
+        self.state = state
+
+    def get(self, layer, image_index):
+        try:
+            data, content_type = extract_embedded_image(
+                self.state["workbook"], self.state["sheets"],
+                int(layer), int(image_index),
+            )
+        except (ValueError, KeyError, FileNotFoundError, OSError):
+            self.send_error(404)
+            return
+        self.set_header("Content-Type", content_type)
+        self.set_header("Cache-Control", "no-store")
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.write(data)
 
 
 class PrivateWorkbookHandler(RequestHandler):
@@ -280,6 +301,7 @@ def main():
                 (r"/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/cad-layout\.json", CadManifestHandler, {"state": cad_state}),
+                (r"/viewer/cad-image/([0-9]+)/([0-9]+)", CadImageHandler, {"state": cad_state}),
                 (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)", EllipseSvgCatalogHandler,
                  {"state": cad_state}),
                 (r"/viewer/(index\.html|cad_viewer\.js|cad_geometry\.mjs|cad_ui\.mjs)", NoCacheIndexHandler, {"path": str(STATIC_DIR)}),

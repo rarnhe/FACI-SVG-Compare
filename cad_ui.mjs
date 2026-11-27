@@ -154,6 +154,18 @@ export function fitSvgPair(frameA, frameB, aspectA, aspectB) {
   return {width,heightA:width*ratioA,heightB:width*ratioB};
 }
 
+/** Prefer the actual decoded XLSX picture dimensions, not the cell anchor ratio. */
+export function imageAspectRatio(image, anchor) {
+  const width=Number(image?.naturalWidth || image?.width);
+  const height=Number(image?.naturalHeight || image?.height);
+  if(Number.isFinite(width) && width>0 && Number.isFinite(height) && height>0)
+    return height/width;
+  const fallbackWidth=Number(anchor?.width),fallbackHeight=Number(anchor?.height);
+  return Number.isFinite(fallbackWidth) && fallbackWidth>0 &&
+         Number.isFinite(fallbackHeight) && fallbackHeight>0
+    ? fallbackHeight/fallbackWidth : 1;
+}
+
 /**
  * Use the embedded picture's actual pixel aspect while both CAD sheets share
  * one world-space image width (same units/pixel across both cameras).

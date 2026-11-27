@@ -1,92 +1,23 @@
 """Read-only data for the linked Fab/Subfab CAD viewer.
 
-XLSX DrawingML image anchors are geometry references only; the visible
-backdrops are read-only SVG files from assets named after each worksheet.
-No XLSX media bytes are opened by the viewer.
+No XLSX is ever modified. Media is extracted on request from the workbook,
+rather than embedding large base64 images into a Bokeh/JSON document.
 """
 from __future__ import annotations
 
 from copy import deepcopy
-from math import isfinite
 from pathlib import Path
-from urllib.parse import quote
-import re
-import xml.etree.ElementTree as ET
+from zipfile import ZipFile
 
+SUPPORTED_IMAGE_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+}
+MAX_EMBEDDED_IMAGE_BYTES = 64 * 1024 * 1024
 REFERENCE_SVGS = (
     ("psd", "PSD_base.svg"),
     ("octave", "1-3-Octave_base.svg"),
 )
-
-
-SVG_VIEWBOX = re.compile(r"[\s,]+")
-SVG_LENGTH = re.compile(r"^\s*(\d+(?:\.\d+)?|\.\d+)(px|pt|pc|mm|cm|in)?\s*$", re.I)
-MAX_SHEET_SVG_BYTES = 32 * 1024 * 1024
-
-
-def _svg_length(value: str | None) -> float | None:
-    if not value:
-        return None
-    match = SVG_LENGTH.fullmatch(value)
-    if not match:
-        return None
-    unit_scale = {"px": 1, "pt": 96 / 72, "pc": 16,
-                  "mm": 96 / 25.4, "cm": 96 / 2.54, "in": 96}
-    result = float(match.group(1)) * unit_scale.get((match.group(2) or "px").lower(), 1)
-    return result if isfinite(result) and result > 0 else None
-
-
-def _svg_aspect(path: Path) -> float | None:
-    """Read SVG content metadata only, prefer viewBox over presentation size."""
-    try:
-        if path.stat().st_size > MAX_SHEET_SVG_BYTES:
-            return None
-        root = ET.fromstring(path.read_bytes())
-        if root.tag.rsplit("}", 1)[-1].lower() != "svg":
-            return None
-        view_box = root.attrib.get("viewBox", "").strip()
-        if view_box:
-            values = SVG_VIEWBOX.split(view_box)
-            if len(values) == 4:
-                width, height = float(values[2]), float(values[3])
-                if isfinite(width) and isfinite(height) and width > 0 and height > 0:
-                    return height / width
-        width = _svg_length(root.attrib.get("width"))
-        height = _svg_length(root.attrib.get("height"))
-        return height / width if width and height else None
-    except (OSError, ValueError, ET.ParseError, OverflowError):
-        return None
-
-
-def sheet_svg_metadata(asset_dir: Path, sheet_name: str) -> dict:
-    """Locate an assets/<sheet>.svg safely, with unique case-insensitive fallback.
-
-    The XLSX embedded picture's anchor remains the only coordinate origin;
-    its pixel media is never the displayed backdrop.
-    """
-    empty = {"available": False, "url": None, "aspect_ratio": None}
-    if not isinstance(sheet_name, str) or not sheet_name.strip():
-        return empty
-    if (sheet_name in {".", ".."} or any(c in sheet_name for c in ("/", ":", chr(92))) or chr(0) in sheet_name):
-        return empty
-    base = asset_dir.resolve()
-    if not asset_dir.is_dir():
-        return empty
-    expected = f"{sheet_name}.svg"
-    matching = sorted((
-        p for p in asset_dir.iterdir()
-        if p.is_file() and not p.is_symlink()
-        and p.name.casefold() == expected.casefold()
-        and p.resolve().parent == base
-    ), key=lambda p: p.name)
-    if len(matching) != 1:
-        return empty
-    target = matching[0]
-    return {
-        "available": True,
-        "url": "/viewer/assets/" + quote(target.name, safe=""),
-        "aspect_ratio": _svg_aspect(target),
-    }
 
 
 def build_cad_manifest(workbook: Path | None, sheets: list[dict],
@@ -111,8 +42,6 @@ def build_cad_manifest(workbook: Path | None, sheets: list[dict],
             "available": source is not None,
             "objects": [],
             "image_origin_emu": None,
-            "background_svg": sheet_svg_metadata(asset_dir, source["sheet"])
-                if source else {"available": False, "url": None, "aspect_ratio": None},
         }
         if source:
             images = [item for item in source["objects"] if item["type"] == "image"]
@@ -137,8 +66,34 @@ def build_cad_manifest(workbook: Path | None, sheets: list[dict],
                     }
                     for point in obj["vertices_px"]
                 ]
+                if (item.get("type") == "image" and item.get("image_part")
+                        and Path(item["image_part"]).suffix.lower() in SUPPORTED_IMAGE_TYPES):
+                    obj["image_url"] = f"/viewer/cad-image/{layer_index}/{object_index}"
                 layer["objects"].append(obj)
         manifest["layers"].append(layer)
     return manifest
 
 
+def extract_embedded_image(workbook: Path | None, sheets: list[dict],
+                           layer_index: int, object_index: int) -> tuple[bytes, str]:
+    """Read a single known image part, with bounds/type/size checks."""
+    if workbook is None or layer_index not in (0, 1) or layer_index >= len(sheets):
+        raise ValueError("Unknown CAD layer")
+    objects = sheets[layer_index]["objects"]
+    if object_index < 0 or object_index >= len(objects):
+        raise ValueError("Unknown CAD object")
+    obj = objects[object_index]
+    if obj.get("type") != "image" or not obj.get("image_part"):
+        raise ValueError("CAD object does not contain an embedded image")
+    part = obj["image_part"]
+    content_type = SUPPORTED_IMAGE_TYPES.get(Path(part).suffix.lower())
+    if content_type is None or not part.startswith("xl/media/"):
+        raise ValueError("Unsupported embedded drawing format")
+    with ZipFile(workbook) as package:
+        info = package.getinfo(part)
+        if info.file_size > MAX_EMBEDDED_IMAGE_BYTES:
+            raise ValueError("Embedded image exceeds the 64 MiB safety limit")
+        data = package.read(info)
+    if len(data) > MAX_EMBEDDED_IMAGE_BYTES:
+        raise ValueError("Embedded image exceeds the 64 MiB safety limit")
+    return data, content_type
