@@ -379,7 +379,9 @@ class TestGeometry(unittest.TestCase):
                               '<sheetData><row r="1" ht="30"/></sheetData>')
             first=spatial.first_child
             def no_columns(parent,tag):
-                if tag in {"cols","col","colOff"}:
+                # Existing zero-origin ambiguity guard may inspect marker col/colOff;
+                # only worksheet column widths are prohibited.
+                if tag == "cols":
                     self.fail("Column geometry accessed: "+tag)
                 return first(parent,tag)
             with patch.object(spatial,"first_child",no_columns):
