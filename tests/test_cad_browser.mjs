@@ -545,6 +545,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     assert.ok(secondAlignment.top>firstAlignment.top,'submenu must follow the selected date row');
     assert.equal(await stage.locator('.cad-axis-description').textContent(),'第一条说明');
     const shortPanel=await stage.locator('.cad-axis-description').evaluate(el=>({w:el.offsetWidth,h:el.offsetHeight}));
+    assert.equal(shortPanel.w,150,'short description minimum width');
     assert.ok(longPanel.w>shortPanel.w,JSON.stringify({longPanel,shortPanel}));
     assert.equal(longPanel.h,shortPanel.h);
     assert.equal(shortPanel.h,await stage.locator('.cad-submenu').evaluate(el=>el.offsetHeight));
@@ -555,6 +556,15 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       arrow:el.querySelector('.cad-menu-arrow').textContent
     }));
     assert.deepEqual(compact,{gap:3,arrow:'>'});
+    const rowMetrics=await stage.evaluate(el=>{
+      const rows=[...el.querySelectorAll('.cad-context-menu button,.cad-submenu button')];
+      return rows.map(row=>({font:getComputedStyle(row).fontSize,line:getComputedStyle(row).lineHeight,
+        height:row.getBoundingClientRect().height,family:getComputedStyle(row).fontFamily}));
+    });
+    assert.ok(rowMetrics.length>=5);
+    for(const metrics of rowMetrics) assert.deepEqual(metrics,rowMetrics[0]);
+    assert.equal(rowMetrics[0].font,'13px');
+    assert.equal(rowMetrics[0].height,28);
     const toggle=stage.locator('.cad-submenu').getByRole('menuitemcheckbox',{name:'X',exact:true});
     assert.equal(await toggle.getAttribute('aria-checked'),'false');
     await toggle.click();

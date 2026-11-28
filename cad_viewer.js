@@ -493,8 +493,10 @@ function positionAxisPanels(layer) {
   if(!description.hidden) {
     description.style.height=ph+'px';
     const maxWidth=Math.max(1,W-2*margin-pw-gap);
-    let lo=Math.min(56,maxWidth),hi=maxWidth;
-    while(hi-lo>1) {
+    // 150 CSS px is the preferred minimum, except when the stage itself
+    // cannot accommodate it. Only expand when the note actually overflows.
+    let lo=Math.min(150,maxWidth),hi=maxWidth;
+    while(lo<hi) {
       const mid=Math.floor((lo+hi)/2);
       description.style.width=mid+'px';
       if(description.scrollHeight<=description.clientHeight && description.scrollWidth<=description.clientWidth) hi=mid;
@@ -508,7 +510,8 @@ function positionAxisPanels(layer) {
   // If neither side can fit a long note, relocate the whole group below or
   // above the primary menu when that makes the full stage width available.
   if(wanted && Math.max(rightSpace,leftSpace)<required &&
-      (my+mh+gap+ph<=H-margin || my-gap-ph>=margin)) side='fallback';
+      ((my+mh+gap+ph<=H-margin || my-gap-ph>=margin) ||
+       Math.max(rightSpace,leftSpace)<pw+gap+Math.min(150,wanted))) side='fallback';
   const available=side==='right'?rightSpace:side==='left'?leftSpace:W-2*margin;
   const dw=wanted?Math.max(0,Math.min(wanted,available-pw-gap)):0;
   description.style.width=dw+'px';
