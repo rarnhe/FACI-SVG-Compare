@@ -80,7 +80,37 @@ test('Chromium renders every CAD outline and scales octave points around their c
       el.dispatchEvent(ev);
       return ev.defaultPrevented;
     },options);
-    const before=await state();
+    // Capture only fully settled layout/camera state in a single browser
+    // evaluation. Require consecutive animation frames with matching metrics
+    // and camera state rather than relying on a fixed sleep or a second RPC.
+    const settledState=async(expectedDpr=1,expectedWidth=1400,expectedHeight=950)=>{
+      const handle=await page.waitForFunction(async({dpr,width,height})=>{
+        const {layers,userCadZoom}=await import('/viewer/cad_viewer.js');
+        const snapshot=()=>{
+          const page=Number(document.documentElement.style.zoom||1);
+          const render=layers.map(l=>({ratio:l.renderer.getPixelRatio(),
+            width:l.renderer.domElement.width,height:l.renderer.domElement.height,
+            w:l.stage.clientWidth,h:l.stage.clientHeight,
+            cameraW:l.camera.right-l.camera.left,cameraH:l.camera.top-l.camera.bottom}));
+          return {userCadZoom,dpr:window.devicePixelRatio,page,zoom:layers.map(l=>l.camera.zoom),
+            render,left:document.getElementById('cad-pane').getBoundingClientRect().width,
+            right:document.getElementById('reference-pane').getBoundingClientRect().width,
+            viewport:[innerWidth,innerHeight]};
+        };
+        const ready=s=>s.dpr===dpr&&s.viewport[0]===width&&s.viewport[1]===height&&
+          s.render.length===2&&s.render.every(m=>
+            Math.abs(m.ratio-Math.min(2,Math.max(0.1,dpr*s.page)))<1e-9&&
+            Math.abs(m.width-m.w*m.ratio)<1&&Math.abs(m.height-m.h*m.ratio)<1&&
+            m.cameraW===m.w&&m.cameraH===m.h)&&s.zoom[0]===s.zoom[1];
+        const a=snapshot();
+        if(!ready(a)) return false;
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        const b=snapshot();
+        return ready(b)&&JSON.stringify(a)===JSON.stringify(b)?b:false;
+      },{dpr:expectedDpr,width:expectedWidth,height:expectedHeight},{timeout:15000});
+      try{return await handle.jsonValue();}finally{await handle.dispose();}
+    };
+    const before=await settledState();
     assert.equal(await wheel('#fab-stage canvas',{}),true);
     const cadZoom=await state();
     assert.equal(cadZoom.page,1);
@@ -94,8 +124,7 @@ test('Chromium renders every CAD outline and scales octave points around their c
       assert.ok(Math.abs(after.left+after.right+8*after.page-1400)<3,'page still fills viewport');
     }
     for(const selector of ['#fab-stage canvas','#subfab-stage canvas','#reference-pane']){
-      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-      const old=await state();
+      const old=await settledState();
       assert.equal(await wheel(selector,{ctrlKey:true,buttons:1}),false);
       const after=await state();
       assert.equal(after.page,old.page);
@@ -105,36 +134,25 @@ test('Chromium renders every CAD outline and scales octave points around their c
     // wheel delta for the same three application zoom steps.
     for(let i=0;i<3;i++) await wheel('#reference-pane',{buttons:1,deltaY:100});
     assert.ok(Math.abs((await state()).page-1)<1e-8);
-    await page.waitForTimeout(100);
     // Emulate the combined CSS viewport and physical pixel changes produced
     // by browser zoom. This is not native browser chrome zoom.
     const cdp=await page.context().newCDPSession(page);
-    const stable=await state();
+    const stable=await settledState();
     for(const [dpr,width,height] of [[1.5,933,633],[0.75,1867,1267],[2,700,475],[1,1400,950]]) {
       await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:dpr,mobile:false});
-      await page.waitForFunction(async expected=>{
-        const {layers}=await import('/viewer/cad_viewer.js');
-        return window.devicePixelRatio===expected && layers.every(l=>
-          l.renderer.getPixelRatio()===expected &&
-          Math.abs(l.renderer.domElement.width-l.stage.clientWidth*expected)<1 &&
-          Math.abs(l.renderer.domElement.height-l.stage.clientHeight*expected)<1 &&
-          l.camera.right-l.camera.left===l.stage.clientWidth &&
-          l.camera.top-l.camera.bottom===l.stage.clientHeight);
-      },dpr);
-      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-      const resized=await state();
+      const resized=await settledState(dpr,width,height);
       assert.ok(Math.abs(resized.userCadZoom-stable.userCadZoom)<1e-9);
       assert.equal(resized.zoom[0],resized.zoom[1]);
       await wheel('#fab-stage canvas',{});
-      const enlarged=await state();
+      const enlarged=await settledState(dpr,width,height);
       assert.ok(Math.abs(enlarged.userCadZoom/resized.userCadZoom-1.1)<1e-9);
       assert.equal(enlarged.zoom[0],enlarged.zoom[1]);
       assert.ok(Math.abs(enlarged.zoom[0]/resized.zoom[0]-1.1)<1e-9);
       await wheel('#subfab-stage canvas',{deltaY:100});
-      assert.ok(Math.abs((await state()).userCadZoom-stable.userCadZoom)<1e-8);
+      assert.ok(Math.abs((await settledState(dpr,width,height)).userCadZoom-stable.userCadZoom)<1e-8);
     }
     // Large wheel deltas after browser zoom must not collapse the scene.
-    const prior=await state();
+    const prior=await settledState();
     await wheel('#fab-stage canvas',{deltaY:12000});
     const reduced=await state();
     assert.ok(Math.abs(reduced.userCadZoom/prior.userCadZoom-1/1.1)<1e-9);
@@ -144,15 +162,23 @@ test('Chromium renders every CAD outline and scales octave points around their c
     // Restore the original explicit viewport too: clearing CDP overrides
     // can expose the browser window's default viewport instead of 1400x950.
     await page.setViewportSize({width:1400,height:950});
-    await page.waitForFunction(async expected=>{
-      const {layers,userCadZoom}=await import('/viewer/cad_viewer.js');
-      return window.devicePixelRatio===1 && innerWidth===1400 && innerHeight===950 &&
-        Math.abs(userCadZoom-expected.userCadZoom)<1e-8 &&
-        layers.every((l,i)=>l.stage.clientWidth===expected.render[i].w &&
-          l.stage.clientHeight===expected.render[i].h &&
-          Math.abs(l.camera.zoom-expected.zoom[i])<1e-8);
-    },stable);
-    assert.ok(Math.abs((await state()).zoom[0]-stable.zoom[0])<1e-8);
+    const restored=await settledState();
+    // Compare snapshots only after the original layout is truly restored.
+    // CSS zoom may leave fractional layout rounding across platforms; check
+    // the actual fit scale independently instead of assuming identical pixels.
+    assert.ok(Math.abs(restored.userCadZoom-stable.userCadZoom)<1e-8,
+      JSON.stringify({stable,restored}));
+    assert.equal(restored.zoom[0],restored.zoom[1]);
+    for(let i=0;i<2;i++){
+      assert.ok(Math.abs(restored.render[i].w-stable.render[i].w)<=1 &&
+        Math.abs(restored.render[i].h-stable.render[i].h)<=1,JSON.stringify({stable,restored}));
+    }
+    // Synthetic manifest has two 420x240 images; fit is shared from Fab.
+    const fit=s=>Math.min(s.render[0].w/(420*1.1),s.render[0].h/(240*1.1));
+    assert.ok(Math.abs(stable.zoom[0]-fit(stable)*stable.userCadZoom)<1e-8,JSON.stringify(stable));
+    assert.ok(Math.abs(restored.zoom[0]-fit(restored)*stable.userCadZoom)<1e-8,JSON.stringify(restored));
+    assert.ok(Math.abs(restored.zoom[0]-stable.zoom[0])<=stable.userCadZoom/(240*1.1)+1e-8,
+      JSON.stringify({stable,restored}));
     const rendered=await page.evaluate(async()=>{
       const {layers}=await import('/viewer/cad_viewer.js');
       const THREE=await import('three');

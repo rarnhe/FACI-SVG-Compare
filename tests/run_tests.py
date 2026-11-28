@@ -47,6 +47,11 @@ def format_report(result, seconds, exception=None):
 
 
 def main():
+    # Windows redirected stdout/stderr can use a legacy code page. Preserve
+    # Unicode failure details and keep the runner/report alive on that host.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     started = time.monotonic()
     result, error = None, None
     try:
