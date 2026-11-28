@@ -25,6 +25,10 @@ let baseFitScale = 1;
 export let userCadZoom = 1;
 const MIN_USER_ZOOM = 0.01, MAX_USER_ZOOM = 100;
 let resizePending = false;
+let lastCadMetrics = '';
+function cadMetricsKey() {
+  return [effectivePixelRatio(),window.devicePixelRatio,pageZoom,...layers.flatMap(l=>[l.stage.clientWidth,l.stage.clientHeight,l.stage.getBoundingClientRect().width,l.stage.getBoundingClientRect().height])].join(':');
+}
 const textTextures = [];
 let lastRenderRatio = 0;
 function effectivePixelRatio() {
@@ -54,7 +58,22 @@ window.addEventListener('wheel',event=>{
     if(event.target.closest?.('.cad-layer canvas')) event.stopImmediatePropagation();
     return; // never prevent browser default
   }
-  if(!leftHeld || !event.deltaY) return;
+  if(!event.deltaY) return;
+  if(!leftHeld) {
+    const layer=layers.find(l=>l.renderer.domElement===event.target);
+    if(!layer) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    // Never let OrbitControls reinterpret a browser-zoom wheel sequence.
+    // Flush current layout before applying a bounded, relative CAD step.
+    resizeCadLayers();
+    const pixels=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?100:1);
+    if(!Number.isFinite(pixels)) return;
+    const step=Math.max(-100,Math.min(100,pixels));
+    userCadZoom=Math.max(MIN_USER_ZOOM,Math.min(MAX_USER_ZOOM,userCadZoom*Math.exp(-step*Math.log(1.1)/100)));
+    applySharedZoom();
+    return;
+  }
   event.preventDefault();
   event.stopImmediatePropagation();
   // Do not interpret the subsequent release as a shape selection.
@@ -75,6 +94,7 @@ function createLayer(stageId) {
   camera.up.set(0,1,0);
   const controls = new OrbitControls(camera,renderer.domElement);
   controls.enableDamping = false;
+  // Wheel zoom is owned by our capture handler; middle-button dolly remains native.
   controls.screenSpacePanning = true;
   controls.enableRotate = true;
   controls.mouseButtons = {
@@ -103,14 +123,21 @@ function createLayer(stageId) {
 
 function synchronizeFrom(source) {
   if(syncing) return;
-  userCadZoom=Math.max(MIN_USER_ZOOM,Math.min(MAX_USER_ZOOM,source.camera.zoom/baseFitScale));
+  const expected=baseFitScale*userCadZoom;
+  if(Math.abs(source.camera.zoom-expected)>Math.abs(expected)*1e-12) {
+    userCadZoom=Math.max(MIN_USER_ZOOM,Math.min(MAX_USER_ZOOM,source.camera.zoom/baseFitScale));
+  }
+  const zoom=baseFitScale*userCadZoom;
   syncing=true;
   try {
     for(const layer of layers) {
-      if(layer===source) continue;
+      if(layer===source) {
+        if(layer.camera.zoom!==zoom) {layer.camera.zoom=zoom;layer.camera.updateProjectionMatrix();layer.controls.update();}
+        continue;
+      }
       layer.camera.position.copy(source.camera.position);
       layer.camera.quaternion.copy(source.camera.quaternion);
-      layer.camera.zoom=baseFitScale*userCadZoom;
+      layer.camera.zoom=zoom;
       layer.camera.updateProjectionMatrix();
       layer.controls.target.copy(source.controls.target);
       layer.controls.update();
@@ -614,19 +641,37 @@ function fitScale(width,height) {
   return Math.min(width/(dw*1.1),height/(dh*1.1));
 }
 
+function applySharedZoom() {
+  syncing=true;
+  try {
+    const zoom=baseFitScale*userCadZoom;
+    for(const layer of layers) {
+      layer.camera.zoom=zoom;
+      layer.camera.updateProjectionMatrix();
+      layer.controls.update();
+    }
+  } finally {syncing=false;}
+}
+
 function resizeCadLayers() {
   const stage=layers[0].stage;
   const w=Math.max(1,stage.clientWidth),h=Math.max(1,stage.clientHeight);
   // Both layers share a world-space scale; layout never changes user zoom.
   if(hasGeometry && stage.clientWidth>0 && stage.clientHeight>0) baseFitScale=fitScale(w,h);
   const ratio=effectivePixelRatio();
+  lastCadMetrics=cadMetricsKey();
   syncing=true;
   try {
     for(const layer of layers) {
       const width=Math.max(1,layer.stage.clientWidth);
       const height=Math.max(1,layer.stage.clientHeight);
       if(layer.renderer.getPixelRatio()!==ratio) layer.renderer.setPixelRatio(ratio);
-      layer.renderer.setSize(width,height,false);
+      const canvas=layer.renderer.domElement;
+      if(canvas.width!==Math.floor(width*ratio)||canvas.height!==Math.floor(height*ratio)) layer.renderer.setSize(width,height,false);
+      else {
+        const size=layer.renderer.getSize(new THREE.Vector2());
+        if(size.x!==width||size.y!==height) layer.renderer.setSize(width,height,false);
+      }
       layer.camera.left=-width/2;layer.camera.right=width/2;
       layer.camera.top=height/2;layer.camera.bottom=-height/2;
       layer.controls.minZoom=baseFitScale*MIN_USER_ZOOM;
@@ -1183,6 +1228,8 @@ async function initialize() {
 initialize();
 function animate() {
   requestAnimationFrame(animate);
+  // DPR-only transitions and delayed native browser layout are also covered.
+  if(cadMetricsKey()!==lastCadMetrics) resizeCadLayers();
   for(const layer of layers) {
     updateLayerOutlines(layer);
     layer.renderer.render(layer.scene,layer.camera);
