@@ -88,21 +88,27 @@ test('Chromium renders every CAD outline and scales octave points around their c
       let last=null;
       do {
         last=await page.evaluate(async({dpr,width,height})=>{
-        const {layers,userCadZoom}=await import('/viewer/cad_viewer.js');
+        const viewer=await import('/viewer/cad_viewer.js');
+        const {layers}=viewer;
         const snapshot=()=>{
           const page=Number(document.documentElement.style.zoom||1);
           const render=layers.map(l=>({ratio:l.renderer.getPixelRatio(),
             width:l.renderer.domElement.width,height:l.renderer.domElement.height,
             w:l.stage.clientWidth,h:l.stage.clientHeight,
             cameraW:l.camera.right-l.camera.left,cameraH:l.camera.top-l.camera.bottom}));
-          return {userCadZoom,dpr:window.devicePixelRatio,page,zoom:layers.map(l=>l.camera.zoom),
+          return {userCadZoom:viewer.userCadZoom,dpr:window.devicePixelRatio,page,zoom:layers.map(l=>l.camera.zoom),
             render,left:document.getElementById('cad-pane').getBoundingClientRect().width,
             right:document.getElementById('reference-pane').getBoundingClientRect().width,
             viewport:[innerWidth,innerHeight]};
         };
         const ready=s=>s.dpr===dpr&&s.viewport[0]===width&&s.viewport[1]===height&&
           s.render.length===2&&s.render.every(m=>
-            Math.abs(m.ratio-Math.min(2,Math.max(0.1,dpr*s.page)))<1e-9&&
+            // CSSOM serializes zoom to six significant digits (e.g.
+            // 1.56831), while the renderer uses the full internal value
+            // (1.5683121854901685). Allow only that serialization error;
+            // the DPR=1 / CSS zoom=1 baseline still uses a tight tolerance.
+            Math.abs(m.ratio-Math.min(2,Math.max(0.1,dpr*s.page)))<=
+              (s.page===1?1e-9:5.1e-6*dpr)&&
             Math.abs(m.width-m.w*m.ratio)<1&&Math.abs(m.height-m.h*m.ratio)<1&&
             m.cameraW===m.w&&m.cameraH===m.h)&&s.zoom[0]===s.zoom[1];
         const a=snapshot();
@@ -132,7 +138,7 @@ test('Chromium renders every CAD outline and scales octave points around their c
     for(const selector of ['#fab-stage canvas','#subfab-stage canvas','#reference-pane']){
       const old=await settledState();
       assert.equal(await wheel(selector,{ctrlKey:true,buttons:1}),false);
-      const after=await state();
+      const after=await settledState();
       assert.equal(after.page,old.page);
       assert.deepEqual(after.zoom,old.zoom);
     }
