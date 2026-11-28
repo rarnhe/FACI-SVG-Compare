@@ -5,7 +5,7 @@ import { rectangleHeight, rectangleSpecs, ellipseElevation, worldRectFromEmu, re
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
-  requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
+  requiredSvgRatio, canAddOverlay, fitLegendSubmenu,
   restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
   cadOutlineSpec, cadOutlineSegments,
   rectangleHasAltText, planarOutlineVertices,
@@ -28,7 +28,6 @@ const svgHistory = document.getElementById('reference-log');
 const legendMenu = document.getElementById('legend-context-menu');
 const overlaySelections = new Map();
 const overlayLoads = new Set();
-let colorCursor=0;
 let displayedSvgWidth = 0;
 
 function createLayer(stageId) {
@@ -402,7 +401,7 @@ function showAxisSubmenu(layer,button,date,catalog) {
       try {
         const label=svgLegendName(catalog,axis);
         const key=svgSelectionKey(catalog,date,axis);
-        await switchReferencePair(pair,key,label);
+        await switchReferencePair(pair,key,label,catalog.csv_files?.[date]?.[axis]??[]);
         closeContextMenus();
       } catch(error) {
         console.error('Unable to switch SVG pair:',error);
@@ -742,19 +741,19 @@ async function makeColoredPair(sourcePair,style) {
   }
 }
 
-async function switchReferencePair(pair,key,label) {
+async function switchReferencePair(pair,key,label,csvFiles=[]) {
   // Internally dedupe by actual date as well as named shape and axis.
   if(!canAddOverlay(overlaySelections,overlayLoads,key)) return false;
   overlayLoads.add(key);
   try {
-    const color=nextLegendColor(colorCursor++);
-    const style=mergeSvgStyle({color});
+    const color='#808080';
+    const style=mergeSvgStyle({color:null});
     const previews=await makeColoredPair(pair,style);
     if(overlaySelections.has(key)) {
       releaseColoredPair(previews);
       return false;
     }
-    const entry={sourcePair:{psd:pair.psd,octave:pair.octave},color,style,saving:false};
+    const entry={sourcePair:{psd:pair.psd,octave:pair.octave},color,style,saving:false,csvFiles,downloading:false};
     for(const key of ['psd','octave']) {
       const preview=previews[key],element=document.createElement('img');
       element.alt='';
@@ -839,8 +838,8 @@ async function changeLegendStyle(key,patch) {
       entry[key].blobUrl=next[key].blobUrl;
     }
     entry.style=style;
-    entry.color=style.color;
-    entry.legend.style.color=style.color;
+    entry.color=style.color??'#808080';
+    entry.legend.style.color=entry.color;
     fitSvgHeightToPane();
     legendMenu.hidden=true;
     releaseColoredPair(previous);
@@ -850,6 +849,42 @@ async function changeLegendStyle(key,patch) {
     window.alert('SVG 样式调整失败：'+error.message);
   } finally {
     entry.saving=false;
+  }
+}
+
+async function downloadLegendCsv(entry) {
+  if(entry.downloading) return;
+  if(!entry.csvFiles.length) {
+    window.alert('没有符合当前测点、时间和方向的 CSV 文件');
+    return;
+  }
+  entry.downloading=true;
+  const failures=[];
+  try {
+    for(const file of entry.csvFiles) {
+      let url;
+      try {
+        const response=await fetch(file.url);
+        if(!response.ok) throw new Error('HTTP '+response.status);
+        url=URL.createObjectURL(await response.blob());
+        const link=document.createElement('a');
+        link.href=url;
+        link.download=file.name;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        // Allow the browser to consume the object URL before revoking it.
+        const heldUrl=url;
+        setTimeout(()=>URL.revokeObjectURL(heldUrl),30000);
+        url=null;
+      } catch(error) {
+        if(url) URL.revokeObjectURL(url);
+        failures.push(file.name+': '+error.message);
+      }
+    }
+    if(failures.length) window.alert('部分 CSV 下载失败：'+failures.join('\n'));
+  } finally {
+    entry.downloading=false;
   }
 }
 
@@ -884,22 +919,38 @@ function showLegendMenu(key,x,y) {
         secondary.append(item);
       }
       secondary.hidden=false;
-      const primaryWidth=primary.offsetWidth, popupWidth=secondary.offsetWidth;
-      secondary.style.left=(parseFloat(legendMenu.style.left||'0')
-        +primaryWidth+popupWidth<=pane.clientWidth ? primaryWidth : -popupWidth)+'px';
-      secondary.style.top=Math.max(0,Math.min(
-        button.offsetTop,pane.clientHeight-secondary.offsetHeight-
-        parseFloat(legendMenu.style.top||'0')))+'px';
+      secondary.style.maxWidth=pane.clientWidth+'px';
+      secondary.style.maxHeight=pane.clientHeight+'px';
+      secondary.style.minWidth=Math.min(118,pane.clientWidth)+'px';
+      const menuRect=legendMenu.getBoundingClientRect();
+      const buttonRect=button.getBoundingClientRect();
+      const paneRect=pane.getBoundingClientRect();
+      const pos=fitLegendSubmenu(pane.clientWidth,pane.clientHeight,
+        {x:menuRect.left-paneRect.left,y:menuRect.top-paneRect.top,width:menuRect.width},
+        {y:buttonRect.top-paneRect.top},
+        {width:secondary.offsetWidth,height:secondary.offsetHeight});
+      // Absolute child coordinates are relative to the parent's padding box.
+      secondary.style.left=(pos.x-(menuRect.left-paneRect.left)-legendMenu.clientLeft)+'px';
+      secondary.style.top=(pos.y-(menuRect.top-paneRect.top)-legendMenu.clientTop)+'px';
     });
     primary.append(button);
   }
   submenu('颜色','color',SVG_COLOR_CHOICES);
   submenu('线型','lineStyle',SVG_LINE_TYPES);
   submenu('线宽','lineWidth',SVG_LINE_WIDTHS.map(value=>({label:String(value),value})));
+  const download=document.createElement('button');
+  download.type='button';
+  download.setAttribute('role','menuitem');
+  download.textContent='下载';
+  download.addEventListener('click',()=>{
+    legendMenu.hidden=true;
+    void downloadLegendCsv(entry);
+  });
+  primary.append(download);
   const close=document.createElement('button');
   close.type='button';
   close.setAttribute('role','menuitem');
-  close.textContent='退出';
+  close.textContent='关闭';
   close.addEventListener('click',()=>removeReferenceOverlay(key));
   primary.append(close);
   legendMenu.hidden=false;

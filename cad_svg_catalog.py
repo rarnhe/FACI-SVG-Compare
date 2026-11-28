@@ -96,6 +96,7 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
         "target_kind": "rectangle" if rectangle is not None else "ellipse",
         "dates": [],
         "pairs": {},
+        "csv_files": {},
     }
     if root is None or not search_identifier:
         return result
@@ -104,6 +105,11 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
         (p for p in root.iterdir() if p.is_file() and not p.is_symlink()
          and p.suffix.lower() == ".svg"),
         key=lambda p: p.name.casefold()
+    )
+    csv_entries = sorted(
+        (p for p in root.iterdir() if p.is_file() and not p.is_symlink()
+         and p.suffix.lower() == ".csv" and name_matches(p.name, search_identifier)),
+        key=lambda p: (p.name.casefold(), p.name),
     )
     # A timestamp is valid only when the same SVG filename matches
     # the rectangle (inside/partial case) or the textbox (outside case).
@@ -132,4 +138,11 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
             if all(matching.values()):
                 axes[axis] = matching
         result["pairs"][date] = axes
+        result["csv_files"][date] = {
+            axis: [{"name": p.name, "url": "/viewer/assets/" + quote(folder_name, safe="")
+                    + "/" + quote(p.name, safe="")}
+                   for p in csv_entries if date in TIMESTAMP.findall(p.name)
+                   and axis in [m.group(1).upper() for m in AXIS.finditer(p.name)]]
+            for axis in axes
+        }
     return result

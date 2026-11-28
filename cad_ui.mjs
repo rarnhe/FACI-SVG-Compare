@@ -360,9 +360,9 @@ export const SVG_LINE_TYPES=Object.freeze([
 ].map(Object.freeze));
 
 export function mergeSvgStyle(previous,patch={}) {
-  const style={color:previous.color,lineWidth:previous.lineWidth??null,
+  const style={color:previous.color??null,lineWidth:previous.lineWidth??null,
     lineStyle:previous.lineStyle??null,...patch};
-  if(!SVG_COLORS.includes(style.color) ||
+  if((style.color!==null && !SVG_COLORS.includes(style.color)) ||
     (style.lineWidth!==null && !SVG_LINE_WIDTHS.includes(style.lineWidth)) ||
     (style.lineStyle!==null && !SVG_LINE_TYPES.some(type=>type.value===style.lineStyle)))
     throw new RangeError('Unsupported SVG style');
@@ -570,6 +570,7 @@ export function restyleSvgMarkup(source,requested,kind='psd') {
   const xml=new DOMParser().parseFromString(source,'image/svg+xml');
   if(xml.getElementsByTagName('parsererror').length ||
      xml.documentElement?.localName!=='svg') throw new Error('Cannot parse original SVG source');
+  if(style.color===null && style.lineWidth===null && style.lineStyle===null) return source;
   const curves=kind==='octave'?octaveLineNodes(xml):svgCurveNodes(xml);
   const points=kind==='octave'?octavePointNodes(xml):[];
   const pointScale=kind==='octave'?octavePointScale(xml,curves,style.lineWidth):1;
@@ -578,10 +579,10 @@ export function restyleSvgMarkup(source,requested,kind='psd') {
   if(!curves.length && kind!=='octave') {
     if(style.lineWidth!==null || style.lineStyle!==null)
       throw new Error('未识别到可修改线型或线宽的频谱曲线');
-    return recolorSvgMarkup(source,style.color);
+    return style.color===null?source:recolorSvgMarkup(source,style.color);
   }
   for(const node of curves) {
-    const properties=[['stroke',style.color]];
+    const properties=style.color===null?[]:[['stroke',style.color]];
     if(style.lineWidth!==null) properties.push(['stroke-width',String(style.lineWidth)]);
     if(style.lineStyle!==null) {
       // Keep the pattern visible at wider widths; values are SVG user units.
@@ -595,7 +596,7 @@ export function restyleSvgMarkup(source,requested,kind='psd') {
     applySvgPaint(node,properties);
   }
   if(kind==='octave') {
-    recolorOctaveGeometry(xml,style.color);
+    if(style.color!==null) recolorOctaveGeometry(xml,style.color);
     scaleOctavePoints(xml,points,pointScale);
   }
   return new XMLSerializer().serializeToString(xml);
@@ -652,4 +653,13 @@ export function planarOutlineVertices(kind,width,height,z=0.7) {
   }
   const hw=width/2,hh=height/2;
   return [[-hw,hh,z],[hw,hh,z],[hw,-hh,z],[-hw,-hh,z]];
+}
+
+/** Clamp a popup in the reference pane, including a negative relative
+ * offset when its parent menu is already near the bottom edge. */
+export function fitLegendSubmenu(paneWidth,paneHeight,primary,button,popup) {
+  const clamp=(v,max)=>Math.max(0,Math.min(v,Math.max(0,max)));
+  const right=primary.x+primary.width;
+  const x=right+popup.width<=paneWidth?right:primary.x-popup.width;
+  return {x:clamp(x,paneWidth-popup.width),y:clamp(button.y,paneHeight-popup.height)};
 }

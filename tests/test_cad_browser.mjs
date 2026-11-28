@@ -357,6 +357,39 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       for(const suffix of ['PSD','1-3-Octave'])
         assert.ok(fetched.includes('/viewer/assets/BODYv2/'+label+'_'+date+'_+'+axis+'_'+suffix+'.svg'));
     assert.equal(fetched.length,6,'only six distinct immutable SVG sources');
+    const legend=page.locator('.reference-log-line').first();
+    const menu=page.locator('#legend-context-menu');
+    assert.equal(await legend.evaluate(el=>getComputedStyle(el).color),'rgb(128, 128, 128)');
+    const original=await page.locator('#psd-overlays img').first().evaluate(async el=>await (await fetch(el.src)).text());
+    assert.ok(original.includes('stroke="#123456"'));
+    await legend.click({button:'right'});
+    await menu.getByRole('menuitem',{name:'颜色 ›'}).click();
+    assert.equal(await menu.locator('[aria-checked="true"]').count(),0);
+    const fit=await menu.locator('.legend-menu-secondary').evaluate(el=>{
+      const a=el.getBoundingClientRect(),b=document.getElementById('reference-pane').getBoundingClientRect();
+      return a.left>=b.left-1&&a.top>=b.top-1&&a.right<=b.right+1&&a.bottom<=b.bottom+1;
+    });
+    assert.equal(fit,true);
+    await menu.getByRole('menuitem',{name:'线宽 ›'}).click();
+    await menu.getByRole('menuitemradio',{name:'3',exact:true}).click();
+    await menu.waitFor({state:'hidden'});
+    assert.equal(await legend.evaluate(el=>getComputedStyle(el).color),'rgb(128, 128, 128)');
+    const styled=await page.locator('#psd-overlays img').first().evaluate(async el=>await (await fetch(el.src)).text());
+    assert.ok(styled.includes('#123456'));
+    await legend.click({button:'right'});
+    const downloads=[];
+    const onDownload=d=>downloads.push(d);
+    page.on('download',onDownload);
+    await menu.getByRole('menuitem',{name:'下载',exact:true}).click();
+    for(let i=0;i<100&&downloads.length<2;i++) await new Promise(r=>setTimeout(r,100));
+    page.off('download',onDownload);
+    assert.deepEqual(downloads.map(d=>d.suggestedFilename()),[
+      'R_Cube_20260704101627_+X_a.csv','R_Cube_20260704101627_+X_b.csv']);
+    for(const d of downloads) assert.equal(await d.failure(),null);
+    await legend.click({button:'right'});
+    await menu.getByRole('menuitem',{name:'关闭',exact:true}).click();
+    assert.equal(await page.locator('#psd-overlays img').count(),3);
+    assert.equal(await page.locator('#octave-overlays img').count(),3);
     assert.deepEqual(errors,[]);
   }finally{
     await browser?.close();

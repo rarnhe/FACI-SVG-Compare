@@ -32,6 +32,23 @@ def sample_objects(body="BODYv2"):
 
 
 class TestSvgCatalog(unittest.TestCase):
+    def test_csv_matches_exact_selected_pair_and_all_files(self):
+        with TemporaryDirectory() as tmp:
+            base=Path(tmp)
+            folder=base/"BODYv2"; folder.mkdir()
+            prefix="20260704_SCN_B1_20260704101627_+X"
+            for suffix in ("PSD.svg","1-3-Octave.svg","a.csv","b.CSV"):
+                (folder/f"{prefix}_{suffix}").write_text("data")
+            for name in ("20260704_SCN_B10_20260704101627_+X_a.csv",
+                         "20260704_SCN_B1_20260704101627_+Y_a.csv",
+                         "20260704_SCN_B1_20260705101627_+X_a.csv"):
+                (folder/name).write_text("wrong")
+            result=catalog.build_ellipse_svg_catalog(base,[{"sheet":"Fab","objects":sample_objects()}],0,2)
+            self.assertEqual(result["dates"],["20260704101627"])
+            files=result["csv_files"]["20260704101627"]["X"]
+            self.assertEqual([v["name"] for v in files],[prefix+"_a.csv",prefix+"_b.CSV"])
+            self.assertTrue(all("%2BX" in v["url"] for v in files))
+
     def test_enclosing_textbox_and_rectangle(self):
         objects=sample_objects()
         self.assertIs(catalog.enclosing_textbox(objects,objects[2]),objects[0])

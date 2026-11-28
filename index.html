@@ -57,7 +57,7 @@ html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
 .legend-menu-primary,.legend-menu-secondary{display:flex;flex-direction:column;gap:2px;align-items:stretch}
 .legend-menu-primary button{display:block;width:100%;text-align:left}
 .legend-menu-secondary{position:absolute;z-index:21;top:0;left:100%;min-width:118px;
-  max-height:min(75vh,460px);overflow-y:auto;white-space:nowrap;background:#fff;
+  box-sizing:border-box;max-height:min(75vh,460px);overflow:auto;white-space:nowrap;background:#fff;
   border:1px solid #9cabb7;box-shadow:0 4px 12px #0002;padding:4px}
 .legend-menu-secondary[hidden]{display:none}
 #legend-context-menu[hidden]{display:none}

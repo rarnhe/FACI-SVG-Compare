@@ -110,6 +110,9 @@ def main():
         ]:
             for suffix in ("PSD","1-3-Octave"):
                 (folder/f"{label}_{date}_+{axis}_{suffix}.svg").write_text(svg,encoding="utf-8")
+        for name in ("R_Cube_20260704101627_+X_a.csv","R_Cube_20260704101627_+X_b.csv",
+                     "R_Cube10_20260704101627_+X_wrong.csv","R_Cube_20260704101627_+Y_wrong.csv"):
+            (folder/name).write_text("frequency,value\n1,2\n",encoding="utf-8")
         app.STATIC_DIR=base
         state={"workbook":book,"sheets":sheets,
                "manifest":service.build_cad_manifest(book,sheets,assets)}

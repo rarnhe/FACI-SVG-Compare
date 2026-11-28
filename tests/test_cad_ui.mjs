@@ -9,7 +9,7 @@ import {
   CAD_DRAW_ORDER,cadShapeRenderOrder,cadShapeZOffset,
   textboxFont,layoutTextboxText,
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
-  SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
+  SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,fitLegendSubmenu,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
   cadOutlineSpec,recolorOctaveGeometry,octavePointScale,octavePointNodes,octaveLineNodes,
   cadOutlineSegments,rectangleHasAltText,planarOutlineVertices,
 } from '../cad_ui.mjs';
@@ -566,3 +566,14 @@ test('empty alternative text uses same planar outline coordinates as sensor geom
   assert.equal(circle[0][0],Math.hypot(80,40)/2);
 });
 
+
+test('original SVG color is unset, and width/dash do not select a color',()=>{
+  assert.deepEqual(mergeSvgStyle({}),{color:null,lineWidth:null,lineStyle:null});
+  assert.deepEqual(mergeSvgStyle({}, {lineWidth:3}),{color:null,lineWidth:3,lineStyle:null});
+});
+
+test('legend submenu fits below/above and on either side, even if neither side fits',()=>{
+  assert.deepEqual(fitLegendSubmenu(300,200,{x:230,width:70},{y:180},{width:118,height:160}),{x:112,y:40});
+  assert.deepEqual(fitLegendSubmenu(160,100,{x:30,width:100},{y:90},{width:118,height:100}),{x:0,y:0});
+  assert.deepEqual(fitLegendSubmenu(400,300,{x:20,width:90},{y:30},{width:118,height:100}),{x:110,y:30});
+});

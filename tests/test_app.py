@@ -339,7 +339,7 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertIn("mergeSvgStyle(entry.style,patch)",viewer)
         self.assertIn("entry.style=style",viewer)
         self.assertIn("recolorSvgMarkup(source,color)",helper)
-        self.assertIn("close.textContent='退出'",viewer)
+        self.assertIn("close.textContent='关闭'",viewer)
 
     def test_svg_catalog_labels_and_translucent_cuboids(self):
         viewer=(STATIC_DIR/"cad_viewer.js").read_text(encoding="utf-8")
