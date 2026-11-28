@@ -662,6 +662,27 @@ class TestGeometry(unittest.TestCase):
         })
         self.assertNotEqual(obj["text"],"z=0.5x")
 
+    def test_ellipse_time_descriptions_exact_lines(self):
+        marked = shape(name="椭圆14").replace(
+            'name="椭圆14"/>',
+            'name="椭圆14" descr="20260704101627-第一行_x000D_20260706101627 - 第二-行&#10;'
+            '120260704101627-不可匹配&#10;20260705101627-&#10;20260704101627-重复" '
+            'title="20260704101627-标题&#10;20260705101627-补充"/>',
+        ).replace('<a:xfrm rot="0"/>','<a:xfrm rot="0"/><a:prstGeom prst="ellipse"/>')
+        obj=self.parse(one_cell(marked))[0]["objects"][0]
+        self.assertEqual(obj["time_descriptions"],{
+            "20260704101627":"第一行",
+            "20260706101627":"第二行",
+            "20260705101627":"补充",
+        })
+        self.assertIn("\n",obj["alt_text"]["description"])
+
+    def test_ellipse_time_descriptions_empty_and_nonellipse(self):
+        ellipse=shape(name="椭圆14").replace('<a:xfrm rot="0"/>',
+            '<a:xfrm rot="0"/><a:prstGeom prst="ellipse"/>')
+        self.assertEqual(self.parse(one_cell(ellipse))[0]["objects"][0]["time_descriptions"],{})
+        self.assertNotIn("time_descriptions",self.parse(one_cell(shape()))[0]["objects"][0])
+
     def test_empty_alt_text_remains_separate_from_visible_shape_label(self):
         obj=self.parse(one_cell(shape(name="矩形B1_x0.5")))[0]["objects"][0]
         self.assertEqual(obj["alt_text"],{"description":"","title":""})

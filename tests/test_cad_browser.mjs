@@ -426,14 +426,19 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         document.querySelectorAll('#octave-overlays img').length===count &&
         document.getElementById('reference-log').textContent.includes(label),{label,count});
       await page.waitForFunction(el=>el.getAttribute('aria-checked')==='true',await axisItem.elementHandle());
+      const expectedNote=name==='Inside'?'第一条说明':name==='Partial'?'局部测点':'';
       const panels=await stage.evaluate(el=>{
         const p=el.querySelector('.cad-submenu'),d=el.querySelector('.cad-axis-description');
         const a=p.getBoundingClientRect(),b=d.getBoundingClientRect(),r=el.getBoundingClientRect();
-        return {same:Math.abs(a.height-b.height)<1,adjacent:b.left>=a.right-1,
-          inside:a.left>=r.left-1&&b.right<=r.right+1&&a.top>=r.top-1&&b.bottom<=r.bottom+1,
+        const m=el.querySelector('.cad-context-menu').getBoundingClientRect();
+        return {hidden:d.hidden,same:d.hidden||Math.abs(a.height-b.height)<1,
+          adjacent:d.hidden||b.left>=a.right-1,
+          inside:a.left>=r.left-1&&a.right<=r.right+1&&a.top>=r.top-1&&a.bottom<=r.bottom+1&&
+            (d.hidden||b.right<=r.right+1),
+          side: a.left>=m.right-1||a.right<=m.left+1,
           white:getComputedStyle(d).backgroundColor,text:d.textContent};
       });
-      assert.deepEqual(panels,{same:true,adjacent:true,inside:true,white:'rgb(255, 255, 255)',text:'这里是说明文字'});
+      assert.deepEqual(panels,{hidden:!expectedNote,same:true,adjacent:true,inside:true,side:true,white:'rgb(255, 255, 255)',text:expectedNote});
       await page.keyboard.press('Escape');
       await menu.waitFor({state:'hidden'});
     }
@@ -503,7 +508,11 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     // Closing via Legend and the CAD menu share the same selection key.
     const stage=page.locator('#fab-stage');
     await clickShape(0,'Inside');
-    await stage.locator('.cad-context-menu button').first().click();
+    const dateButtons=stage.locator('.cad-context-menu button');
+    await dateButtons.nth(1).click();
+    assert.equal(await stage.locator('.cad-axis-description').textContent(),'第二条说明');
+    await dateButtons.first().click();
+    assert.equal(await stage.locator('.cad-axis-description').textContent(),'第一条说明');
     const toggle=stage.locator('.cad-submenu').getByRole('menuitemcheckbox',{name:'X',exact:true});
     assert.equal(await toggle.getAttribute('aria-checked'),'false');
     await toggle.click();

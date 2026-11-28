@@ -444,7 +444,7 @@ function createContextMenu(layer) {
   const description=document.createElement('div');
   description.className='cad-axis-description';
   description.hidden=true;
-  description.textContent='这里是说明文字';
+  description.textContent='';
   description.addEventListener('pointerdown',e=>e.stopPropagation());
   layer.stage.append(menu,submenu,description);
   return {element:menu,submenu,description,requestId:0,axisAnchor:null};
@@ -474,32 +474,32 @@ function positionAxisPanels(layer) {
   if(!button || pane.hidden) return;
   const stage=layer.stage, margin=4, gap=2;
   const W=stage.clientWidth,H=stage.clientHeight;
-  const rect=stage.getBoundingClientRect(), anchor=button.getBoundingClientRect();
+  const rect=stage.getBoundingClientRect(), mr=menu.getBoundingClientRect();
   const sx=rect.width/(W||1)||1,sy=rect.height/(H||1)||1;
   const clamp=(v,max)=>Math.max(margin,Math.min(v,Math.max(margin,max-margin)));
-  // Compact menu, with a bounded description width on narrow stages.
-  pane.style.maxHeight=Math.max(0,H-2*margin)+'px';
-  pane.style.maxWidth=Math.max(0,W-2*margin)+'px';
-  description.style.width=Math.max(0,Math.min(150,W-pane.offsetWidth-gap-2*margin))+'px';
-  description.style.height=pane.offsetHeight+'px';
-  const pw=pane.offsetWidth,dw=description.offsetWidth,total=pw+gap+dw;
-  const right=(anchor.right-rect.left)/sx+gap;
-  const left=(anchor.left-rect.left)/sx-gap;
-  let x;
-  if(right+total<=W-margin) x=right;
-  else if(left-total>=margin) x=left-total;
-  else {
-    // At very narrow edges, move the pair below/above the primary menu
-    // when possible rather than clipping or covering the date buttons.
-    x=clamp(right,W-total);
-  }
-  let y=clamp((anchor.top-rect.top)/sy,H-pane.offsetHeight);
-  const mr=menu.getBoundingClientRect();
   const mx=(mr.left-rect.left)/sx,my=(mr.top-rect.top)/sy;
   const mw=mr.width/sx,mh=mr.height/sy;
-  if(x<mx+mw && x+total>mx && y<my+mh && y+pane.offsetHeight>my) {
-    if(my+mh+gap+pane.offsetHeight<=H-margin) y=my+mh+gap;
-    else if(my-gap-pane.offsetHeight>=margin) y=my-gap-pane.offsetHeight;
+  pane.style.maxHeight=Math.max(0,H-2*margin)+'px';
+  pane.style.maxWidth=Math.max(0,W-2*margin)+'px';
+  const pw=pane.offsetWidth,ph=pane.offsetHeight;
+  const right=mx+mw+gap,left=mx-gap;
+  // Anchor to the OUTER primary menu, top aligned, not an inner date row.
+  // Prefer right; shrink optional explanation to fit before flipping.
+  const rightSpace=W-margin-right,leftSpace=left-margin;
+  const wanted=description.hidden?0:150;
+  let side=rightSpace>=pw+(wanted?gap+wanted:0)?'right':
+    leftSpace>=pw+(wanted?gap+wanted:0)?'left':
+    rightSpace>=pw?'right':leftSpace>=pw?'left':'fallback';
+  const available=side==='right'?rightSpace:side==='left'?leftSpace:W-2*margin;
+  const dw=wanted?Math.max(0,Math.min(wanted,available-pw-gap)):0;
+  description.style.width=dw+'px';
+  description.style.height=ph+'px';
+  const total=pw+(wanted?gap+description.offsetWidth:0);
+  let x=side==='right'?right:side==='left'?left-total:clamp(right,W-total);
+  let y=clamp(my,H-ph);
+  if(side==='fallback') {
+    if(my+mh+gap+ph<=H-margin) y=my+mh+gap;
+    else if(my-gap-ph>=margin) y=my-gap-ph;
   }
   pane.style.left=x+'px';pane.style.top=y+'px';
   description.style.left=(x+pw+gap)+'px';description.style.top=y+'px';
@@ -546,7 +546,9 @@ function showAxisSubmenu(layer,button,date,catalog) {
     pane.append(item);
   }
   pane.hidden=false;
-  layer.menu.description.hidden=false;
+  const note=layer.menu.selectedObject?.time_descriptions?.[date]||'';
+  layer.menu.description.textContent=note;
+  layer.menu.description.hidden=!note;
   refreshAxisChecks();
   positionAxisPanels(layer);
 }

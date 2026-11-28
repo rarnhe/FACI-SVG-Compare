@@ -14,6 +14,7 @@ from fractions import Fraction
 from math import cos, radians, sin
 from pathlib import Path
 import posixpath
+import re
 import xml.etree.ElementTree as ET
 from zipfile import BadZipFile, ZipFile
 
@@ -458,11 +459,29 @@ def shape_alternative_text(node: ET.Element) -> dict[str, str]:
     """
     props = find_descendant(node, "cNvPr")
     def clean(raw: str) -> str:
-        return raw.replace("_x000D_", "").replace("\r\n", "\n").strip()
+        return re.sub(r"_x000[DaA]_", "\n", raw, flags=re.IGNORECASE).replace("\r\n", "\n").replace("\r", "\n").strip()
     return {
         "description": clean(props.get("descr", "") if props is not None else ""),
         "title": clean(props.get("title", "") if props is not None else ""),
     }
+
+
+def ellipse_time_descriptions(alt_text: dict[str, str]) -> dict[str, str]:
+    """Exact standalone 14-digit timestamps, one annotation per physical line.
+
+    Description takes precedence over title; first nonempty match wins.
+    Preserve text order and remove ASCII hyphens as requested.
+    """
+    result = {}
+    for field in ("description", "title"):
+        for line in alt_text.get(field, "").splitlines():
+            match = re.search(r"(?<![0-9])[0-9]{14}(?![0-9])", line)
+            if not match:
+                continue
+            remaining = (line[:match.start()] + line[match.end():]).replace("-", "").strip()
+            if remaining:
+                result.setdefault(match.group(), remaining)
+    return result
 
 
 def shape_text(node: ET.Element) -> str:
@@ -672,6 +691,8 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
                 obj["shape_kind"] = shape_kind(element) if tag == "sp" else "other"
                 obj["text"] = shape_text(element)
                 obj["alt_text"] = shape_alternative_text(element)
+                if obj["shape_kind"] == "ellipse":
+                    obj["time_descriptions"] = ellipse_time_descriptions(obj["alt_text"])
                 if obj["shape_kind"] == "textbox":
                     obj["text_layout"] = textbox_text_layout(
                         element, palette, theme_fonts or {
