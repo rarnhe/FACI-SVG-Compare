@@ -222,7 +222,7 @@ function drawShape(layer,item,rectangles=[]) {
   // Keep the real rectangle height/ellipse elevation while making the
   // textbox a true bottom layer and ellipses the topmost shape layer.
   const raisedZ=kindForElevation(item, r, rectangles,layer);
-  group.position.set(r.x+w/2,r.y-h/2,raisedZ+cadShapeZOffset(kind));
+  group.position.set(r.centerX,r.centerY,raisedZ+cadShapeZOffset(kind));
   group.rotation.z=r.rotation;
   group.renderOrder=priority;
   const colors=item.colors || {};
@@ -327,7 +327,7 @@ function drawImage(layer,item,texture) {
   if(!texture) return;
   const r=toWorldRect(item,layer);
   const group=new THREE.Group();
-  group.position.set(r.x+r.width/2,r.y-r.height/2,0);
+  group.position.set(r.centerX,r.centerY,0);
   group.rotation.z=r.rotation;
   group.renderOrder=CAD_DRAW_ORDER.image;
   texture.colorSpace=THREE.SRGBColorSpace;

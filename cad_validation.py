@@ -14,6 +14,12 @@ EMU_PER_PX = 9525
 TOLERANCE = 1e-9
 
 
+def object_center_emu(obj: dict) -> dict:
+    """Legacy test/manifests without center use their saved box midpoint."""
+    b = obj["bounds_emu"]
+    return obj.get("center_emu", {"x": b["x"]+b["width"]/2, "y": b["y"]+b["height"]/2})
+
+
 @dataclass(frozen=True)
 class Rectangle:
     label: str
@@ -26,12 +32,13 @@ class Rectangle:
     @classmethod
     def from_object(cls, obj: dict) -> "Rectangle":
         bounds = obj["bounds_emu"]
-        x, y = bounds["x"] / EMU_PER_PX, -bounds["y"] / EMU_PER_PX
+        center = object_center_emu(obj)
+        x, y = center["x"] / EMU_PER_PX, -center["y"] / EMU_PER_PX
         width = bounds["width"] / EMU_PER_PX
         height = bounds["height"] / EMU_PER_PX
         return cls(
             label=obj.get("text") or obj.get("name") or "矩形",
-            cx=x + width / 2, cy=y - height / 2,
+            cx=x, cy=y,
             half_width=width / 2, half_height=height / 2,
             angle=-radians(obj.get("rotation_degrees", 0)),
         )
@@ -66,8 +73,9 @@ def circle_relation(circle: dict, rectangle: Rectangle) -> str:
     width = bounds["width"] / EMU_PER_PX
     height = bounds["height"] / EMU_PER_PX
     radius = hypot(width, height) / 2
-    cx = (bounds["x"] + bounds["width"] / 2) / EMU_PER_PX
-    cy = -(bounds["y"] + bounds["height"] / 2) / EMU_PER_PX
+    center = object_center_emu(circle)
+    cx = center["x"] / EMU_PER_PX
+    cy = -center["y"] / EMU_PER_PX
     x, y = rectangle.to_local(cx, cy)
     dx, dy = abs(x), abs(y)
     if dx + radius <= rectangle.half_width + TOLERANCE and dy + radius <= rectangle.half_height + TOLERANCE:

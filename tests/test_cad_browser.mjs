@@ -240,7 +240,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
             [-width/2,height/2],[width/2,height/2],
             [width/2,-height/2],[-width/2,-height/2],
           ].map(([x,y])=>mesh.localToWorld(new THREE.Vector3(x,y,0))):[];
-          return {name:item.name,source:item.geometry_source,verticalSource:item.vertical_geometry?.source,calibration:item.vertical_geometry?.calibration_factor,horizontalSource:item.horizontal_geometry?.source,xCalibration:item.horizontal_geometry?.calibration_factor,xCorrection:item.horizontal_geometry?.correction_emu,width,height,depth,radius,center:center.toArray(),
+          return {name:item.name,anchorCenter:item.center_emu,source:item.geometry_source,verticalSource:item.vertical_geometry?.source,calibration:item.vertical_geometry?.calibration_factor,horizontalSource:item.horizontal_geometry?.source,xCalibration:item.horizontal_geometry?.calibration_factor,xCorrection:item.horizontal_geometry?.correction_emu,width,height,depth,radius,center:center.toArray(),
             fill:'#'+mesh.material.color.getHexString(),opacity:mesh.material.opacity,
             corners:corners.map(p=>p.toArray()),
             screen:corners.map(p=>project(p,viewport.x,viewport.y)),
@@ -272,12 +272,17 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       for(const actual of m.shapes){
         const item=data.layers[i].objects.find(o=>o.name===actual.name), b=item.bounds_emu;
         assert.equal(actual.source,'xfrm','real XLSX transform must be selected');
-        assert.equal(actual.verticalSource,'normalized_row_anchor','Y must use picture dual-anchor normalization');
+        assert.equal(actual.verticalSource,'diagonal_center','Y must use the diagonal center');
         near(actual.calibration,i?0.8:1.25,'independent sheet Y calibration');
         near(actual.xCalibration,i?1.25:0.8,'independent sheet X calibration');
-        assert.equal(actual.horizontalSource,actual.name==='Rotated'?'xfrm':'crosschecked_column_anchor');
+        assert.equal(actual.horizontalSource,'diagonal_center');
         near(actual.xCorrection,actual.name==='Rotated'?0:-3*9525,'conditional X correction');
-        const width=b.width/emu,height=b.height/emu, cx=(b.x/emu+width/2)*s,cy=-(b.y/emu+height/2)*s;
+        const expected=data.layers[i].objects.find(o=>o.name===actual.name).bounds_emu;
+        const width=expected.width/emu,height=expected.height/emu;
+        const cx=(expected.x/emu+width/2)*s,cy=-(expected.y/emu+height/2)*s;
+        // Independent JS fixture coordinates, not the parser's derived bounds.
+        near(actual.anchorCenter.x/emu*s,cx,actual.name+' manifest center X');
+        near(-actual.anchorCenter.y/emu*s,cy,actual.name+' manifest center Y');
         near(actual.center[0],cx,actual.name+' center X');
         near(actual.center[1],cy,actual.name+' center Y');
         assert.equal(actual.fill,'#e8d7ac',actual.name);

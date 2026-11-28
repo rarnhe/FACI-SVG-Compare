@@ -98,3 +98,13 @@ test('all drawing kinds use the same exact EMU transform, including tiny dimensi
   }
   assert.throws(()=>worldRectFromEmu({bounds_emu:{...bounds_emu,width:0}}),/Invalid saved XLSX geometry/);
 });
+
+test('explicit center is the single authoritative world position',()=>{
+  const bounds_emu={x:999999,y:999999,width:95250,height:190500};
+  const center_emu={x:95250.5,y:190500.5};
+  const r=worldRectFromEmu({bounds_emu,center_emu,rotation_degrees:90},2);
+  assert.equal(r.centerX,center_emu.x*2/9525);
+  assert.equal(r.centerY,-center_emu.y*2/9525);
+  assert.ok(Math.abs(r.x-(r.centerX-r.width/2))<1e-9);
+  assert.ok(Math.abs(r.y-(r.centerY+r.height/2))<1e-9);
+});

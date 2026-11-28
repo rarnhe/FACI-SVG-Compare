@@ -59,6 +59,9 @@ def build_cad_manifest(workbook: Path | None, sheets: list[dict],
                 # Fab/Subfab camera. Keep original coordinates in parser output.
                 obj["bounds_emu"]["x"] -= ox
                 obj["bounds_emu"]["y"] -= oy
+                if "center_emu" in obj:
+                    obj["center_emu"]["x"] -= ox
+                    obj["center_emu"]["y"] -= oy
                 obj["vertices_px"] = [
                     {
                         "x": round(point["x"] - ox / 9525, 3),

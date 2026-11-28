@@ -36,14 +36,16 @@ def transform(x,y,w,h,rotation=0):
 
 
 def anchored(x,y,w,h,child,anchor_scale=1):
-    # Independent horizontal anchor scale, with one deliberately
-    # conflicting rotated shape whose saved X must remain unchanged.
+    # Deliberately mismatched spans, centered on independent expected
+    # object centers; saved X and Y are stale. All shapes use their midpoint.
     x_scale=1.25 if anchor_scale==0.8 else 0.8
-    left=80+x*x_scale
-    top=40+y*anchor_scale
-    right=left+(w+(7 if x==100 else 0))*x_scale
-    # Picture endpoints independently establish scale; other spans conflict.
-    bottom=top+(h if x==0 and y==0 else h+7)*anchor_scale
+    is_picture=x==0 and y==0
+    extra_x=0 if is_picture else 8
+    extra_y=0 if is_picture else 8
+    left=80+(x-extra_x/2)*x_scale
+    top=40+(y-extra_y/2)*anchor_scale
+    right=left+(w+extra_x)*x_scale
+    bottom=top+(h+extra_y)*anchor_scale
     def mark(tag,px,py):
         col,dx=divmod(round(px*EMU),56*EMU)
         row,dy=divmod(round(py*EMU),20*EMU)

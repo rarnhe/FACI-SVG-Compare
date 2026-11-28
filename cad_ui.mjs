@@ -44,7 +44,8 @@ export function selectOnButton(shape, button) {
 }
 
 function center(rect) {
-  return {x: rect.x + rect.width / 2, y: rect.y - rect.height / 2};
+  return {x: rect.centerX ?? rect.x + rect.width / 2,
+    y: rect.centerY ?? rect.y - rect.height / 2};
 }
 
 function rectangleCorners(rect) {

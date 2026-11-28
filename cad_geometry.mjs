@@ -11,7 +11,11 @@ export function worldRectFromEmu(item,scale=1) {
     || b.width<=0 || b.height<=0 || scale<=0)
     throw new Error('Invalid saved XLSX geometry: '+(item.name||item.shape_kind||item.type));
   const unit=scale/9525;
-  return {x:b.x*unit,y:-b.y*unit,width:b.width*unit,height:b.height*unit,
+  const c=item.center_emu??{x:b.x+b.width/2,y:b.y+b.height/2};
+  if(![c.x,c.y].every(Number.isFinite)) throw new Error('Invalid XLSX center');
+  const centerX=c.x*unit,centerY=-c.y*unit;
+  return {x:(c.x-b.width/2)*unit,y:-(c.y-b.height/2)*unit,
+    centerX,centerY,width:b.width*unit,height:b.height*unit,
     rotation:-(item.rotation_degrees??0)*Math.PI/180};
 }
 
@@ -47,8 +51,8 @@ export function rectangleSpecs(items, toRect) {
       return {
         rect,
         depth: rectangleHeight(item.alt_text, rect.width, rect.height),
-        centerX: rect.x + rect.width / 2,
-        centerY: rect.y - rect.height / 2,
+        centerX: rect.centerX ?? rect.x + rect.width / 2,
+        centerY: rect.centerY ?? rect.y - rect.height / 2,
         label: item.text || item.name || 'rectangle',
       };
     });
@@ -71,8 +75,8 @@ export function pointInsideRotatedRectangle(x, y, spec) {
 
 export function circleRectangleRelation(ellipse, toRect, spec) {
   const rect = toRect(ellipse);
-  const centerX = rect.x + rect.width / 2;
-  const centerY = rect.y - rect.height / 2;
+  const centerX = rect.centerX ?? rect.x + rect.width / 2;
+  const centerY = rect.centerY ?? rect.y - rect.height / 2;
   const radius = reconstructedCircleRadius(rect.width,rect.height);
   const local = localPoint(centerX, centerY, spec);
   const dx = Math.abs(local.x), dy = Math.abs(local.y);

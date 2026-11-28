@@ -52,7 +52,7 @@ def with_saved_geometry(child, x, y, w, h):
                   f'<a:xfrm{match.group(1)}>{transform}</a:xfrm>',child,count=1)
 
 
-def two_cell(child=None, *, start_y=42, end_y=70):
+def two_cell(child=None, *, start_y=42, end_y=70, start_x=None, end_x=None):
     if child is None:
         child = image()
     child=with_saved_geometry(child,80,42,135,28)
@@ -60,8 +60,17 @@ def two_cell(child=None, *, start_y=42, end_y=70):
     def row_marker(tag, col, col_off, y):
         row, offset = (0,y) if y < 40 else (1+(y-40)//20,(y-40)%20)
         return marker(tag,col,row,col_off,offset*9525)
-    return (f'<xdr:twoCellAnchor>{row_marker("from", 1, 95250, start_y)}'
-            f'{row_marker("to", 2, 47625, end_y)}{child}'
+    def col_marker(x):
+        if x < 70:
+            return 0, x*9525
+        if x < 210:
+            return 1, (x-70)*9525
+        c,d=divmod(x-210,59)
+        return c+2,d*9525
+    c0,d0=(1,95250) if start_x is None else col_marker(start_x)
+    c1,d1=(2,47625) if end_x is None else col_marker(end_x)
+    return (f'<xdr:twoCellAnchor>{row_marker("from", c0, d0, start_y)}'
+            f'{row_marker("to", c1, d1, end_y)}{child}'
             '</xdr:twoCellAnchor>')
 
 
@@ -372,9 +381,8 @@ class TestGeometry(unittest.TestCase):
         actual = self.parse(two_cell(),worksheet_xml=sheet)[0]["objects"][0]
         expected = self.parse(two_cell())[0]["objects"][0]
         self.assertEqual(actual["bounds_emu"], {**expected["bounds_emu"],"y":round((40*12700)+2*9525)})
-        self.assertEqual(actual["vertical_geometry"]["source"],"normalized_row_anchor")
-        self.assertIn("span differs",actual["vertical_geometry"]["reason"])
-        self.assertNotEqual(actual["vertical_geometry"]["calibration_factor"],1)
+        self.assertEqual(actual["vertical_geometry"]["source"],"picture_center")
+        self.assertEqual(actual["center_emu"]["y"],actual["bounds_emu"]["y"]+actual["bounds_emu"]["height"]/2)
 
     def test_invalid_column_metrics_leave_y_unchanged(self):
         sheet='<sheetFormatPr defaultRowHeight="15" defaultColWidth="not-a-number"/><cols><col min="invalid" max="invalid" width="invalid"/></cols><sheetData><row r="1" ht="30"/></sheetData>'
@@ -391,9 +399,9 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(m.width_pixels("8.43"),59)
         self.assertEqual(m.marker_x(spatial.ET.fromstring('<from><col>4</col><colOff>9525</colOff></from>')),281*9525)
 
-    def test_horizontal_crosscheck_all_target_kinds_and_conflicting_span(self):
+    def test_diagonal_center_all_target_kinds_and_conflicting_span(self):
         # 56px columns, picture raw horizontal span 240px, saved width 300px.
-        # All good shapes have stale X; the conflict must retain its saved X.
+        # All shapes have stale X; even a conflicting span uses its midpoint.
         sheet='<sheetFormatPr defaultRowHeight="15" defaultColWidth="8"/><sheetData/>'
         def anchored(child,x,y,w,h,left,right):
             child=with_saved_geometry(child,x,y,w,h)
@@ -408,15 +416,19 @@ class TestGeometry(unittest.TestCase):
         ellipse=shape("椭圆")
         raw=pic+anchored(box,103,60,20,30,56,72)+anchored(rect,183,80,40,20,120,152)+anchored(ellipse,283,100,12,12,200,209.6)+anchored(shape("矩形冲突"),299,120,40,20,200,250)
         objs=self.parse(raw,worksheet_xml=sheet)[0]["objects"]
-        self.assertEqual([o["bounds_emu"]["x"] for o in objs],[v*9525 for v in (80,100,180,280,299)])
+        self.assertEqual([o["bounds_emu"]["x"] for o in objs],[v*9525 for v in (80,100,180,280,291.25)])
         self.assertEqual([o["bounds_emu"]["y"] for o in objs],[v*9525 for v in (40,60,80,100,120)])
         self.assertEqual([o["width_px"] for o in objs],[300,20,40,12,40])
-        self.assertEqual([o["horizontal_geometry"]["calibration_status"] for o in objs],["retained","applied","applied","applied","retained"])
+        self.assertEqual([o["horizontal_geometry"]["calibration_status"] for o in objs],["retained","applied","applied","applied","applied"])
         self.assertEqual(objs[1]["horizontal_geometry"]["correction_emu"],-3*9525)
-        self.assertIn("disagree",objs[-1]["horizontal_geometry"]["reason"])
+        self.assertEqual(objs[-1]["center_emu"]["x"],311.25*9525)
+        self.assertEqual(objs[-1]["horizontal_geometry"]["source"],"diagonal_center")
+        for obj in objs:
+            b=obj["bounds_emu"]
+            self.assertEqual(obj["center_emu"],{"x":b["x"]+b["width"]/2,"y":b["y"]+b["height"]/2})
         self.assertEqual(objs[2]["horizontal_geometry"]["calibration_factor"],1.25)
 
-    def test_horizontal_crosscheck_rotated_and_missing_anchors(self):
+    def test_diagonal_center_rotated_and_single_anchor(self):
         sheet='<sheetFormatPr defaultRowHeight="15" defaultColWidth="8"/><sheetData/>'
         def anchored(child,x,y,w,h,a,z):
             child=with_saved_geometry(child,x,y,w,h)
@@ -427,9 +439,10 @@ class TestGeometry(unittest.TestCase):
         child=anchored(shape("矩形",rot=5400000),103,0,60,20,20,30)
         objs=self.parse(pic+child+one_cell(shape("文本框"))+absolute(),worksheet_xml=sheet)[0]["objects"]
         self.assertEqual(objs[1]["bounds_emu"]["x"],100*9525)
-        self.assertEqual(objs[1]["horizontal_geometry"]["anchor_interpretation"],"rotated_outer_bounds")
+        self.assertEqual(objs[1]["center_emu"]["x"],130*9525)
+        self.assertEqual(objs[1]["horizontal_geometry"]["source"],"diagonal_center")
         self.assertEqual(objs[1]["width_px"],60)
-        self.assertEqual(objs[2]["horizontal_geometry"]["calibration_status"],"retained")
+        self.assertEqual(objs[2]["horizontal_geometry"]["source"],"one_cell_center")
         self.assertEqual(objs[3]["bounds_emu"]["x"],10*9525)
 
     def test_vertical_translation_corrects_picture_and_each_shape_kind(self):
@@ -451,11 +464,11 @@ class TestGeometry(unittest.TestCase):
             self.assertEqual([o["bounds_emu"]["y"] for o in objs],[40*9525]+[60*9525]*3)
             self.assertEqual([o["bounds_emu"]["x"] for o in objs],[80*9525,100*9525,130*9525,160*9525])
             self.assertEqual([o["height_px"] for o in objs],[60,20,20,20])
-            self.assertEqual([o["vertical_geometry"]["source"] for o in objs],["normalized_row_anchor"]*4)
+            self.assertEqual([o["vertical_geometry"]["source"] for o in objs],["picture_center"]+["diagonal_center"]*3)
             service=import_module(f"{ROOT.name}.cad_service")
             layer=service.build_cad_manifest(path,sheets,Path(tmp))["layers"][0]
             self.assertEqual([o["bounds_emu"]["y"] for o in layer["objects"]],[0]+[20*9525]*3)
-            self.assertIn("Y来源: normalized_row_anchor",spatial.format_spatial_report(path,sheets))
+            self.assertIn("Y来源: diagonal_center",spatial.format_spatial_report(path,sheets))
 
     def test_picture_normalization_independent_factors_and_crop(self):
         # First sheet: saved picture 240px, row span 192px (k=1.25).
@@ -467,38 +480,40 @@ class TestGeometry(unittest.TestCase):
             shapes=[with_saved_geometry(shape("文本框"),100,7,20,30),
                     with_saved_geometry(shape("矩形"),130,800,40,20),
                     with_saved_geometry(shape("椭圆"),160,-99,12,12)]
-            return two_cell(pic,start_y=40,end_y=40+span)+"".join(
-                two_cell(c,start_y=40+v,end_y=40+v+17) for c,v in zip(shapes,relative))
+            return two_cell(pic,start_y=40,end_y=40+span,start_x=80,end_x=380)+"".join(
+                two_cell(c,start_y=40+v,end_y=40+v+17,start_x=x,end_x=x+w)
+                for c,v,x,w in zip(shapes,relative,(100,130,160),(20,40,12)))
         with TemporaryDirectory() as tmp:
             path=fixture(Path(tmp)/"normalize.xlsx",objects(240,192,[16,80,160]),
                 sheet_count=2,second_anchors=objects(200,250,[25,125,200]))
             sheets=spatial.parse_xlsx(path)
             service=import_module(f"{ROOT.name}.cad_service")
             layers=service.build_cad_manifest(path,sheets,Path(tmp))["layers"]
-            for i,(layer,expected,k) in enumerate(zip(layers,([0,20,100,200],[0,20,100,160]),(1.25,0.8))):
-                self.assertEqual([o["bounds_emu"]["y"] for o in layer["objects"]],[y*9525 for y in expected])
+            for i,(layer,expected,k) in enumerate(zip(layers,([0,15.625,100.625,204.625],[0,11.8,96.8,160.8]),(1.25,0.8))):
+                for o,y in zip(layer["objects"],expected):
+                    self.assertAlmostEqual(o["bounds_emu"]["y"],y*9525)
                 self.assertEqual([o["bounds_emu"]["x"] for o in layer["objects"]],[0,20*9525,50*9525,80*9525])
                 self.assertEqual([o["height_px"] for o in layer["objects"]],[240 if i==0 else 200,30,20,12])
-                self.assertEqual([o["vertical_geometry"]["calibration_factor"] for o in layer["objects"]],[k]*4)
+                self.assertEqual([o["vertical_geometry"]["calibration_factor"] for o in layer["objects"][1:]],[k]*3)
                 self.assertEqual(layer["objects"][0]["picture_crop"],{"l":"0","t":"2500","r":"0","b":"1500"})
                 self.assertEqual(layer["objects"][1]["vertical_geometry"]["saved_y_emu"],7*9525)
             report=spatial.format_spatial_report(path,sheets)
-            self.assertIn("k=1.250000000",report)
-            self.assertIn("k=0.800000000",report)
+            self.assertIn("k=1.25",report)
+            self.assertIn("k=0.8",report)
             self.assertIn("图片裁剪 srcRect: l=0 t=2500 r=0 b=1500",report)
 
     def test_unavailable_picture_calibration_preserves_previous_positions(self):
         for raw in (one_cell(image())+one_cell(shape()),
                     two_cell(image(),start_y=42,end_y=42)+one_cell(shape())):
             objs=self.parse(raw)[0]["objects"]
-            self.assertTrue(all(o["vertical_geometry"]["calibration_status"]=="unavailable" for o in objs))
+            self.assertTrue(all(o["vertical_geometry"]["calibration_status"]=="retained" for o in objs))
             self.assertEqual(objs[1]["bounds_emu"]["y"],0)
 
     def test_absolute_shape_uses_saved_picture_relative_y(self):
         raw=two_cell(with_saved_geometry(image(),80,10,300,200),start_y=40,end_y=140)+absolute()
         objs=self.parse(raw)[0]["objects"]
         self.assertEqual(objs[1]["bounds_emu"]["y"]-objs[0]["bounds_emu"]["y"],10*9525)
-        self.assertEqual(objs[1]["vertical_geometry"]["source"],"absoluteAnchor")
+        self.assertEqual(objs[1]["vertical_geometry"]["source"],"absolute_center")
         self.assertEqual(objs[1]["vertical_geometry"]["calibration_factor"],2)
 
     def test_normalized_rotated_outer_bounds_keep_saved_extents(self):
@@ -509,7 +524,7 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(objs[1]["bounds_emu"]["y"]-objs[0]["bounds_emu"]["y"],60*9525)
         self.assertEqual(objs[1]["height_px"],20)
         self.assertEqual(objs[1]["rotation_degrees"],90)
-        self.assertEqual(objs[1]["vertical_geometry"]["rotation_anchor"],"rotated_outer_bounds")
+        self.assertEqual(objs[1]["vertical_geometry"]["source"],"diagonal_center")
 
     def test_vertical_rotated_outer_bounds_and_one_cell_and_absolute(self):
         # At 90 degrees a 60x20 object occupies a 60px vertical AABB.
@@ -518,7 +533,7 @@ class TestGeometry(unittest.TestCase):
         raw=f'<xdr:twoCellAnchor>{marker("from",0,1)}{marker("to",0,4)}{child}</xdr:twoCellAnchor>'
         obj=self.parse(raw)[0]["objects"][0]
         self.assertEqual(obj["bounds_emu"]["y"],60*9525)
-        self.assertEqual(obj["vertical_geometry"]["source"],"rotated_row_anchor")
+        self.assertEqual(obj["vertical_geometry"]["source"],"row_or_absolute_center")
         self.assertEqual(obj["bounds_emu"]["width"],60*9525)
         child=with_saved_geometry(shape(),22,5,20,30)
         raw=f'<xdr:oneCellAnchor>{marker("from",0,2)}<xdr:ext cx="190500" cy="285750"/>{child}</xdr:oneCellAnchor>'
@@ -534,7 +549,7 @@ class TestGeometry(unittest.TestCase):
         sheet='<sheetFormatPr defaultRowHeight="15" zeroHeight="1"/><sheetData><row r="2" hidden="0" ht="15"/></sheetData>'
         obj=self.parse(raw,worksheet_xml=sheet)[0]["objects"][0]
         self.assertEqual(obj["bounds_emu"]["y"],0)
-        self.assertEqual(obj["vertical_geometry"]["source"],"row_anchor")
+        self.assertEqual(obj["vertical_geometry"]["source"],"row_or_absolute_center")
 
     def test_two_cell_saved_shape_geometry_beats_estimated_columns(self):
         def transformed(child, x, y, w, h):
@@ -569,7 +584,7 @@ class TestGeometry(unittest.TestCase):
                 with self.subTest(off=off):
                     obj=self.parse(raw)[0]["objects"][0]
                     self.assertEqual(obj["bounds_emu"],{"x":95250,"y":expected,"width":381000,"height":381000})
-                    self.assertEqual(obj["vertical_geometry"]["source"],"row_anchor")
+                    self.assertEqual(obj["vertical_geometry"]["source"],"row_or_absolute_center")
         self.assertFalse(hasattr(spatial,"drawing_rect"))
         self.assertFalse(hasattr(spatial,"vertical_rect"))
 
@@ -625,7 +640,7 @@ class TestGeometry(unittest.TestCase):
             '<a:xfrm rot="5400000"><a:off x="1143000" y="381000"/>'
             '<a:ext cx="381000" cy="190500"/></a:xfrm>')
         with TemporaryDirectory() as tmp:
-            path=fixture(Path(tmp)/"saved.xlsx",two_cell(pic,start_y=20,end_y=220)+two_cell(child,start_y=40,end_y=60))
+            path=fixture(Path(tmp)/"saved.xlsx",two_cell(pic,start_y=20,end_y=220,start_x=100,end_x=500)+two_cell(child,start_y=40,end_y=60,start_x=120,end_x=160))
             sheets=spatial.parse_xlsx(path)
             from importlib import import_module
             service=import_module(f"{ROOT.name}.cad_service")
