@@ -155,8 +155,8 @@ class TestSvgCatalog(unittest.TestCase):
 
     def test_external_tangent_and_rotated_partial_choose_rectangle(self):
         objects=sample_objects()
-        tangent=object_at("ellipse","Tangent",502,146,6,8)
-        separated=object_at("ellipse","Separated",502.01,146,6,8)
+        tangent=object_at("ellipse","Tangent",500,146,6,8)
+        separated=object_at("ellipse","Separated",500.01,146,6,8)
         self.assertIs(catalog.enclosing_rectangle(objects,tangent),objects[1])
         self.assertIsNone(catalog.enclosing_rectangle(objects,separated))
         rotated=object_at("rectangle","Rotated",100,100,80,40)
@@ -168,7 +168,7 @@ class TestSvgCatalog(unittest.TestCase):
     def test_ambiguous_multiple_intersections_are_rejected(self):
         objects=[object_at("rectangle","Left",0,0,100,80),
                  object_at("rectangle","Right",140,0,100,80)]
-        circle=object_at("ellipse","Both",100,40,40,40)
+        circle=object_at("ellipse","Both",90,40,40,40)
         with self.assertRaisesRegex(ValueError,"multiple rectangles"):
             catalog.enclosing_rectangle(objects,circle)
 

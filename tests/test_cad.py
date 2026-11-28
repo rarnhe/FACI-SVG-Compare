@@ -38,7 +38,7 @@ class TestCadManifest(unittest.TestCase):
             self.assertEqual(first["name"], "图片12")
             self.assertEqual(first["bounds_emu"]["x"], 0)
             self.assertEqual(first["bounds_emu"]["y"], 0)
-            self.assertEqual(first["center_emu"],{"x":first["bounds_emu"]["width"]/2,"y":first["bounds_emu"]["height"]/2})
+            self.assertNotIn("center_emu",first)
             self.assertEqual(first["vertices_px"][0], {"x": 0, "y": 0})
             # The parser itself still exposes A1-relative original coordinates.
             self.assertNotEqual(sheets[0]["objects"][0]["bounds_emu"]["x"], 0)

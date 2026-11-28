@@ -140,7 +140,7 @@ class TestStartupWithXlsx(TestCase):
         anchors=(shapes.two_cell()+
                  anchored(0,0,100,80,shapes.shape(name="矩形Left"))+
                  anchored(140,0,100,80,shapes.shape(name="矩形Right"))+
-                 anchored(100,40,40,40,shapes.shape(name="椭圆Spanning")))
+                 anchored(90,40,40,40,shapes.shape(name="椭圆Spanning")))
         with TemporaryDirectory() as tmp:
             assets=Path(tmp)/"assets"
             assets.mkdir()

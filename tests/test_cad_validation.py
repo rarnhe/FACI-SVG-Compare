@@ -59,7 +59,7 @@ class TestCadValidation(unittest.TestCase):
 
     def test_circle_center_outside_but_boundary_crosses_is_partial(self):
         a=geom.Rectangle.from_object(shape("rectangle",0,0,100,80,"A"))
-        c=shape("ellipse",-14,30,20,20,"circle")
+        c=shape("ellipse",-18,30,20,20,"circle")
         self.assertEqual(geom.circle_relation(c,a),"partial")
 
     def test_circle_wholly_outside(self):
@@ -74,7 +74,7 @@ class TestCadValidation(unittest.TestCase):
     def test_one_circle_intersecting_two_separated_rectangles_fails(self):
         a=shape("rectangle",0,0,100,80,"Left")
         b=shape("rectangle",140,0,100,80,"Right")
-        c=shape("ellipse",100,40,40,40,"Spanning")
+        c=shape("ellipse",90,40,40,40,"Spanning")
         with self.assertRaisesRegex(ValueError,r"intersects 2 rectangles"):
             geom.validate_sheet_collisions(sheet(a,b,c))
 

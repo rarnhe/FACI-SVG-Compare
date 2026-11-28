@@ -1,5 +1,5 @@
 /** Pure CAD UI geometry and responsive layout helpers (no DOM dependencies). */
-import { reconstructedCircleRadius } from './cad_geometry.mjs';
+import { reconstructedCircleRadius, reconstructedCirclePlacement } from './cad_geometry.mjs';
 const EPS = 1e-7;
 
 export const INITIAL_REFERENCE_SPLIT = 0.5;
@@ -44,8 +44,7 @@ export function selectOnButton(shape, button) {
 }
 
 function center(rect) {
-  return {x: rect.centerX ?? rect.x + rect.width / 2,
-    y: rect.centerY ?? rect.y - rect.height / 2};
+  return {x: rect.x + rect.width / 2, y: rect.y - rect.height / 2};
 }
 
 function rectangleCorners(rect) {
@@ -64,10 +63,10 @@ function pointInsideRect(point, rect) {
 }
 
 function circleInsideRect(circle, rect) {
-  const c=center(circle), p=center(rect), x=c.x-p.x, y=c.y-p.y;
+  const c=reconstructedCirclePlacement(circle), p=center(rect), x=c.x-p.x, y=c.y-p.y;
   const co=Math.cos(rect.rotation || 0), si=Math.sin(rect.rotation || 0);
   const lx=x*co+y*si, ly=-x*si+y*co;
-  const radius=reconstructedCircleRadius(circle.width,circle.height);
+  const radius=c.radius;
   return Math.abs(lx)+radius <= rect.width/2+EPS &&
          Math.abs(ly)+radius <= rect.height/2+EPS;
 }

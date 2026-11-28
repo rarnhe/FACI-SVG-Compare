@@ -36,14 +36,14 @@ def transform(x,y,w,h,rotation=0):
 
 
 def anchored(x,y,w,h,child,anchor_scale=1):
-    # Deliberately mismatched spans, centered on independent expected
-    # object centers; saved X and Y are stale. All shapes use their midpoint.
+    # Deliberately mismatched spans and stale saved X/Y.
+    # Only the independent expected start coordinates control placement.
     x_scale=1.25 if anchor_scale==0.8 else 0.8
     is_picture=x==0 and y==0
     extra_x=0 if is_picture else 8
     extra_y=0 if is_picture else 8
-    left=80+(x-extra_x/2)*x_scale
-    top=40+(y-extra_y/2)*anchor_scale
+    left=80+x*x_scale
+    top=40+y*anchor_scale
     right=left+(w+extra_x)*x_scale
     bottom=top+(h+extra_y)*anchor_scale
     def mark(tag,px,py):

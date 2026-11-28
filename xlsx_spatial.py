@@ -1,7 +1,7 @@
 """Extract Excel DrawingML objects as 2D positions relative to A1.
 
 X increases to the right, Y downwards. Read saved absolute DrawingML
-dimensions from saved transforms; resolve one center from the two cell-anchor diagonals in the picture coordinate system. Geometry is kept in
+dimensions from saved transforms; resolve one upper-left anchor in the picture coordinate system. Geometry is kept in
 integer EMU and reported in reference pixels at 96 DPI (9525 EMU / pixel).
 """
 
@@ -324,8 +324,8 @@ class VerticalRowMetrics:
 class HorizontalColumnMetrics:
     """OOXML reference column widths; MDW=7 is an explicit estimate.
 
-    A picture supplies the horizontal scale; object midpoint is independent
-    of the saved width.
+    A picture supplies the horizontal scale; only each object's start marker
+    controls its position.
     """
     MDW = 7
     LIMIT = 16384
@@ -407,13 +407,7 @@ def horizontal_anchor_info(anchor: ET.Element, saved_x: int,
 
 def anchor_y(anchor: ET.Element, width: int, height: int, angle: float,
              rows: VerticalRowMetrics | None) -> tuple[int, dict]:
-    """Resolve vertical position independently of a:xfrm/a:off@y.
-
-    For cell anchors the start row and offset determine the Y position,
-    even if the end span differs from the saved height. An unambiguous
-    rotated outer span can locate the center of the unrotated box.
-    Absolute anchors use their own y. Never read or fall back to saved off@y.
-    """
+    """Read only the start marker for position; end is diagnostic/calibration."""
     kind = local_name(anchor.tag)
     if kind == "absoluteAnchor":
         y = emu_attribute(first_child(anchor, "pos"), "y", "xdr:pos")
@@ -424,26 +418,13 @@ def anchor_y(anchor: ET.Element, width: int, height: int, angle: float,
     start = rows.marker_y(first_child(anchor, "from"))
     if start is None:
         raise SpatialXlsxError("cannot resolve Y from row/rowOff and saved row heights")
-    y = start
-    info = {"source": "row_anchor", "anchor_y_emu": start}
+    info = {"source": "row_anchor", "anchor_y_emu": start, "resolved_y_emu": start}
     if kind == "twoCellAnchor":
         end = rows.marker_y(first_child(anchor, "to"))
-        if end is not None and end > start:
-            span = end - start
-            info["anchor_span_emu"] = span
+        if end is not None:
             info["anchor_end_y_emu"] = end
-            rotated_span = abs(width * sin(radians(angle))) + abs(height * cos(radians(angle)))
-            # The start marker is authoritative. Only shift by half the
-            # difference when the markers clearly describe a rotated AABB.
-            if abs(span - height) > EMUS_PER_PIXEL and abs(span - rotated_span) <= EMUS_PER_PIXEL:
-                y = round((start + end - height) / 2)
-                info["source"] = "rotated_row_anchor"
-            elif abs(span - height) > EMUS_PER_PIXEL:
-                info["reason"] = "row span differs from saved height; start marker retained"
-        else:
-            info["reason"] = "end marker unavailable or invalid; start marker retained"
-    info["resolved_y_emu"] = y
-    return y, info
+            info["anchor_span_emu"] = end - start
+    return start, info
 
 
 def object_transform(node: ET.Element) -> ET.Element | None:
@@ -734,16 +715,6 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
                 "rotation_degrees": angle,
                 "vertices_px": vertices_from_rect(rect, angle),
             }
-            if obj["anchor"] == "oneCellAnchor":
-                extent = first_child(anchor, "ext")
-                if extent is not None:
-                    for axis, attr in (("horizontal_geometry", "cx"), ("vertical_geometry", "cy")):
-                        try:
-                            size = int(extent.get(attr, ""))
-                            if size > 0:
-                                obj[axis]["one_cell_extent_emu"] = size
-                        except ValueError:
-                            pass
             if kind == "image":
                 # Raw OOXML percentages (100000 = 100%); diagnostic only.
                 crop = first_child(first_child(element, "blipFill"), "srcRect")
@@ -793,13 +764,12 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
     return objects
 
 
-def resolve_sheet_centers(objects: list[dict]) -> None:
-    """Resolve one point per object: intersection of its anchor diagonals.
+def resolve_sheet_top_left(objects: list[dict]) -> None:
+    """One upper-left anchor per object, independently of its saved size.
 
-    The midpoint of a rotated rectangle's enclosing AABB is the same
-    point as the intersection of its original diagonals. Do not compare
-    anchor spans to saved dimensions and do not fit individual corners.
-    Keep saved dimensions and rotation independent of the anchor span.
+    Only the background's endpoints establish axis calibration. Every
+    cell-anchored object's start marker supplies X/Y. Its end marker,
+    rotation and dimensions never affect the anchor position.
     """
     images = [o for o in objects if o["type"] == "image"]
     picture = images[0] if len(images) == 1 else None
@@ -809,8 +779,6 @@ def resolve_sheet_centers(objects: list[dict]) -> None:
         for axis, size, field in axes:
             info = picture[field]
             start, end = info.get(f"anchor_{axis}_emu"), info.get(f"anchor_end_{axis}_emu")
-            # Absolute Y has no row markers; retain the original Y coordinate
-            # frame if saved picture Y is not available for those shapes.
             if axis == "y" and info.get("saved_y_emu") is None and any(
                     o["anchor"] == "absoluteAnchor" for o in objects):
                 continue
@@ -819,48 +787,35 @@ def resolve_sheet_centers(objects: list[dict]) -> None:
                 calibrations[axis] = (start, end, Fraction(b[size], end-start), b[axis])
     for obj in objects:
         b = obj["bounds_emu"]
-        center = {}
-        sources = {}
         for axis, size, field in axes:
             info = obj[field]
-            saved_top = b[axis]
-            half = Fraction(b[size], 2)
-            c = Fraction(saved_top) + half
-            source = "saved_center" if axis == "x" else "row_or_absolute_center"
-            reason = "picture calibration unavailable; prior position retained"
+            original = b[axis]
+            value = original
+            source = "saved_x" if axis == "x" else "row_anchor"
+            reason = "picture calibration unavailable; initial position retained"
             status = "retained"
             if obj is picture:
-                source, reason = "picture_center", "picture reference center retained"
+                source, reason = "picture_top_left", "picture reference origin retained"
+            elif obj["anchor"] == "absoluteAnchor":
+                source, reason = "absolute_top_left", "absolute position"
+                if axis == "y" and axis in calibrations:
+                    start, end, ratio, origin = calibrations[axis]
+                    value = origin + original - picture[field]["saved_y_emu"]
+                    status = "applied"
+                    info["calibration_factor"] = float(ratio)
             elif axis in calibrations:
                 start, end, ratio, origin = calibrations[axis]
-                a, z = info.get(f"anchor_{axis}_emu"), info.get(f"anchor_end_{axis}_emu")
+                a = info.get(f"anchor_{axis}_emu")
                 info.update(calibration_factor=float(ratio), picture_anchor_start_emu=start,
                             picture_anchor_end_emu=end, **{f"picture_{size}_emu": picture["bounds_emu"][size]})
-                if obj["anchor"] == "twoCellAnchor" and a is not None and z is not None and z >= a:
-                    raw_center = Fraction(a+z, 2)
-                    c = origin + (raw_center-start)*ratio
-                    info["raw_anchor_center_emu"] = float(raw_center)
-                    source, reason, status = "diagonal_center", "intersection of anchor diagonals", "applied"
-                elif obj["anchor"] == "oneCellAnchor" and a is not None:
-                    c = origin + (a-start)*ratio + Fraction(info.get("one_cell_extent_emu", b[size]), 2)
-                    source, reason, status = "one_cell_center", "anchor start plus half extent", "applied"
-                elif obj["anchor"] == "absoluteAnchor":
-                    if axis == "y":
-                        c = origin + Fraction(saved_top-picture[field]["saved_y_emu"]) + half
-                    source, reason, status = "absolute_center", "absolute position plus half extent", "applied"
+                if a is not None:
+                    value = origin + round((a-start)*ratio)
+                    source, reason, status = "normalized_top_left", "start anchor only", "applied"
                 else:
-                    reason = "missing or reversed anchor endpoints; prior position retained"
-            elif obj["anchor"] == "absoluteAnchor":
-                source, reason = "absolute_center", "absolute position plus half extent"
-            c = float(c)
-            center[axis] = c
-            sources[axis] = source
-            b[axis] = c - float(half)
+                    reason = "missing start marker; initial position retained"
+            b[axis] = value
             info.update(source=source, calibration_status=status, reason=reason,
-                        center_emu=c, correction_emu=b[axis]-saved_top,
-                        **{f"resolved_{axis}_emu": b[axis]})
-        obj["center_emu"] = center
-        obj["center_geometry"] = {"x_source": sources["x"], "y_source": sources["y"]}
+                        correction_emu=value-original, **{f"resolved_{axis}_emu": value})
         x,y,w,h = b["x"],b["y"],b["width"],b["height"]
         obj["vertices_px"] = vertices_from_rect((x,y,x+w,y+h),obj["rotation_degrees"])
 
@@ -904,7 +859,7 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                         drawing_part=drawing_part, members=set(z.namelist()),
                         sheet_name=name, row_metrics=row_metrics, column_metrics=column_metrics,
                     ))
-                resolve_sheet_centers(objects)
+                resolve_sheet_top_left(objects)
                 sheets.append({"sheet": name, "objects": objects})
             return sheets
     except (BadZipFile, KeyError, ET.ParseError) as error:
@@ -972,10 +927,8 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                 f"宽={obj['width_px']:.3f}px 高={obj['height_px']:.3f}px"
             )
             lines.append(f"    几何来源: {obj.get('geometry_source', 'unknown')}")
-            center = obj.get("center_emu")
-            if center:
-                lines.append(f"    中心: ({center['x']:.6f}, {center['y']:.6f}) EMU "
-                             f"= ({center['x']/EMUS_PER_PIXEL:.3f}, {center['y']/EMUS_PER_PIXEL:.3f}) px")
+            b = obj["bounds_emu"]
+            lines.append(f"    定位左上锚点: ({b['x']}, {b['y']}) EMU")
             for axis, field in (("X", "horizontal_geometry"), ("Y", "vertical_geometry")):
                 info = obj.get(field, {})
                 if not info:
@@ -985,7 +938,7 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                              f"saved={info.get(f'saved_{key}_emu')} "
                              f"from={info.get(f'anchor_{key}_emu')} "
                              f"to={info.get(f'anchor_end_{key}_emu')} "
-                             f"center={info.get('center_emu')} "
+                             
                              f"resolved={info.get(f'resolved_{key}_emu')} "
                              f"correction={info.get('correction_emu')} EMU "
                              f"k={info.get('calibration_factor')} "

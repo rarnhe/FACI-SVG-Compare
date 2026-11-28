@@ -72,7 +72,7 @@ test('rotated textbox containment uses rotated corners rather than axis-aligned 
 test('circle containment accounts for reconstructed diagonal radius',()=>{
   const body=shape('textbox',0,0,100,100,'BODY');
   assert.equal(containsShape(body,shape('ellipse',44,-44,8,8,'inside'),toRect),true);
-  assert.equal(containsShape(body,shape('ellipse',0,0,60,60,'edge'),toRect),false);
+  assert.equal(containsShape(body,shape('ellipse',0,0,80,80,'edge'),toRect),false);
 });
 
 test('format label uses visible text with name fallback and safe whitespace',()=>{

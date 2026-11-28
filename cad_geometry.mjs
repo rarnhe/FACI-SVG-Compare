@@ -11,18 +11,21 @@ export function worldRectFromEmu(item,scale=1) {
     || b.width<=0 || b.height<=0 || scale<=0)
     throw new Error('Invalid saved XLSX geometry: '+(item.name||item.shape_kind||item.type));
   const unit=scale/9525;
-  const c=item.center_emu??{x:b.x+b.width/2,y:b.y+b.height/2};
-  if(![c.x,c.y].every(Number.isFinite)) throw new Error('Invalid XLSX center');
-  const centerX=c.x*unit,centerY=-c.y*unit;
-  return {x:(c.x-b.width/2)*unit,y:-(c.y-b.height/2)*unit,
-    centerX,centerY,width:b.width*unit,height:b.height*unit,
+  return {x:b.x*unit,y:-b.y*unit,width:b.width*unit,height:b.height*unit,
     rotation:-(item.rotation_degrees??0)*Math.PI/180};
 }
 
-// Existing CAD convention: the reconstructed circle uses the saved
-// ellipse box center and its diagonal as diameter.
+// Preserve the diagonal diameter; the reconstructed circle's bounding
+// square starts at the same upper-left anchor as every other shape.
 export function reconstructedCircleRadius(width,height) {
   return Math.hypot(width,height)/2;
+}
+
+// Geometry offset from the sole upper-left anchor, not a second XLSX
+// positioning source. A circle uses its own bounding square.
+export function reconstructedCirclePlacement(rect) {
+  const radius=reconstructedCircleRadius(rect.width,rect.height);
+  return {radius,x:rect.x+radius,y:rect.y-radius};
 }
 
 
@@ -51,8 +54,8 @@ export function rectangleSpecs(items, toRect) {
       return {
         rect,
         depth: rectangleHeight(item.alt_text, rect.width, rect.height),
-        centerX: rect.centerX ?? rect.x + rect.width / 2,
-        centerY: rect.centerY ?? rect.y - rect.height / 2,
+        centerX: rect.x + rect.width / 2,
+        centerY: rect.y - rect.height / 2,
         label: item.text || item.name || 'rectangle',
       };
     });
@@ -75,10 +78,8 @@ export function pointInsideRotatedRectangle(x, y, spec) {
 
 export function circleRectangleRelation(ellipse, toRect, spec) {
   const rect = toRect(ellipse);
-  const centerX = rect.centerX ?? rect.x + rect.width / 2;
-  const centerY = rect.centerY ?? rect.y - rect.height / 2;
-  const radius = reconstructedCircleRadius(rect.width,rect.height);
-  const local = localPoint(centerX, centerY, spec);
+  const {x,y,radius}=reconstructedCirclePlacement(rect);
+  const local = localPoint(x,y,spec);
   const dx = Math.abs(local.x), dy = Math.abs(local.y);
   const halfW = spec.rect.width / 2, halfH = spec.rect.height / 2;
   if (dx + radius <= halfW + EPS && dy + radius <= halfH + EPS) {

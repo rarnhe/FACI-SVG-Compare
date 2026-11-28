@@ -381,8 +381,8 @@ class TestGeometry(unittest.TestCase):
         actual = self.parse(two_cell(),worksheet_xml=sheet)[0]["objects"][0]
         expected = self.parse(two_cell())[0]["objects"][0]
         self.assertEqual(actual["bounds_emu"], {**expected["bounds_emu"],"y":round((40*12700)+2*9525)})
-        self.assertEqual(actual["vertical_geometry"]["source"],"picture_center")
-        self.assertEqual(actual["center_emu"]["y"],actual["bounds_emu"]["y"]+actual["bounds_emu"]["height"]/2)
+        self.assertEqual(actual["vertical_geometry"]["source"],"picture_top_left")
+        self.assertNotIn("center_emu",actual)
 
     def test_invalid_column_metrics_leave_y_unchanged(self):
         sheet='<sheetFormatPr defaultRowHeight="15" defaultColWidth="not-a-number"/><cols><col min="invalid" max="invalid" width="invalid"/></cols><sheetData><row r="1" ht="30"/></sheetData>'
@@ -399,9 +399,9 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(m.width_pixels("8.43"),59)
         self.assertEqual(m.marker_x(spatial.ET.fromstring('<from><col>4</col><colOff>9525</colOff></from>')),281*9525)
 
-    def test_diagonal_center_all_target_kinds_and_conflicting_span(self):
+    def test_normalized_top_left_all_target_kinds_and_conflicting_span(self):
         # 56px columns, picture raw horizontal span 240px, saved width 300px.
-        # All shapes have stale X; even a conflicting span uses its midpoint.
+        # All shapes have stale X; even a conflicting span uses only the start marker.
         sheet='<sheetFormatPr defaultRowHeight="15" defaultColWidth="8"/><sheetData/>'
         def anchored(child,x,y,w,h,left,right):
             child=with_saved_geometry(child,x,y,w,h)
@@ -416,33 +416,32 @@ class TestGeometry(unittest.TestCase):
         ellipse=shape("椭圆")
         raw=pic+anchored(box,103,60,20,30,56,72)+anchored(rect,183,80,40,20,120,152)+anchored(ellipse,283,100,12,12,200,209.6)+anchored(shape("矩形冲突"),299,120,40,20,200,250)
         objs=self.parse(raw,worksheet_xml=sheet)[0]["objects"]
-        self.assertEqual([o["bounds_emu"]["x"] for o in objs],[v*9525 for v in (80,100,180,280,291.25)])
+        self.assertEqual([o["bounds_emu"]["x"] for o in objs],[v*9525 for v in (80,100,180,280,280)])
         self.assertEqual([o["bounds_emu"]["y"] for o in objs],[v*9525 for v in (40,60,80,100,120)])
         self.assertEqual([o["width_px"] for o in objs],[300,20,40,12,40])
         self.assertEqual([o["horizontal_geometry"]["calibration_status"] for o in objs],["retained","applied","applied","applied","applied"])
         self.assertEqual(objs[1]["horizontal_geometry"]["correction_emu"],-3*9525)
-        self.assertEqual(objs[-1]["center_emu"]["x"],311.25*9525)
-        self.assertEqual(objs[-1]["horizontal_geometry"]["source"],"diagonal_center")
+        self.assertEqual(objs[-1]["bounds_emu"]["x"],280*9525)
+        self.assertEqual(objs[-1]["horizontal_geometry"]["source"],"normalized_top_left")
         for obj in objs:
-            b=obj["bounds_emu"]
-            self.assertEqual(obj["center_emu"],{"x":b["x"]+b["width"]/2,"y":b["y"]+b["height"]/2})
+            self.assertNotIn("center_emu",obj)
+            self.assertNotIn("center_geometry",obj)
         self.assertEqual(objs[2]["horizontal_geometry"]["calibration_factor"],1.25)
 
-    def test_diagonal_center_rotated_and_single_anchor(self):
+    def test_normalized_top_left_rotated_and_single_anchor(self):
         sheet='<sheetFormatPr defaultRowHeight="15" defaultColWidth="8"/><sheetData/>'
         def anchored(child,x,y,w,h,a,z):
             child=with_saved_geometry(child,x,y,w,h)
             return ('<xdr:twoCellAnchor>'+marker("from",0,0,a*9525,0)+
                     marker("to",0,1,z*9525,0)+child+'</xdr:twoCellAnchor>')
         pic=anchored(image(),80,0,200,20,0,100)
-        # Rotated width=20; anchor span 10*2=20; unrotated left=80+40-20=100.
+        # Rotation and the ending marker do not change the left anchor.
         child=anchored(shape("矩形",rot=5400000),103,0,60,20,20,30)
         objs=self.parse(pic+child+one_cell(shape("文本框"))+absolute(),worksheet_xml=sheet)[0]["objects"]
-        self.assertEqual(objs[1]["bounds_emu"]["x"],100*9525)
-        self.assertEqual(objs[1]["center_emu"]["x"],130*9525)
-        self.assertEqual(objs[1]["horizontal_geometry"]["source"],"diagonal_center")
+        self.assertEqual(objs[1]["bounds_emu"]["x"],120*9525)
+        self.assertEqual(objs[1]["horizontal_geometry"]["source"],"normalized_top_left")
         self.assertEqual(objs[1]["width_px"],60)
-        self.assertEqual(objs[2]["horizontal_geometry"]["source"],"one_cell_center")
+        self.assertEqual(objs[2]["horizontal_geometry"]["source"],"normalized_top_left")
         self.assertEqual(objs[3]["bounds_emu"]["x"],10*9525)
 
     def test_vertical_translation_corrects_picture_and_each_shape_kind(self):
@@ -464,11 +463,11 @@ class TestGeometry(unittest.TestCase):
             self.assertEqual([o["bounds_emu"]["y"] for o in objs],[40*9525]+[60*9525]*3)
             self.assertEqual([o["bounds_emu"]["x"] for o in objs],[80*9525,100*9525,130*9525,160*9525])
             self.assertEqual([o["height_px"] for o in objs],[60,20,20,20])
-            self.assertEqual([o["vertical_geometry"]["source"] for o in objs],["picture_center"]+["diagonal_center"]*3)
+            self.assertEqual([o["vertical_geometry"]["source"] for o in objs],["picture_top_left"]+["normalized_top_left"]*3)
             service=import_module(f"{ROOT.name}.cad_service")
             layer=service.build_cad_manifest(path,sheets,Path(tmp))["layers"][0]
             self.assertEqual([o["bounds_emu"]["y"] for o in layer["objects"]],[0]+[20*9525]*3)
-            self.assertIn("Y来源: diagonal_center",spatial.format_spatial_report(path,sheets))
+            self.assertIn("Y来源: normalized_top_left",spatial.format_spatial_report(path,sheets))
 
     def test_picture_normalization_independent_factors_and_crop(self):
         # First sheet: saved picture 240px, row span 192px (k=1.25).
@@ -489,7 +488,7 @@ class TestGeometry(unittest.TestCase):
             sheets=spatial.parse_xlsx(path)
             service=import_module(f"{ROOT.name}.cad_service")
             layers=service.build_cad_manifest(path,sheets,Path(tmp))["layers"]
-            for i,(layer,expected,k) in enumerate(zip(layers,([0,15.625,100.625,204.625],[0,11.8,96.8,160.8]),(1.25,0.8))):
+            for i,(layer,expected,k) in enumerate(zip(layers,([0,20,100,200],[0,20,100,160]),(1.25,0.8))):
                 for o,y in zip(layer["objects"],expected):
                     self.assertAlmostEqual(o["bounds_emu"]["y"],y*9525)
                 self.assertEqual([o["bounds_emu"]["x"] for o in layer["objects"]],[0,20*9525,50*9525,80*9525])
@@ -513,27 +512,26 @@ class TestGeometry(unittest.TestCase):
         raw=two_cell(with_saved_geometry(image(),80,10,300,200),start_y=40,end_y=140)+absolute()
         objs=self.parse(raw)[0]["objects"]
         self.assertEqual(objs[1]["bounds_emu"]["y"]-objs[0]["bounds_emu"]["y"],10*9525)
-        self.assertEqual(objs[1]["vertical_geometry"]["source"],"absolute_center")
+        self.assertEqual(objs[1]["vertical_geometry"]["source"],"absolute_top_left")
         self.assertEqual(objs[1]["vertical_geometry"]["calibration_factor"],2)
 
     def test_normalized_rotated_outer_bounds_keep_saved_extents(self):
         pic=two_cell(with_saved_geometry(image(),80,40,300,200),start_y=40,end_y=140)
         child=with_saved_geometry(shape("矩形",rot=5400000),100,99,60,20)
         objs=self.parse(pic+two_cell(child,start_y=60,end_y=90))[0]["objects"]
-        # mapped outer top 40px relative, outer span 60px, box height 20px
-        self.assertEqual(objs[1]["bounds_emu"]["y"]-objs[0]["bounds_emu"]["y"],60*9525)
+        # Use mapped start only, no rotated-span center correction.
+        self.assertEqual(objs[1]["bounds_emu"]["y"]-objs[0]["bounds_emu"]["y"],40*9525)
         self.assertEqual(objs[1]["height_px"],20)
         self.assertEqual(objs[1]["rotation_degrees"],90)
-        self.assertEqual(objs[1]["vertical_geometry"]["source"],"diagonal_center")
+        self.assertEqual(objs[1]["vertical_geometry"]["source"],"normalized_top_left")
 
     def test_vertical_rotated_outer_bounds_and_one_cell_and_absolute(self):
-        # At 90 degrees a 60x20 object occupies a 60px vertical AABB.
-        # The unrotated top is 40+(60-20)/2=60px.
+        # At 90 degrees the start marker remains the positioning anchor.
         child=with_saved_geometry(shape("矩形",rot=5400000),20,5,60,20)
         raw=f'<xdr:twoCellAnchor>{marker("from",0,1)}{marker("to",0,4)}{child}</xdr:twoCellAnchor>'
         obj=self.parse(raw)[0]["objects"][0]
-        self.assertEqual(obj["bounds_emu"]["y"],60*9525)
-        self.assertEqual(obj["vertical_geometry"]["source"],"row_or_absolute_center")
+        self.assertEqual(obj["bounds_emu"]["y"],40*9525)
+        self.assertEqual(obj["vertical_geometry"]["source"],"row_anchor")
         self.assertEqual(obj["bounds_emu"]["width"],60*9525)
         child=with_saved_geometry(shape(),22,5,20,30)
         raw=f'<xdr:oneCellAnchor>{marker("from",0,2)}<xdr:ext cx="190500" cy="285750"/>{child}</xdr:oneCellAnchor>'
@@ -549,7 +547,7 @@ class TestGeometry(unittest.TestCase):
         sheet='<sheetFormatPr defaultRowHeight="15" zeroHeight="1"/><sheetData><row r="2" hidden="0" ht="15"/></sheetData>'
         obj=self.parse(raw,worksheet_xml=sheet)[0]["objects"][0]
         self.assertEqual(obj["bounds_emu"]["y"],0)
-        self.assertEqual(obj["vertical_geometry"]["source"],"row_or_absolute_center")
+        self.assertEqual(obj["vertical_geometry"]["source"],"row_anchor")
 
     def test_two_cell_saved_shape_geometry_beats_estimated_columns(self):
         def transformed(child, x, y, w, h):
@@ -584,7 +582,7 @@ class TestGeometry(unittest.TestCase):
                 with self.subTest(off=off):
                     obj=self.parse(raw)[0]["objects"][0]
                     self.assertEqual(obj["bounds_emu"],{"x":95250,"y":expected,"width":381000,"height":381000})
-                    self.assertEqual(obj["vertical_geometry"]["source"],"row_or_absolute_center")
+                    self.assertEqual(obj["vertical_geometry"]["source"],"row_anchor")
         self.assertFalse(hasattr(spatial,"drawing_rect"))
         self.assertFalse(hasattr(spatial,"vertical_rect"))
 

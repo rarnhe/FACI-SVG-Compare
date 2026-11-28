@@ -240,7 +240,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
             [-width/2,height/2],[width/2,height/2],
             [width/2,-height/2],[-width/2,-height/2],
           ].map(([x,y])=>mesh.localToWorld(new THREE.Vector3(x,y,0))):[];
-          return {name:item.name,anchorCenter:item.center_emu,source:item.geometry_source,verticalSource:item.vertical_geometry?.source,calibration:item.vertical_geometry?.calibration_factor,horizontalSource:item.horizontal_geometry?.source,xCalibration:item.horizontal_geometry?.calibration_factor,xCorrection:item.horizontal_geometry?.correction_emu,width,height,depth,radius,center:center.toArray(),
+          return {name:item.name,anchorBounds:item.bounds_emu,source:item.geometry_source,verticalSource:item.vertical_geometry?.source,calibration:item.vertical_geometry?.calibration_factor,horizontalSource:item.horizontal_geometry?.source,xCalibration:item.horizontal_geometry?.calibration_factor,xCorrection:item.horizontal_geometry?.correction_emu,width,height,depth,radius,center:center.toArray(),
             fill:'#'+mesh.material.color.getHexString(),opacity:mesh.material.opacity,
             corners:corners.map(p=>p.toArray()),
             screen:corners.map(p=>project(p,viewport.x,viewport.y)),
@@ -272,25 +272,27 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       for(const actual of m.shapes){
         const item=data.layers[i].objects.find(o=>o.name===actual.name), b=item.bounds_emu;
         assert.equal(actual.source,'xfrm','real XLSX transform must be selected');
-        assert.equal(actual.verticalSource,'diagonal_center','Y must use the diagonal center');
+        assert.equal(actual.verticalSource,'normalized_top_left','Y must use only the start marker');
         near(actual.calibration,i?0.8:1.25,'independent sheet Y calibration');
         near(actual.xCalibration,i?1.25:0.8,'independent sheet X calibration');
-        assert.equal(actual.horizontalSource,'diagonal_center');
-        // Integer EMU markers introduce at most half an EMU per endpoint, scaled by k.
-        assert.ok(Math.abs(actual.xCorrection-(actual.name==='Rotated'?0:-3*9525))<=0.5*actual.xCalibration+1e-7,'X correction within marker quantization');
-        const expected=data.layers[i].objects.find(o=>o.name===actual.name).bounds_emu;
-        const width=expected.width/emu,height=expected.height/emu;
-        const expectedX=(expected.x/emu+width/2)*s,expectedY=-(expected.y/emu+height/2)*s;
-        const cx=actual.anchorCenter.x/emu*s,cy=-actual.anchorCenter.y/emu*s;
-        // Independent JS fixture coordinates, not the parser's derived bounds.
-        assert.ok(Math.abs(actual.anchorCenter.x/emu*s-expectedX)<=0.5*actual.xCalibration*s/emu+1e-8,actual.name+' manifest center X');
-        assert.ok(Math.abs(-actual.anchorCenter.y/emu*s-expectedY)<=0.5*actual.calibration*s/emu+1e-8,actual.name+' manifest center Y');
-        near(actual.center[0],cx,actual.name+' center X');
-        near(actual.center[1],cy,actual.name+' center Y');
+        assert.equal(actual.horizontalSource,'normalized_top_left');
+        // Independent expected XLSX start coordinates; allow only integer
+        // marker quantization plus final EMU rounding.
+        assert.ok(Math.abs(actual.anchorBounds.x-b.x)<=0.5*actual.xCalibration+0.5+1e-7,actual.name+' manifest anchor X');
+        assert.ok(Math.abs(actual.anchorBounds.y-b.y)<=0.5*actual.calibration+0.5+1e-7,actual.name+' manifest anchor Y');
+        const width=b.width/emu,height=b.height/emu;
+        const ax=actual.anchorBounds.x/emu*s,ay=-actual.anchorBounds.y/emu*s;
+        const radius=Math.hypot(width,height)*s/2;
+        const cx=ax+(item.shape_kind==='ellipse'?radius:width*s/2);
+        const cy=ay-(item.shape_kind==='ellipse'?radius:height*s/2);
+        near(actual.center[0],cx,actual.name+' local geometry offset X');
+        near(actual.center[1],cy,actual.name+' local geometry offset Y');
         assert.equal(actual.fill,'#e8d7ac',actual.name);
         near(actual.opacity,actual.name==='Cube'?0.93:actual.name==='Label'?1:0.68,actual.name+' original opacity');
         if(item.shape_kind==='ellipse'){
-          near(actual.radius,Math.hypot(width,height)*s/2,actual.name+' circle radius');
+          near(actual.radius,radius,actual.name+' circle radius');
+          near(actual.center[0]-actual.radius,ax,actual.name+' circle left anchor');
+          near(actual.center[1]+actual.radius,ay,actual.name+' circle top anchor');
           const z={Inside:35,Partial:17.5,Outside:0}[actual.name]*s+1.5;
           near(actual.center[2],z,actual.name+' elevation');
           continue;

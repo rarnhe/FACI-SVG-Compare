@@ -1,7 +1,7 @@
 // Linked Fab/Subfab Excel CAD viewer. Each picture starts at (0,0) in local XY.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { rectangleHeight, rectangleSpecs, ellipseElevation, worldRectFromEmu, reconstructedCircleRadius } from './cad_geometry.mjs';
+import { rectangleHeight, rectangleSpecs, ellipseElevation, worldRectFromEmu, reconstructedCircleRadius, reconstructedCirclePlacement } from './cad_geometry.mjs';
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
@@ -222,7 +222,12 @@ function drawShape(layer,item,rectangles=[]) {
   // Keep the real rectangle height/ellipse elevation while making the
   // textbox a true bottom layer and ellipses the topmost shape layer.
   const raisedZ=kindForElevation(item, r, rectangles,layer);
-  group.position.set(r.centerX,r.centerY,raisedZ+cadShapeZOffset(kind));
+  // The parser supplies only an upper-left anchor. Three.js local
+  // primitives are centered by construction, so derive their offset
+  // from dimensions; never read a separate workbook center.
+  const placement=kind==='ellipse'?reconstructedCirclePlacement(r):
+    {x:r.x+w/2,y:r.y-h/2};
+  group.position.set(placement.x,placement.y,raisedZ+cadShapeZOffset(kind));
   group.rotation.z=r.rotation;
   group.renderOrder=priority;
   const colors=item.colors || {};
@@ -238,8 +243,8 @@ function drawShape(layer,item,rectangles=[]) {
   });
   let clickTarget;
   if(kind==='ellipse') {
-    // Per drawing requirement: the diagonals meet at the center, and
-    // upper-left -> lower-right is the diameter (not the minor axis).
+    // The original diagonal diameter is preserved; the bounding square
+    // is aligned to the same upper-left anchor as the other shapes.
     const radius=reconstructedCircleRadius(w,h);
     clickTarget=new THREE.Mesh(new THREE.CircleGeometry(radius,72),mat);
     clickTarget.position.z=0.5;
@@ -327,7 +332,7 @@ function drawImage(layer,item,texture) {
   if(!texture) return;
   const r=toWorldRect(item,layer);
   const group=new THREE.Group();
-  group.position.set(r.centerX,r.centerY,0);
+  group.position.set(r.x+r.width/2,r.y-r.height/2,0);
   group.rotation.z=r.rotation;
   group.renderOrder=CAD_DRAW_ORDER.image;
   texture.colorSpace=THREE.SRGBColorSpace;
