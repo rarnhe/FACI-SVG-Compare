@@ -94,6 +94,7 @@ test('Chromium renders every CAD outline and scales octave points around their c
       assert.ok(Math.abs(after.left+after.right+8*after.page-1400)<3,'page still fills viewport');
     }
     for(const selector of ['#fab-stage canvas','#subfab-stage canvas','#reference-pane']){
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
       const old=await state();
       assert.equal(await wheel(selector,{ctrlKey:true,buttons:1}),false);
       const after=await state();
@@ -122,10 +123,20 @@ test('Chromium renders every CAD outline and scales octave points around their c
       assert.ok(Math.abs(resized.userCadZoom-stable.userCadZoom)<1e-9);
       assert.equal(resized.zoom[0],resized.zoom[1]);
       await wheel('#fab-stage canvas',{});
-      assert.ok((await state()).userCadZoom>resized.userCadZoom);
+      const enlarged=await state();
+      assert.ok(Math.abs(enlarged.userCadZoom/resized.userCadZoom-1.1)<1e-9);
+      assert.equal(enlarged.zoom[0],enlarged.zoom[1]);
+      assert.ok(Math.abs(enlarged.zoom[0]/resized.zoom[0]-1.1)<1e-9);
       await wheel('#subfab-stage canvas',{deltaY:100});
       assert.ok(Math.abs((await state()).userCadZoom-stable.userCadZoom)<1e-8);
     }
+    // Large wheel deltas after browser zoom must not collapse the scene.
+    const prior=await state();
+    await wheel('#fab-stage canvas',{deltaY:12000});
+    const reduced=await state();
+    assert.ok(Math.abs(reduced.userCadZoom/prior.userCadZoom-1/1.1)<1e-9);
+    await wheel('#subfab-stage canvas',{deltaY:-12000});
+    assert.ok(Math.abs((await state()).userCadZoom-prior.userCadZoom)<1e-9);
     await cdp.send('Emulation.clearDeviceMetricsOverride');
     await page.waitForFunction(()=>window.devicePixelRatio===1);
     await page.waitForTimeout(100);
