@@ -153,7 +153,16 @@ def main():
                 elif action=="restore":
                     book.write_bytes(self.application.saved_book)
                 self.write({"action":action})
+        class TestWorkbookDisk(RequestHandler):
+            def get(self):
+                # Read actual disk bytes independently of the production
+                # manifest cache and expose only synthetic fixture text.
+                sheets=spatial.parse_xlsx(book)
+                self.write({"layers":[{"objects":[{"name":o["name"],
+                    "alt_text":o.get("alt_text",{})} for o in s["objects"]]}
+                    for s in sheets]})
         application=Application([
+            (r"/test-workbook-disk",TestWorkbookDisk),
             (r"/test-workbook-edit",TestWorkbookEdit),
             (r"/test-workbook-lock",TestWorkbookLock),
             (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)",app.EllipseSvgCatalogHandler,{"state":state}),

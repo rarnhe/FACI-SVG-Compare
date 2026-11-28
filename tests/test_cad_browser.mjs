@@ -528,15 +528,31 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     const lockedManifest=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
     assert.equal(lockedManifest.layers[0].objects[outsideIndex].alt_text.description,
       unchanged.layers[0].objects[outsideIndex].alt_text.description);
+    const disk=async()=> (await (await page.request.get(fixture.base+'/test-workbook-disk')).json()).layers;
+    assert.match((await disk())[0].objects[outsideIndex].alt_text.description,/20250101000000-过期/);
+    assert.ok(await page.locator('#workbook-reload-warning').isVisible());
     assert.equal((await page.request.post(lockUrl+'?locked=0')).status(),200);
+    // No second ellipse click: the existing automatic poll must persist
+    // the deferred missing date and remove obsolete text on the real disk.
+    const deadline=Date.now()+12000;
+    let persisted;
+    do {
+      persisted=(await disk())[0].objects[outsideIndex].alt_text.description;
+      if(persisted==='保留普通文字\n20260705101627-') break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    } while(Date.now()<deadline);
+    assert.equal(persisted,'保留普通文字\n20260705101627-');
+    await page.locator('#workbook-reload-warning').waitFor({state:'hidden',timeout:10000});
     const saved=await page.request.post(route,{headers:{Origin:fixture.base,'X-CAD-Sync':'1'}});
     assert.equal(saved.status(),200);
-    assert.equal((await saved.json()).sync_status,'saved');
+    assert.equal((await saved.json()).sync_status,'unchanged');
     const afterSync=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
     assert.equal(afterSync.layers[0].objects[outsideIndex].alt_text.description,'保留普通文字\n20260705101627-');
     const otherSheet=afterSync.layers[1].objects.find(o=>o.name==='Outside');
     assert.match(otherSheet.alt_text.description,/20250101000000-过期/);
     await choose(1,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet2_R_Cube_+Z_2026/07/06_10:16:27',4);
+    const partialDisk=(await disk())[1].objects.find(o=>o.name==='Partial');
+    assert.equal(partialDisk.alt_text.description,'20260706101627-局部测点\n20260704101627-');
     for(const [label,date,axis] of [['R_Cube','20260704101627','X'],['R_Cube','20260706101627','Z'],['BODYv2','20260705101627','Y']])
       for(const suffix of ['PSD','1-3-Octave'])
         assert.ok(fetched.includes('/viewer/assets/BODYv2/'+label+'_'+date+'_+'+axis+'_'+suffix+'.svg'));

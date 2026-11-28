@@ -148,7 +148,93 @@ class CadManifestHandler(RequestHandler):
         payload["content_revision"] = self.state.get("content_revision", 0)
         if warning:
             payload["reload_warning"] = warning
+        payload["sync_warning"] = pending_sync_message(self.state)
         self.write(payload)
+
+
+def sync_ellipse_catalog(state, asset_dir, i, j):
+    """Synchronize a trusted selected ellipse and return its live catalog.
+
+    Deferred jobs store only the index and geometry generation, never a stale
+    timestamp list. Every retry searches SVG files and reads the latest XLSX.
+    """
+    cached = state["sheets"]
+    payload = build_ellipse_svg_catalog(asset_dir, cached, i, j)
+    path = state["workbook"]
+    ellipse = cached[i]["objects"][j]
+    notes = ellipse.get("time_descriptions", {})
+    pending = state.setdefault("pending_sync", {})
+    key = (i, j)
+    if payload["search_complete"] and path is not None:
+        signature = workbook_signature(path)
+        fresh = parse_xlsx(path)
+        if len(fresh) != len(cached) or any(
+            a["sheet"] != b["sheet"] or
+            [{k: v for k, v in o.items() if k not in {"alt_text", "time_descriptions"}}
+             for o in a["objects"]] !=
+            [{k: v for k, v in o.items() if k not in {"alt_text", "time_descriptions"}}
+             for o in b["objects"]]
+            for a, b in zip(fresh, cached)
+        ):
+            raise ValueError("工作簿几何数据已改变，请刷新网页后重试")
+        current = fresh[i]["objects"][j]
+        notes = ellipse_time_descriptions(current["alt_text"])
+        try:
+            after = write_ellipse_dates(path, current, payload["dates"], signature)
+        except PermissionError:
+            pending[key] = state.get("generation", 0)
+            payload["sync_status"] = "deferred"
+            payload["sync_message"] = "XLSX 暂不可写，关闭 Excel 后将自动补写时间行"
+        else:
+            pending.pop(key, None)
+            payload["sync_status"] = "saved" if after != current["alt_text"] else "unchanged"
+            notes = ellipse_time_descriptions(after)
+            ellipse["alt_text"] = after
+            ellipse["time_descriptions"] = notes
+            public = state["manifest"]["layers"][i]["objects"][j]
+            public["alt_text"] = after
+            public["time_descriptions"] = notes
+    else:
+        # An unavailable SVG directory is never authority for deletion.
+        pending.pop(key, None)
+    payload.setdefault("sync_status", "not_applicable")
+    payload["time_descriptions"] = {
+        date: notes.get(date) or MISSING_TEST_DESCRIPTION for date in payload["dates"]
+    }
+    return payload
+
+
+def pending_sync_message(state):
+    count = len(state.get("pending_sync", {}))
+    return (f"XLSX 暂不可写：{count} 个椭圆的时间行等待写回，关闭 Excel 后自动重试"
+            if count else state.get("sync_retry_warning"))
+
+
+def retry_pending_sync(state, asset_dir):
+    """Retry previously authorized selections only; never trust stale indices."""
+    warning = reload_workbook_if_changed(state, asset_dir)
+    if warning:
+        return warning
+    pending = state.get("pending_sync", {})
+    state.pop("sync_retry_warning", None)
+    for (i, j), generation in list(pending.items()):
+        if generation != state.get("generation", 0):
+            pending.pop((i, j), None)
+            state["sync_retry_warning"] = "工作簿几何已改变，请重新点击相应椭圆同步时间行"
+            continue
+        try:
+            sync_ellipse_catalog(state, asset_dir, i, j)
+        except (OSError, ValueError, SpatialXlsxError, KeyError, IndexError):
+            # Retain the request on a transient file/scan error. Do not
+            # acknowledge a successful write before it has happened.
+            state["sync_retry_warning"] = "XLSX 时间行尚未写回，将自动重试"
+    return None
+
+
+def is_local_sync_request(request):
+    return (request.host.split(":")[0] in {"127.0.0.1", "localhost"}
+            and request.headers.get("Origin") == f"{request.protocol}://{request.host}"
+            and request.headers.get("X-CAD-Sync") == "1")
 
 
 class WorkbookStatusHandler(RequestHandler):
@@ -161,7 +247,22 @@ class WorkbookStatusHandler(RequestHandler):
         self.set_header("Cache-Control", "no-store")
         warning = reload_workbook_if_changed(self.state, STATIC_DIR / "assets")
         self.write({"content_revision": self.state.get("content_revision", 0),
-                    "reload_warning": warning})
+                    "reload_warning": warning,
+                    "pending_sync": len(self.state.get("pending_sync", {})),
+                    "sync_warning": pending_sync_message(self.state)})
+
+    def post(self):
+        # GET is read-only. Retrying disk writes requires the same local
+        # same-origin authorization as the original ellipse click.
+        if not is_local_sync_request(self.request):
+            self.send_error(403)
+            return
+        self.set_header("Cache-Control", "no-store")
+        warning = retry_pending_sync(self.state, STATIC_DIR / "assets")
+        self.write({"content_revision": self.state.get("content_revision", 0),
+                    "reload_warning": warning,
+                    "pending_sync": len(self.state.get("pending_sync", {})),
+                    "sync_warning": pending_sync_message(self.state)})
 
 
 class EllipseSvgCatalogHandler(RequestHandler):
@@ -185,9 +286,7 @@ class EllipseSvgCatalogHandler(RequestHandler):
     def post(self, layer, object_index):
         # An explicit same-origin POST from the CAD menu is required. GET
         # stays read-only; arbitrary browser sites cannot trigger writeback.
-        if (self.request.host.split(":")[0] not in {"127.0.0.1", "localhost"}
-                or self.request.headers.get("Origin") != f"{self.request.protocol}://{self.request.host}"
-                or self.request.headers.get("X-CAD-Sync") != "1"):
+        if not is_local_sync_request(self.request):
             self.send_error(403)
             return
         try:
@@ -198,49 +297,7 @@ class EllipseSvgCatalogHandler(RequestHandler):
             requested_generation = self.request.headers.get("X-CAD-Generation")
             if requested_generation is not None and requested_generation != str(self.state.get("generation", 0)):
                 raise ValueError("工作簿数据已更新，请刷新网页后重试")
-            cached = self.state["sheets"]
-            payload = build_ellipse_svg_catalog(STATIC_DIR / "assets", cached, i, j)
-            path = self.state["workbook"]
-            ellipse = cached[i]["objects"][j]
-            notes = ellipse.get("time_descriptions", {})
-            if payload["search_complete"] and path is not None:
-                signature = workbook_signature(path)
-                fresh = parse_xlsx(path)
-                # Do not trust old indices after external geometry edits.
-                if len(fresh) != len(cached) or any(
-                    a["sheet"] != b["sheet"] or
-                    [{k: v for k, v in o.items() if k not in {"alt_text", "time_descriptions"}}
-                     for o in a["objects"]] !=
-                    [{k: v for k, v in o.items() if k not in {"alt_text", "time_descriptions"}}
-                     for o in b["objects"]]
-                    for a, b in zip(fresh, cached)
-                ):
-                    raise ValueError("工作簿几何数据已改变，请刷新网页后重试")
-                current = fresh[i]["objects"][j]
-                # A locked workbook must not disable browsing or pretend a
-                # write succeeded. Re-read and retry on every explicit click.
-                notes = ellipse_time_descriptions(current["alt_text"])
-                try:
-                    after = write_ellipse_dates(path, current, payload["dates"], signature)
-                except PermissionError:
-                    payload["sync_status"] = "deferred"
-                    payload["sync_message"] = "Excel 工作簿暂不可写，关闭后再次点击椭圆即可同步"
-                else:
-                    payload["sync_status"] = "saved" if after != current["alt_text"] else "unchanged"
-                    notes = ellipse_time_descriptions(after)
-                    ellipse["alt_text"] = after
-                    ellipse["time_descriptions"] = notes
-                    public = self.state["manifest"]["layers"][i]["objects"][j]
-                    public["alt_text"] = after
-                    public["time_descriptions"] = notes
-                    # Do not mark a concurrent external edit as cached. Only
-                    # our own successful atomic write changes the signature.
-                    # Leave signature unchanged: the next refresh verifies
-                    # the whole workbook and image snapshot, if needed.
-            payload.setdefault("sync_status", "not_applicable")
-            payload["time_descriptions"] = {
-                date: notes.get(date) or MISSING_TEST_DESCRIPTION for date in payload["dates"]
-            }
+            payload = sync_ellipse_catalog(self.state, STATIC_DIR / "assets", i, j)
         except (ValueError, OSError, SpatialXlsxError, KeyError, IndexError) as error:
             self.set_status(409)
             self.write({"error": str(error)})

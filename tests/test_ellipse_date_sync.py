@@ -73,3 +73,14 @@ class TestEllipseDateSync(unittest.TestCase):
                     spatial.write_ellipse_dates(path, ellipse, [B], spatial.workbook_signature(path))
             self.assertEqual(path.read_bytes(),original)
             self.assertEqual(list(path.parent.iterdir()),[path])
+
+    def test_missing_description_attribute_gets_placeholder(self):
+        with TemporaryDirectory() as tmp:
+            shape=fixtures.shape(name="椭圆14")
+            path=fixtures.fixture(Path(tmp)/"empty.xlsx", anchors=fixtures.one_cell(shape))
+            ellipse=spatial.parse_xlsx(path)[0]["objects"][0]
+            self.assertEqual(ellipse["alt_text"]["description"],"")
+            spatial.write_ellipse_dates(path,ellipse,[A,B],spatial.workbook_signature(path))
+            fresh=spatial.parse_xlsx(path)[0]["objects"][0]
+            self.assertEqual(fresh["alt_text"]["description"],f"{A}-\n{B}-")
+            self.assertEqual(fresh["time_descriptions"],{})

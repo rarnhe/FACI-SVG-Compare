@@ -613,6 +613,7 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
     // Keep the compact date rows unchanged; show deferred writeback as a
     // non-blocking tooltip rather than replacing the selectable menu.
     menu.title=catalog.sync_message||'';
+    if(catalog.sync_status==='deferred') showWorkbookWarning(catalog.sync_message);
     if(!catalog.dates?.length) {
       const empty=document.createElement('div');
       empty.textContent='无可用测试结果';
@@ -1290,9 +1291,17 @@ function watchWorkbook(initialRevision) {
     try {
       const response=await fetch('./workbook-status.json',{cache:'no-store'});
       if(!response.ok) throw new Error('Workbook status HTTP '+response.status);
-      const status=await response.json();
+      let status=await response.json();
       if(stopped) return;
-      showWorkbookWarning(status.reload_warning);
+      if(status.pending_sync && !status.reload_warning) {
+        const retry=await fetch('./workbook-status.json',{
+          method:'POST',headers:{'X-CAD-Sync':'1'},cache:'no-store'
+        });
+        if(!retry.ok) throw new Error('Workbook retry HTTP '+retry.status);
+        status=await retry.json();
+      }
+      if(stopped) return;
+      showWorkbookWarning(status.reload_warning||status.sync_warning);
       if(!status.reload_warning && status.content_revision!==initialRevision) {
         stop();
         window.location.reload();
@@ -1313,7 +1322,7 @@ async function initialize() {
     if(!response.ok) throw new Error('CAD layout HTTP '+response.status);
     const data=await response.json();
     workbookGeneration=data.generation??0;
-    showWorkbookWarning(data.reload_warning);
+    showWorkbookWarning(data.reload_warning||data.sync_warning);
     workbookName=data.workbook || '';
     document.title=workbookName.replace(/\.xlsx$/i,'') || 'Fab / Subfab CAD';
 
