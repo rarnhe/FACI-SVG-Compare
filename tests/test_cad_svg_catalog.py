@@ -162,8 +162,13 @@ class TestSvgCatalog(unittest.TestCase):
         rotated=object_at("rectangle","Rotated",100,100,80,40)
         rotated["rotation_degrees"]=45
         # Near the center of the rotated right edge (140+28.28,120+28.28).
-        partial=object_at("ellipse","P",167,147,6,8)
+        # New 10px circle bounding square is anchored at its upper left.
+        # Center (170,150) is within radius 5 of the rotated right edge.
+        partial=object_at("ellipse","P",165,145,6,8)
         self.assertIs(catalog.enclosing_rectangle([rotated],partial),rotated)
+        # The old fixture now places the center at (172,152): outside.
+        separated=object_at("ellipse","OldPosition",167,147,6,8)
+        self.assertIsNone(catalog.enclosing_rectangle([rotated],separated))
 
     def test_ambiguous_multiple_intersections_are_rejected(self):
         objects=[object_at("rectangle","Left",0,0,100,80),
