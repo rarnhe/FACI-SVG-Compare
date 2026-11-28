@@ -512,9 +512,27 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     const stage=page.locator('#fab-stage');
     await clickShape(0,'Inside');
     const dateButtons=stage.locator('.cad-context-menu button');
+    // Put the primary menu in a roomy position to test exact row alignment,
+    // independently of the edge-clamping checks in choose().
+    await stage.locator('.cad-context-menu').evaluate(el=>{
+      el.style.left='12px';el.style.top='12px';
+    });
+    const aligned=()=>stage.evaluate(el=>{
+      const selected=el.querySelector('.cad-context-menu [aria-expanded="true"]');
+      const first=el.querySelector('.cad-submenu button');
+      const a=selected.getBoundingClientRect(),b=first.getBoundingClientRect();
+      const primary=el.querySelector('.cad-context-menu').getBoundingClientRect();
+      const pane=el.querySelector('.cad-submenu').getBoundingClientRect();
+      return {delta:Math.abs(a.top+a.height/2-b.top-b.height/2),right:pane.left>=primary.right-1,top:pane.top};
+    });
     await dateButtons.nth(1).click();
+    const secondAlignment=await aligned();
+    assert.ok(secondAlignment.delta<=1 && secondAlignment.right,JSON.stringify(secondAlignment));
     assert.equal(await stage.locator('.cad-axis-description').textContent(),'第二条说明');
     await dateButtons.first().click();
+    const firstAlignment=await aligned();
+    assert.ok(firstAlignment.delta<=1 && firstAlignment.right,JSON.stringify(firstAlignment));
+    assert.ok(secondAlignment.top>firstAlignment.top,'submenu must follow the selected date row');
     assert.equal(await stage.locator('.cad-axis-description').textContent(),'第一条说明');
     const toggle=stage.locator('.cad-submenu').getByRole('menuitemcheckbox',{name:'X',exact:true});
     assert.equal(await toggle.getAttribute('aria-checked'),'false');

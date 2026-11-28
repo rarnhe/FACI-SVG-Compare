@@ -483,7 +483,8 @@ function positionAxisPanels(layer) {
   pane.style.maxWidth=Math.max(0,W-2*margin)+'px';
   const pw=pane.offsetWidth,ph=pane.offsetHeight;
   const right=mx+mw+gap,left=mx-gap;
-  // Anchor to the OUTER primary menu, top aligned, not an inner date row.
+  // Horizontal anchor is the outer primary menu; vertically align the
+  // centers of the selected date row and the first (X) axis row.
   // Prefer right; shrink optional explanation to fit before flipping.
   const rightSpace=W-margin-right,leftSpace=left-margin;
   const wanted=description.hidden?0:150;
@@ -496,7 +497,12 @@ function positionAxisPanels(layer) {
   description.style.height=ph+'px';
   const total=pw+(wanted?gap+description.offsetWidth:0);
   let x=side==='right'?right:side==='left'?left-total:clamp(right,W-total);
-  let y=clamp(my,H-ph);
+  const selected=button.getBoundingClientRect();
+  const first=pane.querySelector('button').getBoundingClientRect();
+  const paneRect=pane.getBoundingClientRect();
+  const desiredY=(selected.top+selected.height/2-rect.top)/sy
+    -(first.top+first.height/2-paneRect.top)/sy;
+  let y=clamp(desiredY,H-ph);
   if(side==='fallback') {
     if(my+mh+gap+ph<=H-margin) y=my+mh+gap;
     else if(my-gap-ph>=margin) y=my-gap-ph;
