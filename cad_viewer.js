@@ -21,7 +21,20 @@ let workbookName = '';
 let syncing = false;
 let hasGeometry = false;
 let sceneBounds = {minX:0,maxX:500,minY:0,maxY:400};
-let lastCadSize = null;
+let baseFitScale = 1;
+export let userCadZoom = 1;
+const MIN_USER_ZOOM = 0.01, MAX_USER_ZOOM = 100;
+let resizePending = false;
+const textTextures = [];
+let lastRenderRatio = 0;
+function effectivePixelRatio() {
+  return Math.min(2,Math.max(0.1,(window.devicePixelRatio||1)*pageZoom));
+}
+function scheduleCadResize() {
+  if(resizePending) return;
+  resizePending=true;
+  requestAnimationFrame(()=>{resizePending=false;resizeCadLayers();});
+}
 let rightSplitRatio = INITIAL_REFERENCE_SPLIT;
 const referenceImages = new Map();
 const svgHistory = document.getElementById('reference-log');
@@ -48,6 +61,7 @@ window.addEventListener('wheel',event=>{
   for(const layer of layers) pointerStart.delete(layer.renderer.domElement);
   pageZoom=nextPageZoom(pageZoom,event.deltaY,event.deltaMode);
   document.documentElement.style.zoom=String(pageZoom);
+  scheduleCadResize();
 },{capture:true,passive:false});
 
 function createLayer(stageId) {
@@ -55,7 +69,7 @@ function createLayer(stageId) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xffffff);
   const renderer = new THREE.WebGLRenderer({antialias:true});
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(effectivePixelRatio());
   const camera = new THREE.OrthographicCamera(-200,200,150,-150,0.1,200000);
   camera.position.set(0,0,3000);
   camera.up.set(0,1,0);
@@ -89,13 +103,14 @@ function createLayer(stageId) {
 
 function synchronizeFrom(source) {
   if(syncing) return;
+  userCadZoom=Math.max(MIN_USER_ZOOM,Math.min(MAX_USER_ZOOM,source.camera.zoom/baseFitScale));
   syncing=true;
   try {
     for(const layer of layers) {
       if(layer===source) continue;
       layer.camera.position.copy(source.camera.position);
       layer.camera.quaternion.copy(source.camera.quaternion);
-      layer.camera.zoom=source.camera.zoom;
+      layer.camera.zoom=baseFitScale*userCadZoom;
       layer.camera.updateProjectionMatrix();
       layer.controls.target.copy(source.controls.target);
       layer.controls.update();
@@ -118,7 +133,7 @@ function colorValue(value,fallback) {
 const outlineCylinder=new THREE.CylinderGeometry(1,1,1,10,1,false);
 const outlineUp=new THREE.Vector3(0,1,0);
 function updateOutlineMesh(mesh,zoom) {
-  const radius=mesh.userData.outlineWidth/(2*Math.max(0.01,zoom));
+  const radius=mesh.userData.outlineWidth/(2*Math.max(Number.EPSILON,zoom));
   const transform=new THREE.Object3D();
   for(let i=0;i<mesh.userData.outlineSegments.length;i++) {
     const segment=mesh.userData.outlineSegments[i];
@@ -183,8 +198,8 @@ function drawTextboxText(group,item,worldRect) {
   };
   // Bounded CanvasTexture avoids blurry text and unbounded WebGL textures
   // from exceptionally large DrawingML objects.
-  const resolution=Math.max(0.2,Math.min(2.5,
-    Math.min(4096/w,4096/h),window.devicePixelRatio||1.5));
+  const resolutionFor=ratio=>Math.min(2.5,4096/w,4096/h,ratio);
+  function makeTexture(resolution) {
   const canvas=document.createElement('canvas');
   canvas.width=Math.max(1,Math.ceil(w*resolution));
   canvas.height=Math.max(1,Math.ceil(h*resolution));
@@ -213,6 +228,11 @@ function drawTextboxText(group,item,worldRect) {
   context.restore();
   const texture=new THREE.CanvasTexture(canvas);
   texture.colorSpace=THREE.SRGBColorSpace;
+  return texture;
+  }
+  let resolution=resolutionFor(effectivePixelRatio());
+  const texture=makeTexture(resolution);
+  if(!texture) return;
   const textMesh=new THREE.Mesh(
     new THREE.PlaneGeometry(worldRect.width,worldRect.height),
     new THREE.MeshBasicMaterial({
@@ -225,6 +245,16 @@ function drawTextboxText(group,item,worldRect) {
   textMesh.position.z=0.9;
   textMesh.userData.isTextboxText=true;
   group.add(textMesh);
+  textTextures.push(ratio=>{
+    const next=resolutionFor(ratio);
+    if(Math.abs(next-resolution)<0.1) return;
+    const replacement=makeTexture(next);
+    if(!replacement) return;
+    textMesh.material.map.dispose();
+    textMesh.material.map=replacement;
+    textMesh.material.needsUpdate=true;
+    resolution=next;
+  });
 }
 
 function kindForElevation(item, rect, rectangles,layer) {
@@ -587,23 +617,29 @@ function fitScale(width,height) {
 function resizeCadLayers() {
   const stage=layers[0].stage;
   const w=Math.max(1,stage.clientWidth),h=Math.max(1,stage.clientHeight);
-  const nextScale=fitScale(w,h);
-  const previousScale=lastCadSize ? fitScale(lastCadSize.w,lastCadSize.h) : nextScale;
-  const factor=hasGeometry && previousScale>0 ? nextScale/previousScale : 1;
+  // Both layers share a world-space scale; layout never changes user zoom.
+  if(hasGeometry && stage.clientWidth>0 && stage.clientHeight>0) baseFitScale=fitScale(w,h);
+  const ratio=effectivePixelRatio();
   syncing=true;
   try {
     for(const layer of layers) {
       const width=Math.max(1,layer.stage.clientWidth);
       const height=Math.max(1,layer.stage.clientHeight);
+      if(layer.renderer.getPixelRatio()!==ratio) layer.renderer.setPixelRatio(ratio);
       layer.renderer.setSize(width,height,false);
       layer.camera.left=-width/2;layer.camera.right=width/2;
       layer.camera.top=height/2;layer.camera.bottom=-height/2;
-      layer.camera.zoom=Math.max(0.01,Math.min(100,layer.camera.zoom*factor));
+      layer.controls.minZoom=baseFitScale*MIN_USER_ZOOM;
+      layer.controls.maxZoom=baseFitScale*MAX_USER_ZOOM;
+      layer.camera.zoom=baseFitScale*userCadZoom;
       layer.camera.updateProjectionMatrix();
       layer.controls.update();
     }
+    if(lastRenderRatio!==ratio) {
+      for(const refresh of textTextures) refresh(ratio);
+      lastRenderRatio=ratio;
+    }
   } finally {syncing=false;}
-  lastCadSize={w,h};
 }
 
 function initialFit() {
@@ -612,22 +648,22 @@ function initialFit() {
   const minY=sceneBounds.minY,maxY=sceneBounds.maxY;
   const target=new THREE.Vector3((minX+maxX)/2,-(minY+maxY)/2,0);
   const distance=Math.max(1000,Math.max(maxX-minX,maxY-minY)*4);
-  const zoom=Math.min(100,Math.max(0.01,
-    fitScale(layers[0].stage.clientWidth,layers[0].stage.clientHeight)));
+  userCadZoom=1;
+  baseFitScale=fitScale(Math.max(1,layers[0].stage.clientWidth),Math.max(1,layers[0].stage.clientHeight));
+  const zoom=baseFitScale;
   syncing=true;
   try {
     for(const layer of layers) {
       layer.camera.position.set(target.x,target.y,distance);
+      layer.controls.minZoom=baseFitScale*MIN_USER_ZOOM;
+      layer.controls.maxZoom=baseFitScale*MAX_USER_ZOOM;
       layer.camera.zoom=zoom;
       layer.camera.updateProjectionMatrix();
       layer.controls.target.copy(target);
       layer.controls.update();
     }
   } finally {syncing=false;}
-  lastCadSize={
-    w:Math.max(1,layers[0].stage.clientWidth),
-    h:Math.max(1,layers[0].stage.clientHeight),
-  };
+  scheduleCadResize();
 }
 
 function resetTopView() {
@@ -1065,7 +1101,7 @@ installSplitter('main-splitter','vertical',event=>{
   const bounds=layout.getBoundingClientRect();
   const left=clampMainDivider((event.clientX-bounds.left)/pageZoom,bounds.width/pageZoom,8,displayedSvgWidth);
   layout.style.gridTemplateColumns='minmax(0,'+left+'px) 8px minmax(0,1fr)';
-  resizeCadLayers();
+  scheduleCadResize();
   fitSvgHeightToPane();
 });
 
@@ -1081,15 +1117,22 @@ const fab=createLayer('fab-stage');
 const subfab=createLayer('subfab-stage');
 applySvgSplitRatio();
 document.getElementById('reset-view').addEventListener('click',resetTopView);
-new ResizeObserver(()=>resizeCadLayers()).observe(document.getElementById('cad-layers'));
+const cadObserver=new ResizeObserver(scheduleCadResize);
+cadObserver.observe(document.getElementById('cad-layers'));
 new ResizeObserver(()=>{
   fitSvgHeightToPane();
   clampFloatingLog();
 }).observe(document.getElementById('reference-frames'));
 for(const layer of layers) {
-  new ResizeObserver(()=>resizeCadLayers()).observe(layer.stage);
+  cadObserver.observe(layer.stage);
 }
 resizeCadLayers();
+window.addEventListener('resize',scheduleCadResize);
+function watchDpr() {
+  const query=matchMedia('(resolution: '+(window.devicePixelRatio||1)+'dppx)');
+  query.addEventListener('change',()=>{scheduleCadResize();watchDpr();},{once:true});
+}
+watchDpr();
 
 async function initialize() {
   try {
