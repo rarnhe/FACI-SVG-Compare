@@ -84,7 +84,10 @@ test('Chromium renders every CAD outline and scales octave points around their c
     // evaluation. Require consecutive animation frames with matching metrics
     // and camera state rather than relying on a fixed sleep or a second RPC.
     const settledState=async(expectedDpr=1,expectedWidth=1400,expectedHeight=950)=>{
-      const handle=await page.waitForFunction(async({dpr,width,height})=>{
+      const deadline=Date.now()+15000;
+      let last=null;
+      do {
+        last=await page.evaluate(async({dpr,width,height})=>{
         const {layers,userCadZoom}=await import('/viewer/cad_viewer.js');
         const snapshot=()=>{
           const page=Number(document.documentElement.style.zoom||1);
@@ -103,12 +106,15 @@ test('Chromium renders every CAD outline and scales octave points around their c
             Math.abs(m.width-m.w*m.ratio)<1&&Math.abs(m.height-m.h*m.ratio)<1&&
             m.cameraW===m.w&&m.cameraH===m.h)&&s.zoom[0]===s.zoom[1];
         const a=snapshot();
-        if(!ready(a)) return false;
+        if(!ready(a)) return {stable:false,snapshot:a};
         await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
         const b=snapshot();
-        return ready(b)&&JSON.stringify(a)===JSON.stringify(b)?b:false;
-      },{dpr:expectedDpr,width:expectedWidth,height:expectedHeight},{timeout:15000});
-      try{return await handle.jsonValue();}finally{await handle.dispose();}
+        return {stable:ready(b)&&JSON.stringify(a)===JSON.stringify(b),snapshot:b};
+        },{dpr:expectedDpr,width:expectedWidth,height:expectedHeight});
+        if(last.stable) return last.snapshot;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      } while(Date.now()<deadline);
+      assert.fail('CAD layout did not settle: '+JSON.stringify(last));
     };
     const before=await settledState();
     assert.equal(await wheel('#fab-stage canvas',{}),true);
@@ -563,8 +569,15 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     await dateButtons.nth(1).click();
     const secondAlignment=await aligned();
     assert.ok(secondAlignment.delta<=1 && secondAlignment.right,JSON.stringify(secondAlignment));
-    assert.equal(await stage.locator('.cad-axis-description').textContent(),'第二条说明，设备运行期间持续观察振动变化并记录各方向测量数据，确认设备状态及现场测试条件');
-    const longPanel=await stage.locator('.cad-axis-description').evaluate(el=>({w:el.offsetWidth,h:el.offsetHeight,scroll:el.scrollHeight,client:el.clientHeight}));
+    assert.equal(await stage.locator('.cad-axis-description').textContent(),'第二条说明，设备运行期间持续观察振动变化并记录各方向测量数据，确认设备状态及现场测试条件，随后复核测点编号、设备负载、运行工况、环境温度和测量仪器设置，并记录复测时间与现场人员的观察结果。');
+    const longPanel=await stage.locator('.cad-axis-description').evaluate(el=>{
+      const probe=el.cloneNode(true);
+      Object.assign(probe.style,{width:'150px',visibility:'hidden',pointerEvents:'none'});
+      el.parentElement.append(probe);
+      const needsExpansion=probe.scrollHeight>probe.clientHeight||probe.scrollWidth>probe.clientWidth;
+      probe.remove();
+      return {w:el.offsetWidth,h:el.offsetHeight,scroll:el.scrollHeight,client:el.clientHeight,needsExpansion};
+    });
     await dateButtons.first().click();
     const firstAlignment=await aligned();
     assert.ok(firstAlignment.delta<=1 && firstAlignment.right,JSON.stringify(firstAlignment));
@@ -572,6 +585,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     assert.equal(await stage.locator('.cad-axis-description').textContent(),'第一条说明');
     const shortPanel=await stage.locator('.cad-axis-description').evaluate(el=>({w:el.offsetWidth,h:el.offsetHeight}));
     assert.equal(shortPanel.w,150,'short description minimum width');
+    assert.ok(longPanel.needsExpansion,'fixture must overflow at 150px on this browser');
     assert.ok(longPanel.w>shortPanel.w,JSON.stringify({longPanel,shortPanel}));
     assert.equal(longPanel.h,shortPanel.h);
     assert.equal(shortPanel.h,await stage.locator('.cad-submenu').evaluate(el=>el.offsetHeight));
