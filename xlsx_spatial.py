@@ -528,7 +528,7 @@ def check_workbook_writable(path: Path) -> None:
     if path.is_symlink() or not path.is_file():
         raise OSError("Workbook is not a regular local file")
     if (path.parent / ("~$" + path.name)).exists():
-        raise OSError("Close the workbook in Excel before synchronizing")
+        raise PermissionError("工作簿可能正在 Excel 中打开，暂未写回")
 
 
 def patch_ellipse_alt_xml(data: bytes, source: dict, name: str, before: dict, after: dict) -> bytes:

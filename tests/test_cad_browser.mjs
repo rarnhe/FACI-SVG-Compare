@@ -505,7 +505,21 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     assert.equal((await page.request.post(route)).status(),403);
     const unchanged=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
     assert.match(unchanged.layers[0].objects[outsideIndex].alt_text.description,/20250101000000-过期/);
+    const lockUrl=fixture.base+'/test-workbook-lock';
+    assert.equal((await page.request.post(lockUrl+'?locked=1')).status(),200);
+    const deferred=await page.request.post(route,{headers:{Origin:fixture.base,'X-CAD-Sync':'1'}});
+    assert.equal(deferred.status(),200);
+    const deferredData=await deferred.json();
+    assert.equal(deferredData.sync_status,'deferred');
+    assert.equal(deferredData.time_descriptions['20260705101627'],'请注明详细测试场景');
     await choose(0,'Outside',['20260705101627'],'20260705101627','Y','BODYv2_Sheet1_Outside_+Y_2026/07/05_10:16:27',3);
+    const lockedManifest=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
+    assert.equal(lockedManifest.layers[0].objects[outsideIndex].alt_text.description,
+      unchanged.layers[0].objects[outsideIndex].alt_text.description);
+    assert.equal((await page.request.post(lockUrl+'?locked=0')).status(),200);
+    const saved=await page.request.post(route,{headers:{Origin:fixture.base,'X-CAD-Sync':'1'}});
+    assert.equal(saved.status(),200);
+    assert.equal((await saved.json()).sync_status,'saved');
     const afterSync=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
     assert.equal(afterSync.layers[0].objects[outsideIndex].alt_text.description,'保留普通文字\n20260705101627-');
     const otherSheet=afterSync.layers[1].objects.find(o=>o.name==='Outside');

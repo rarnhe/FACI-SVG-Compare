@@ -576,6 +576,7 @@ function showAxisSubmenu(layer,button,date,catalog) {
   pane.hidden=false;
   const note=catalog.time_descriptions?.[date]||'请注明详细测试场景';
   layer.menu.description.textContent=note;
+  layer.menu.description.title=catalog.sync_message||'';
   layer.menu.description.hidden=!note;
   refreshAxisChecks();
   positionAxisPanels(layer);
@@ -590,6 +591,7 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
   menu.style.left=((clientX-bounds.left)/pageZoom)+'px';
   menu.style.top=((clientY-bounds.top)/pageZoom)+'px';
   menu.replaceChildren();
+  menu.title='';
   menu.hidden=false;
   const placeholder=document.createElement('div');
   placeholder.textContent='查找 SVG 日期…';
@@ -607,6 +609,9 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
     const catalog=await response.json();
     if(layer.menu.requestId!==id) return;
     menu.replaceChildren();
+    // Keep the compact date rows unchanged; show deferred writeback as a
+    // non-blocking tooltip rather than replacing the selectable menu.
+    menu.title=catalog.sync_message||'';
     if(!catalog.dates?.length) {
       const empty=document.createElement('div');
       empty.textContent='无可用测试结果';

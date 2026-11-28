@@ -138,13 +138,23 @@ class EllipseSvgCatalogHandler(RequestHandler):
                 ):
                     raise ValueError("Workbook geometry changed; restart viewer")
                 current = fresh[i]["objects"][j]
-                after = write_ellipse_dates(path, current, payload["dates"], signature)
-                notes = ellipse_time_descriptions(after)
-                ellipse["alt_text"] = after
-                ellipse["time_descriptions"] = notes
-                public = self.state["manifest"]["layers"][i]["objects"][j]
-                public["alt_text"] = after
-                public["time_descriptions"] = notes
+                # A locked workbook must not disable browsing or pretend a
+                # write succeeded. Re-read and retry on every explicit click.
+                notes = ellipse_time_descriptions(current["alt_text"])
+                try:
+                    after = write_ellipse_dates(path, current, payload["dates"], signature)
+                except PermissionError:
+                    payload["sync_status"] = "deferred"
+                    payload["sync_message"] = "Excel 工作簿暂不可写，关闭后再次点击椭圆即可同步"
+                else:
+                    payload["sync_status"] = "saved" if after != current["alt_text"] else "unchanged"
+                    notes = ellipse_time_descriptions(after)
+                    ellipse["alt_text"] = after
+                    ellipse["time_descriptions"] = notes
+                    public = self.state["manifest"]["layers"][i]["objects"][j]
+                    public["alt_text"] = after
+                    public["time_descriptions"] = notes
+            payload.setdefault("sync_status", "not_applicable")
             payload["time_descriptions"] = {
                 date: notes.get(date) or MISSING_TEST_DESCRIPTION for date in payload["dates"]
             }

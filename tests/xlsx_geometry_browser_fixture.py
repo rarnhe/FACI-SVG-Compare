@@ -117,7 +117,19 @@ def main():
         app.STATIC_DIR=base
         state={"workbook":book,"sheets":sheets,
                "manifest":service.build_cad_manifest(book,sheets,assets)}
+        # Test-only endpoint to simulate Excel's owner file without opening
+        # a GUI application. Not registered by the production server.
+        from tornado.web import RequestHandler
+        class TestWorkbookLock(RequestHandler):
+            def post(self):
+                lock=book.parent/("~$"+book.name)
+                if self.get_argument("locked")=="1":
+                    lock.touch()
+                else:
+                    lock.unlink(missing_ok=True)
+                self.write({"locked":lock.exists()})
         application=Application([
+            (r"/test-workbook-lock",TestWorkbookLock),
             (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)",app.EllipseSvgCatalogHandler,{"state":state}),
             (r"/viewer/assets/(.*)",app.NoCacheIndexHandler,{"path":str(assets)}),
             (r"/viewer/cad-layout\.json",app.CadManifestHandler,{"state":state}),
