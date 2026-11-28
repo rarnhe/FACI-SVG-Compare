@@ -7,6 +7,7 @@ text, and all SVG filenames are enumerated at request time.
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime
 import re
 from urllib.parse import quote
 
@@ -16,6 +17,27 @@ else:
     from cad_validation import Rectangle, circle_relation, intersecting_rectangles
 
 TIMESTAMP = re.compile(r"_(\d{14})_")
+CSV_TIMESTAMP = re.compile(r"(?<![0-9])[0-9]{14}(?![0-9])")
+
+
+def csv_time_rank(filename: str, date: str) -> float | None:
+    """Exact time first; otherwise strictly earlier by less than 60 seconds."""
+    try:
+        selected = datetime.strptime(date, "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    matches = []
+    for token in CSV_TIMESTAMP.findall(filename):
+        try:
+            candidate = datetime.strptime(token, "%Y%m%d%H%M%S")
+        except ValueError:
+            continue
+        delta = (selected - candidate).total_seconds()
+        if 0 <= delta < 60:
+            matches.append(delta)
+    return min(matches, default=None)
+
+
 AXIS = re.compile(r"(?:^|[_-])\+([XYZ])(?=[_.-])", re.IGNORECASE)
 PSD_SUFFIX = re.compile(r"_PSD\.svg$", re.IGNORECASE)
 OCTAVE_SUFFIX = re.compile(r"_1-3-Octave\.svg$", re.IGNORECASE)
@@ -138,11 +160,14 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
             if all(matching.values()):
                 axes[axis] = matching
         result["pairs"][date] = axes
+        ranked = [(rank, p) for p in csv_entries
+                  if (rank := csv_time_rank(p.name, date)) is not None]
+        ranked.sort(key=lambda entry: (entry[0], entry[1].name.casefold(), entry[1].name))
         result["csv_files"][date] = {
             axis: [{"name": p.name, "url": "/viewer/assets/" + quote(folder_name, safe="")
                     + "/" + quote(p.name, safe="")}
-                   for p in csv_entries if date in TIMESTAMP.findall(p.name)
-                   and axis in [m.group(1).upper() for m in AXIS.finditer(p.name)]]
+                   for _, p in ranked
+                   if axis in [m.group(1).upper() for m in AXIS.finditer(p.name)]]
             for axis in axes
         }
     return result

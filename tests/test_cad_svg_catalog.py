@@ -32,6 +32,21 @@ def sample_objects(body="BODYv2"):
 
 
 class TestSvgCatalog(unittest.TestCase):
+    def test_csv_time_window_strict_boundaries_and_calendar(self):
+        date="20261128000020"
+        for name,expected in [
+            ("a_20261128000020_+X.csv",0),
+            ("a20261127235921_+X.csv",59),
+            ("a_20261127235920_+X.csv",None),
+            ("a_20261128000021_+X.csv",None),
+            ("a_20261127000020_+X.csv",None),
+            ("a_20261128000099_+X.csv",None),
+            ("a_120261128000020_+X.csv",None),
+            ("a_20261127235959_20261128000020_+X.csv",0),
+        ]:
+            self.assertEqual(catalog.csv_time_rank(name,date),expected,name)
+        self.assertEqual(catalog.csv_time_rank("a_20261231235959.csv","20270101000000"),1)
+
     def test_csv_matches_exact_selected_pair_and_all_files(self):
         with TemporaryDirectory() as tmp:
             base=Path(tmp)
@@ -41,12 +56,16 @@ class TestSvgCatalog(unittest.TestCase):
                 (folder/f"{prefix}_{suffix}").write_text("data")
             for name in ("20260704_SCN_B10_20260704101627_+X_a.csv",
                          "20260704_SCN_B1_20260704101627_+Y_a.csv",
-                         "20260704_SCN_B1_20260705101627_+X_a.csv"):
+                         "20260704_SCN_B1_20260705101627_+X_a.csv",
+                         "20260704_SCN_B1_20260704101527_+X_a.csv",
+                         "20260704_SCN_B1_20260704101628_+X_a.csv"):
                 (folder/name).write_text("wrong")
+            prior="20260704_SCN_B1_20260704101528_+X_raw.csv"
+            (folder/prior).write_text("earlier")
             result=catalog.build_ellipse_svg_catalog(base,[{"sheet":"Fab","objects":sample_objects()}],0,2)
             self.assertEqual(result["dates"],["20260704101627"])
             files=result["csv_files"]["20260704101627"]["X"]
-            self.assertEqual([v["name"] for v in files],[prefix+"_a.csv",prefix+"_b.CSV"])
+            self.assertEqual([v["name"] for v in files],[prefix+"_a.csv",prefix+"_b.CSV",prior])
             self.assertTrue(all("%2BX" in v["url"] for v in files))
 
     def test_enclosing_textbox_and_rectangle(self):

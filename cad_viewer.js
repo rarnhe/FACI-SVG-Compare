@@ -5,7 +5,7 @@ import { rectangleHeight, rectangleSpecs, ellipseElevation, worldRectFromEmu, re
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
-  requiredSvgRatio, canAddOverlay, fitLegendSubmenu,
+  requiredSvgRatio, canAddOverlay, fitLegendSubmenu, nextLegendColor,
   restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
   cadOutlineSpec, cadOutlineSegments,
   rectangleHasAltText, planarOutlineVertices,
@@ -28,6 +28,7 @@ const svgHistory = document.getElementById('reference-log');
 const legendMenu = document.getElementById('legend-context-menu');
 const overlaySelections = new Map();
 const overlayLoads = new Set();
+let colorCursor=0;
 let displayedSvgWidth = 0;
 
 function createLayer(stageId) {
@@ -746,8 +747,8 @@ async function switchReferencePair(pair,key,label,csvFiles=[]) {
   if(!canAddOverlay(overlaySelections,overlayLoads,key)) return false;
   overlayLoads.add(key);
   try {
-    const color='#808080';
-    const style=mergeSvgStyle({color:null});
+    const color=nextLegendColor(colorCursor++);
+    const style=mergeSvgStyle({color,lineStyle:'none',lineWidth:2});
     const previews=await makeColoredPair(pair,style);
     if(overlaySelections.has(key)) {
       releaseColoredPair(previews);
@@ -855,7 +856,7 @@ async function changeLegendStyle(key,patch) {
 async function downloadLegendCsv(entry) {
   if(entry.downloading) return;
   if(!entry.csvFiles.length) {
-    window.alert('没有符合当前测点、时间和方向的 CSV 文件');
+    window.alert('未提供符合当前测点、时间和方向的测试文件');
     return;
   }
   entry.downloading=true;
@@ -914,7 +915,7 @@ function showLegendMenu(key,x,y) {
         item.setAttribute('role','menuitemradio');
         item.setAttribute('aria-checked',String(entry.style[property]===choice.value));
         item.textContent=choice.label;
-        if(property==='color') item.style.color=choice.value;
+        if(property==='color' && choice.value!==null) item.style.color=choice.value;
         item.addEventListener('click',()=>{void changeLegendStyle(key,{[property]:choice.value});});
         secondary.append(item);
       }
@@ -935,9 +936,9 @@ function showLegendMenu(key,x,y) {
     });
     primary.append(button);
   }
-  submenu('颜色','color',SVG_COLOR_CHOICES);
-  submenu('线型','lineStyle',SVG_LINE_TYPES);
-  submenu('线宽','lineWidth',SVG_LINE_WIDTHS.map(value=>({label:String(value),value})));
+  submenu('颜色','color',[...SVG_COLOR_CHOICES,{label:'初始颜色',value:null}]);
+  submenu('线型','lineStyle',[...SVG_LINE_TYPES,{label:'初始线型',value:null}]);
+  submenu('线宽','lineWidth',[...SVG_LINE_WIDTHS.map(value=>({label:String(value),value})),{label:'初始线宽',value:null}]);
   const download=document.createElement('button');
   download.type='button';
   download.setAttribute('role','menuitem');
