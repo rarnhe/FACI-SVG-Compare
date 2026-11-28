@@ -494,7 +494,19 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     }
     await choose(0,'Inside',['20260704101627','20260706101627'],'20260704101627','X','BODYv2_Sheet1_R_Cube_+X_2026/07/04_10:16:27',1);
     await choose(0,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet1_R_Cube_+Z_2026/07/06_10:16:27',2);
+    // GET remains read-only and a POST without the same-origin guard is rejected.
+    const beforeSync=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
+    const outsideIndex=beforeSync.layers[0].objects.findIndex(o=>o.name==='Outside');
+    const route=fixture.base+'/viewer/cad-svg-catalog/0/'+outsideIndex;
+    assert.equal((await page.request.get(route)).status(),200);
+    assert.equal((await page.request.post(route)).status(),403);
+    const unchanged=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
+    assert.match(unchanged.layers[0].objects[outsideIndex].alt_text.description,/20250101000000-过期/);
     await choose(0,'Outside',['20260705101627'],'20260705101627','Y','BODYv2_Sheet1_Outside_+Y_2026/07/05_10:16:27',3);
+    const afterSync=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
+    assert.equal(afterSync.layers[0].objects[outsideIndex].alt_text.description,'保留普通文字\n20260705101627-');
+    const otherSheet=afterSync.layers[1].objects.find(o=>o.name==='Outside');
+    assert.match(otherSheet.alt_text.description,/20250101000000-过期/);
     await choose(1,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet2_R_Cube_+Z_2026/07/06_10:16:27',4);
     for(const [label,date,axis] of [['R_Cube','20260704101627','X'],['R_Cube','20260706101627','Z'],['BODYv2','20260705101627','Y']])
       for(const suffix of ['PSD','1-3-Octave'])

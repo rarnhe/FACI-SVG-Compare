@@ -564,9 +564,17 @@ def patch_ellipse_alt_xml(data: bytes, source: dict, name: str, before: dict, af
         if before.get(field, "") == after[field]:
             continue
         value = escape(after[field], {'"': '&quot;', "'": '&apos;'}).replace("\n", "_x000D_").encode("utf-8")
-        attr_pattern = re.compile(rb"(\s" + attr + rb"\s*=\s*)(['\"])(.*?)\2", re.DOTALL)
-        replacement = lambda m: m.group(1) + b'"' + value + b'"'
-        tag, count = attr_pattern.subn(replacement, tag)
+        # Tokenize complete attributes, never match attribute-like text
+        # inside a different quoted attribute value.
+        attribute_tokens = re.compile(rb"(\s+)([^\s=/<>]+)(\s*=\s*)(['\"])(.*?)\4", re.DOTALL)
+        count = 0
+        def replacement(m):
+            nonlocal count
+            if m.group(2) != attr:
+                return m.group()
+            count += 1
+            return m.group(1) + m.group(2) + m.group(3) + b'"' + value + b'"'
+        tag = attribute_tokens.sub(replacement, tag)
         if count == 0:
             end = 2 if tag.endswith(b"/>") else 1
             tag = tag[:-end] + b" " + attr + b'="' + value + b'"' + tag[-end:]
@@ -592,6 +600,8 @@ def write_ellipse_dates(path: Path, ellipse: dict, dates: list[str], signature: 
     before = ellipse["alt_text"]
     after = reconcile_ellipse_dates(before, dates)
     if before == after:
+        if workbook_signature(path) != signature:
+            raise OSError("Workbook changed during synchronization")
         return before
     check_workbook_writable(path)
     if workbook_signature(path) != signature:
@@ -607,6 +617,8 @@ def write_ellipse_dates(path: Path, ellipse: dict, dates: list[str], signature: 
         with ZipFile(path) as original, ZipFile(tmp, "w") as updated:
             if any(n.startswith("_xmlsignatures/") for n in original.namelist()):
                 raise ValueError("Digitally signed workbook cannot be rewritten")
+            if part not in original.namelist():
+                raise ValueError("DrawingML part disappeared")
             if len(original.namelist()) != len(set(original.namelist())):
                 raise ValueError("Duplicate XLSX package entries")
             updated.comment = original.comment
@@ -615,9 +627,9 @@ def write_ellipse_dates(path: Path, ellipse: dict, dates: list[str], signature: 
                 if info.filename == part:
                     data = patch_ellipse_alt_xml(data, source, ellipse["name"], before, after)
                 updated.writestr(info, data)
-        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
-        with tmp.open("rb") as handle:
+        with tmp.open("r+b") as handle:
             os.fsync(handle.fileno())
+        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
         check_workbook_writable(path)
         if workbook_signature(path) != signature:
             raise OSError("Workbook changed during synchronization")

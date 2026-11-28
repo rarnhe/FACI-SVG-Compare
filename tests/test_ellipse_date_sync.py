@@ -51,6 +51,13 @@ class TestEllipseDateSync(unittest.TestCase):
             spatial.write_ellipse_dates(path, objects[0], [A,B], spatial.workbook_signature(path))
             self.assertEqual(path.read_bytes(),raw)
 
+    def test_title_dates_and_non_date_text_are_reconciled(self):
+        before = {"description": "description", "title": f"{A}-from title\n{OLD}-old"}
+        self.assertEqual(spatial.reconcile_ellipse_dates(before, [A,B]),
+                         {"description": f"description\n{B}-", "title": f"{A}-from title"})
+        with self.assertRaises(ValueError):
+            spatial.reconcile_ellipse_dates(before, ["invalid"])
+
     def test_lock_and_failed_replace_leave_original_intact(self):
         with TemporaryDirectory() as tmp:
             path = self.workbook(tmp)

@@ -112,7 +112,8 @@ class EllipseSvgCatalogHandler(RequestHandler):
     def post(self, layer, object_index):
         # An explicit same-origin POST from the CAD menu is required. GET
         # stays read-only; arbitrary browser sites cannot trigger writeback.
-        if (self.request.headers.get("Origin") != f"{self.request.protocol}://{self.request.host}"
+        if (self.request.host.split(":")[0] not in {"127.0.0.1", "localhost"}
+                or self.request.headers.get("Origin") != f"{self.request.protocol}://{self.request.host}"
                 or self.request.headers.get("X-CAD-Sync") != "1"):
             self.send_error(403)
             return
