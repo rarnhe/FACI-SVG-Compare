@@ -418,11 +418,23 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       assert.deepEqual(await menu.locator('button span:first-child').allTextContents(),dates.map(formatDate),name);
       assert.deepEqual(await menu.locator('button[data-timestamp]').evaluateAll(els=>els.map(e=>e.dataset.timestamp)),dates);
       await menu.getByRole('menuitem',{name:new RegExp(formatDate(date))}).click();
-      await stage.locator('.cad-submenu').getByRole('menuitem',{name:axis,exact:true}).click();
+      const axisItem=stage.locator('.cad-submenu').getByRole('menuitemcheckbox',{name:axis,exact:true});
+      assert.equal(await axisItem.getAttribute('aria-checked'),'false');
+      await axisItem.click();
       await page.waitForFunction(({label,count})=>
         document.querySelectorAll('#psd-overlays img').length===count &&
         document.querySelectorAll('#octave-overlays img').length===count &&
         document.getElementById('reference-log').textContent.includes(label),{label,count});
+      await page.waitForFunction(el=>el.getAttribute('aria-checked')==='true',await axisItem.elementHandle());
+      const panels=await stage.evaluate(el=>{
+        const p=el.querySelector('.cad-submenu'),d=el.querySelector('.cad-axis-description');
+        const a=p.getBoundingClientRect(),b=d.getBoundingClientRect(),r=el.getBoundingClientRect();
+        return {same:Math.abs(a.height-b.height)<1,adjacent:b.left>=a.right-1,
+          inside:a.left>=r.left-1&&b.right<=r.right+1&&a.top>=r.top-1&&b.bottom<=r.bottom+1,
+          white:getComputedStyle(d).backgroundColor,text:d.textContent};
+      });
+      assert.deepEqual(panels,{same:true,adjacent:true,inside:true,white:'rgb(255, 255, 255)',text:'这里是说明文字'});
+      await page.keyboard.press('Escape');
       await menu.waitFor({state:'hidden'});
     }
     await choose(0,'Inside',['20260704101627','20260706101627'],'20260704101627','X','BODYv2_Sheet1_R_Cube_+X_2026/07/04_10:16:27',1);
@@ -488,6 +500,21 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     await menu.getByRole('menuitem',{name:'关闭',exact:true}).click();
     assert.equal(await page.locator('#psd-overlays img').count(),3);
     assert.equal(await page.locator('#octave-overlays img').count(),3);
+    // Closing via Legend and the CAD menu share the same selection key.
+    const stage=page.locator('#fab-stage');
+    await clickShape(0,'Inside');
+    await stage.locator('.cad-context-menu button').first().click();
+    const toggle=stage.locator('.cad-submenu').getByRole('menuitemcheckbox',{name:'X',exact:true});
+    assert.equal(await toggle.getAttribute('aria-checked'),'false');
+    await toggle.click();
+    await page.waitForFunction(()=>document.querySelectorAll('#psd-overlays img').length===4);
+    assert.equal(await toggle.getAttribute('aria-checked'),'true');
+    await toggle.click();
+    assert.equal(await toggle.getAttribute('aria-checked'),'false');
+    assert.equal(await page.locator('#psd-overlays img').count(),3);
+    assert.equal(await page.locator('#octave-overlays img').count(),3);
+    await page.keyboard.press('Escape');
+    assert.equal(await stage.locator('.cad-axis-description').isVisible(),false);
     assert.deepEqual(errors,[]);
   }finally{
     await browser?.close();
