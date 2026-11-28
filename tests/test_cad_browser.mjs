@@ -377,7 +377,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     assert.equal(fit,true);
     await menu.getByRole('menuitemradio',{name:'初始颜色',exact:true}).click();
     await menu.waitFor({state:'hidden'});
-    assert.equal(await legend.evaluate(el=>getComputedStyle(el).color),'rgb(128, 128, 128)');
+    assert.equal(await legend.evaluate(el=>getComputedStyle(el).color),'rgb(255, 255, 255)');
     assert.ok((await markup()).includes('#123456'));
     await legend.click({button:'right'});
     await menu.getByRole('menuitem',{name:'线型 ›'}).click();
@@ -406,7 +406,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     for(let i=0;i<100&&downloads.length<2;i++) await new Promise(r=>setTimeout(r,100));
     page.off('download',onDownload);
     assert.deepEqual(downloads.map(d=>d.suggestedFilename()),[
-      'R_Cube_20260704101627_+X_a.csv','R_Cube_20260704101528_+X_b.csv']);
+      'R_Cube_20260704101627_+X_PSD.csv','R_Cube_20260704101528_+X_Time.csv']);
     for(const d of downloads) assert.equal(await d.failure(),null);
     await legend.click({button:'right'});
     await menu.getByRole('menuitem',{name:'关闭',exact:true}).click();

@@ -47,12 +47,27 @@ class TestSvgCatalog(unittest.TestCase):
             self.assertEqual(catalog.csv_time_rank(name,date),expected,name)
         self.assertEqual(catalog.csv_time_rank("a_20261231235959.csv","20270101000000"),1)
 
+    def test_csv_companion_requires_psd_reference_and_only_one_earlier(self):
+        from pathlib import Path
+        exact=Path("R_20261128000020_+X_PSD.csv")
+        unrelated=Path("R_20261128000019_+X_other_Time.csv")
+        closest=Path("R_20261128000018_+X_Time.csv")
+        older=Path("R_20261127235921_+X_Time.CSV")
+        ranked=[(0,exact),(1,unrelated),(2,closest),(59,older)]
+        self.assertEqual(catalog.select_csv_files(ranked,"X"),[exact,closest])
+        self.assertEqual(catalog.select_csv_files(ranked[1:],"X"),[])
+        self.assertEqual(catalog.select_csv_files([(0,Path("R_20261128000020_+X_other.csv")),(2,closest)],"X"),
+                         [Path("R_20261128000020_+X_other.csv")])
+        self.assertEqual(catalog.select_csv_files(ranked,"Y"),[])
+        self.assertIsNone(catalog.csv_companion_key("R_PSDsensor_20261128000020_+X.csv",psd=True))
+        self.assertIsNone(catalog.csv_companion_key("R_PSD_20261128000020_+X_PSD.csv",psd=True))
+
     def test_csv_matches_exact_selected_pair_and_all_files(self):
         with TemporaryDirectory() as tmp:
             base=Path(tmp)
             folder=base/"BODYv2"; folder.mkdir()
             prefix="20260704_SCN_B1_20260704101627_+X"
-            for suffix in ("PSD.svg","1-3-Octave.svg","a.csv","b.CSV"):
+            for suffix in ("PSD.svg","1-3-Octave.svg","PSD.csv","b.CSV"):
                 (folder/f"{prefix}_{suffix}").write_text("data")
             for name in ("20260704_SCN_B10_20260704101627_+X_a.csv",
                          "20260704_SCN_B1_20260704101627_+Y_a.csv",
@@ -60,12 +75,14 @@ class TestSvgCatalog(unittest.TestCase):
                          "20260704_SCN_B1_20260704101527_+X_a.csv",
                          "20260704_SCN_B1_20260704101628_+X_a.csv"):
                 (folder/name).write_text("wrong")
-            prior="20260704_SCN_B1_20260704101528_+X_raw.csv"
+            prior="20260704_SCN_B1_20260704101528_+X_Time.csv"
             (folder/prior).write_text("earlier")
+            (folder/"20260704_SCN_B1_20260704101626_+X_raw.csv").write_text("wrong type")
+            (folder/"20260704_SCN_B1_20260704101625_+X_extra_Time.csv").write_text("wrong stem")
             result=catalog.build_ellipse_svg_catalog(base,[{"sheet":"Fab","objects":sample_objects()}],0,2)
             self.assertEqual(result["dates"],["20260704101627"])
             files=result["csv_files"]["20260704101627"]["X"]
-            self.assertEqual([v["name"] for v in files],[prefix+"_a.csv",prefix+"_b.CSV",prior])
+            self.assertEqual([v["name"] for v in files],[prefix+"_b.CSV",prefix+"_PSD.csv",prior])
             self.assertTrue(all("%2BX" in v["url"] for v in files))
 
     def test_enclosing_textbox_and_rectangle(self):

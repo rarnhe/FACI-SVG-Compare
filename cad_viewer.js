@@ -839,7 +839,7 @@ async function changeLegendStyle(key,patch) {
       entry[key].blobUrl=next[key].blobUrl;
     }
     entry.style=style;
-    entry.color=style.color??'#808080';
+    entry.color=style.color??'#FFFFFF';
     entry.legend.style.color=entry.color;
     fitSvgHeightToPane();
     legendMenu.hidden=true;

@@ -38,6 +38,34 @@ def csv_time_rank(filename: str, date: str) -> float | None:
     return min(matches, default=None)
 
 
+# Match a standalone PSD marker, never a substring of the equipment name.
+PSD_TOKEN = re.compile(r"(?<![A-Za-z0-9])PSD(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def csv_companion_key(filename: str, *, psd: bool = False) -> str | None:
+    """Ignore only independent 14-digit timestamps; retain all other text."""
+    key = CSV_TIMESTAMP.sub("", filename)
+    if psd:
+        key, count = PSD_TOKEN.subn("Time", key)
+        if count != 1:
+            return None
+    return key.casefold()
+
+
+def select_csv_files(ranked: list[tuple[float, Path]], axis: str) -> list[Path]:
+    """Keep all exact matches and at most one verified earlier Time companion."""
+    eligible = [(delta, p) for delta, p in ranked
+                if axis in [m.group(1).upper() for m in AXIS.finditer(p.name)]]
+    exact = [p for delta, p in eligible if delta == 0]
+    expected = {key for p in exact
+                if (key := csv_companion_key(p.name, psd=True)) is not None}
+    # ranked is already ordered by delta, then filename. No exact PSD
+    # reference means no earlier companion can be safely selected.
+    earlier = next((p for delta, p in eligible if delta > 0
+                    and csv_companion_key(p.name) in expected), None)
+    return exact + ([earlier] if earlier is not None else [])
+
+
 AXIS = re.compile(r"(?:^|[_-])\+([XYZ])(?=[_.-])", re.IGNORECASE)
 PSD_SUFFIX = re.compile(r"_PSD\.svg$", re.IGNORECASE)
 OCTAVE_SUFFIX = re.compile(r"_1-3-Octave\.svg$", re.IGNORECASE)
@@ -166,8 +194,7 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
         result["csv_files"][date] = {
             axis: [{"name": p.name, "url": "/viewer/assets/" + quote(folder_name, safe="")
                     + "/" + quote(p.name, safe="")}
-                   for _, p in ranked
-                   if axis in [m.group(1).upper() for m in AXIS.finditer(p.name)]]
+                   for p in select_csv_files(ranked, axis)]
             for axis in axes
         }
     return result
