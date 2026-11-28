@@ -380,7 +380,7 @@ class TestStaticFrontend(unittest.TestCase):
         ):
             self.assertIn(expected, ui)
         for expected in (
-            "group.position.set(r.x+w/2,r.y-h/2,raisedZ+cadShapeZOffset(kind))",
+            "group.position.set(r.centerX,r.centerY,raisedZ+cadShapeZOffset(kind))",
             "group.renderOrder=priority",
             "node.renderOrder=priority+(node.userData.isCadOutline",
             "image.renderOrder=CAD_DRAW_ORDER.image",

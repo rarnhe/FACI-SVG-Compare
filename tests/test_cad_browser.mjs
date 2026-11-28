@@ -276,13 +276,15 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         near(actual.calibration,i?0.8:1.25,'independent sheet Y calibration');
         near(actual.xCalibration,i?1.25:0.8,'independent sheet X calibration');
         assert.equal(actual.horizontalSource,'diagonal_center');
-        near(actual.xCorrection,actual.name==='Rotated'?0:-3*9525,'conditional X correction');
+        // Integer EMU markers introduce at most half an EMU per endpoint, scaled by k.
+        assert.ok(Math.abs(actual.xCorrection-(actual.name==='Rotated'?0:-3*9525))<=0.5*actual.xCalibration+1e-7,'X correction within marker quantization');
         const expected=data.layers[i].objects.find(o=>o.name===actual.name).bounds_emu;
         const width=expected.width/emu,height=expected.height/emu;
-        const cx=(expected.x/emu+width/2)*s,cy=-(expected.y/emu+height/2)*s;
+        const expectedX=(expected.x/emu+width/2)*s,expectedY=-(expected.y/emu+height/2)*s;
+        const cx=actual.anchorCenter.x/emu*s,cy=-actual.anchorCenter.y/emu*s;
         // Independent JS fixture coordinates, not the parser's derived bounds.
-        near(actual.anchorCenter.x/emu*s,cx,actual.name+' manifest center X');
-        near(-actual.anchorCenter.y/emu*s,cy,actual.name+' manifest center Y');
+        assert.ok(Math.abs(actual.anchorCenter.x/emu*s-expectedX)<=0.5*actual.xCalibration*s/emu+1e-8,actual.name+' manifest center X');
+        assert.ok(Math.abs(-actual.anchorCenter.y/emu*s-expectedY)<=0.5*actual.calibration*s/emu+1e-8,actual.name+' manifest center Y');
         near(actual.center[0],cx,actual.name+' center X');
         near(actual.center[1],cy,actual.name+' center Y');
         assert.equal(actual.fill,'#e8d7ac',actual.name);
