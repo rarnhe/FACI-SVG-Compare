@@ -6,7 +6,7 @@ import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
   requiredSvgRatio, canAddOverlay, fitLegendSubmenu, nextLegendColor,
-  restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
+  restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey, formatSvgTimestamp,
   cadOutlineSpec, cadOutlineSegments,
   rectangleHasAltText, planarOutlineVertices,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
@@ -400,7 +400,7 @@ function showAxisSubmenu(layer,button,date,catalog) {
         return;
       }
       try {
-        const label=svgLegendName(catalog,axis);
+        const label=svgLegendName(catalog,axis,date);
         const key=svgSelectionKey(catalog,date,axis);
         await switchReferencePair(pair,key,label,catalog.csv_files?.[date]?.[axis]??[]);
         closeContextMenus();
@@ -464,7 +464,8 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
         button.setAttribute('aria-haspopup','true');
         button.setAttribute('aria-expanded','false');
         const caption=document.createElement('span');
-        caption.textContent=date;
+        caption.textContent=formatSvgTimestamp(date);
+        button.dataset.timestamp=date;
         const arrow=document.createElement('span');
         arrow.className='cad-menu-arrow';
         arrow.textContent='›';

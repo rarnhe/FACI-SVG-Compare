@@ -126,17 +126,25 @@ export function selectionParts(items,selected,toRect) {
   return parts.filter(part=>part.text);
 }
 
-/** Viewer legend: folder_sheet_rectangle-or-ellipse_+direction (no date). */
-export function svgLegendName(catalog,axis) {
+/** Presentation only: never convert to a Date or alter the catalog key. */
+export function formatSvgTimestamp(date,separator=' ') {
+  const raw=String(date??'');
+  const m=/^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})$/.exec(raw);
+  return m?m[1]+'/'+m[2]+'/'+m[3]+separator+m[4]+':'+m[5]+':'+m[6]:raw;
+}
+
+/** Viewer legend: folder_sheet_rectangle-or-ellipse_+direction_YYYY/MM/DD_HH:mm:ss. */
+export function svgLegendName(catalog,axis,date) {
   return [
     String(catalog.folder||'').trim(),
     String(catalog.sheet||'').trim(),
     String(catalog.identifier||'').trim(),
     '+'+String(axis||'').toUpperCase(),
+    formatSvgTimestamp(date,'_'),
   ].join('_');
 }
 
-/** Keep distinct timepoints independent even when their legend text matches. */
+/** Keep the raw timestamp as the selection identity, independent of formatting. */
 export function svgSelectionKey(catalog,date,axis) {
   return JSON.stringify([
     catalog.folder,catalog.sheet,catalog.target_kind,catalog.identifier,

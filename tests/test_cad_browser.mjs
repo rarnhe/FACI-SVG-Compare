@@ -340,8 +340,10 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       const menu=stage.locator('.cad-context-menu');
       await clickShape(i,name);
       await menu.locator('button').first().waitFor({state:'visible'});
-      assert.deepEqual(await menu.locator('button span:first-child').allTextContents(),dates,name);
-      await menu.getByRole('menuitem',{name:new RegExp(date)}).click();
+      const formatDate=t=>t.slice(0,4)+'/'+t.slice(4,6)+'/'+t.slice(6,8)+' '+t.slice(8,10)+':'+t.slice(10,12)+':'+t.slice(12,14);
+      assert.deepEqual(await menu.locator('button span:first-child').allTextContents(),dates.map(formatDate),name);
+      assert.deepEqual(await menu.locator('button[data-timestamp]').evaluateAll(els=>els.map(e=>e.dataset.timestamp)),dates);
+      await menu.getByRole('menuitem',{name:new RegExp(formatDate(date))}).click();
       await stage.locator('.cad-submenu').getByRole('menuitem',{name:axis,exact:true}).click();
       await page.waitForFunction(({label,count})=>
         document.querySelectorAll('#psd-overlays img').length===count &&
@@ -349,10 +351,10 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         document.getElementById('reference-log').textContent.includes(label),{label,count});
       await menu.waitFor({state:'hidden'});
     }
-    await choose(0,'Inside',['20260704101627','20260706101627'],'20260704101627','X','BODYv2_Sheet1_R_Cube_+X',1);
-    await choose(0,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet1_R_Cube_+Z',2);
-    await choose(0,'Outside',['20260705101627'],'20260705101627','Y','BODYv2_Sheet1_Outside_+Y',3);
-    await choose(1,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet2_R_Cube_+Z',4);
+    await choose(0,'Inside',['20260704101627','20260706101627'],'20260704101627','X','BODYv2_Sheet1_R_Cube_+X_2026/07/04_10:16:27',1);
+    await choose(0,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet1_R_Cube_+Z_2026/07/06_10:16:27',2);
+    await choose(0,'Outside',['20260705101627'],'20260705101627','Y','BODYv2_Sheet1_Outside_+Y_2026/07/05_10:16:27',3);
+    await choose(1,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet2_R_Cube_+Z_2026/07/06_10:16:27',4);
     for(const [label,date,axis] of [['R_Cube','20260704101627','X'],['R_Cube','20260706101627','Z'],['BODYv2','20260705101627','Y']])
       for(const suffix of ['PSD','1-3-Octave'])
         assert.ok(fetched.includes('/viewer/assets/BODYv2/'+label+'_'+date+'_+'+axis+'_'+suffix+'.svg'));
