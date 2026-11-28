@@ -117,8 +117,11 @@ test('Chromium renders every CAD outline and scales octave points around their c
         return window.devicePixelRatio===expected && layers.every(l=>
           l.renderer.getPixelRatio()===expected &&
           Math.abs(l.renderer.domElement.width-l.stage.clientWidth*expected)<1 &&
-          Math.abs(l.renderer.domElement.height-l.stage.clientHeight*expected)<1);
+          Math.abs(l.renderer.domElement.height-l.stage.clientHeight*expected)<1 &&
+          l.camera.right-l.camera.left===l.stage.clientWidth &&
+          l.camera.top-l.camera.bottom===l.stage.clientHeight);
       },dpr);
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
       const resized=await state();
       assert.ok(Math.abs(resized.userCadZoom-stable.userCadZoom)<1e-9);
       assert.equal(resized.zoom[0],resized.zoom[1]);
