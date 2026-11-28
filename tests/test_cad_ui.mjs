@@ -5,11 +5,11 @@ import {
   containsShape, shapeAncestors, selectionParts, fitSvgPair, fitSvgPane,
   clampMainDivider, clampReferenceSplit, pictureLayerScales,
   requiredSvgRatio,canAddOverlay,SVG_COLORS,nextLegendColor,
-  svgLegendName,svgSelectionKey,CUBOID_FACE_OPACITY,CUBOID_SELECTED_OPACITY,
+  svgLegendName,svgSelectionKey,formatSvgTimestamp,CUBOID_FACE_OPACITY,CUBOID_SELECTED_OPACITY,
   CAD_DRAW_ORDER,cadShapeRenderOrder,cadShapeZOffset,
   textboxFont,layoutTextboxText,
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
-  SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
+  SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,fitLegendSubmenu,nextPageZoom,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
   cadOutlineSpec,recolorOctaveGeometry,octavePointScale,octavePointNodes,octaveLineNodes,
   cadOutlineSegments,rectangleHasAltText,planarOutlineVertices,
 } from '../cad_ui.mjs';
@@ -247,13 +247,13 @@ test('SVG markup recolor runs on browser XML nodes without creating painted back
 });
 
 
-test('SVG legend shows folder_sheet_rectangle-or-sensor_axis, never date',()=>{
+test('SVG legend appends formatted date but preserves raw selection identity',()=>{
   const inside={folder:'BODYv2',sheet:'fab',target_kind:'rectangle',
     identifier:'20260704_SCN_B1',ellipse:'测点名称'};
-  assert.equal(svgLegendName(inside,'Y'),'BODYv2_fab_20260704_SCN_B1_+Y');
+  assert.equal(svgLegendName(inside,'Y','20260704101627'),'BODYv2_fab_20260704_SCN_B1_+Y_2026/07/04_10:16:27');
   const outside={folder:'BODYv2',sheet:'subfab',target_kind:'ellipse',
     identifier:'测点名称'};
-  assert.equal(svgLegendName(outside,'Z'),'BODYv2_subfab_测点名称_+Z');
+  assert.equal(svgLegendName(outside,'Z','20261128161422'),'BODYv2_subfab_测点名称_+Z_2026/11/28_16:14:22');
   const key1=svgSelectionKey(inside,'20260704101627','Y');
   const key2=svgSelectionKey(inside,'20260705101627','Y');
   assert.notEqual(key1,key2);
@@ -566,3 +566,31 @@ test('empty alternative text uses same planar outline coordinates as sensor geom
   assert.equal(circle[0][0],Math.hypot(80,40)/2);
 });
 
+
+test('original SVG color is unset, and width/dash do not select a color',()=>{
+  assert.deepEqual(mergeSvgStyle({}),{color:null,lineWidth:null,lineStyle:null});
+  assert.deepEqual(mergeSvgStyle({}, {lineWidth:3}),{color:null,lineWidth:3,lineStyle:null});
+});
+
+test('legend submenu fits below/above and on either side, even if neither side fits',()=>{
+  assert.deepEqual(fitLegendSubmenu(300,200,{x:230,width:70},{y:180},{width:118,height:160}),{x:112,y:40});
+  assert.deepEqual(fitLegendSubmenu(160,100,{x:30,width:100},{y:90},{width:118,height:100}),{x:0,y:0});
+  assert.deepEqual(fitLegendSubmenu(400,300,{x:20,width:90},{y:30},{width:118,height:100}),{x:110,y:30});
+});
+
+test('format SVG timestamps without changing raw timestamp or timezone',()=>{
+  assert.equal(formatSvgTimestamp('20261128161422'),'2026/11/28 16:14:22');
+  assert.equal(formatSvgTimestamp('20260102030405','_'),'2026/01/02_03:04:05');
+  assert.equal(formatSvgTimestamp('20261231235959'),'2026/12/31 23:59:59');
+  assert.equal(formatSvgTimestamp('invalid'),'invalid');
+  assert.equal(formatSvgTimestamp(''),'');
+});
+
+test('page wheel zoom direction, delta modes and limits',()=>{
+  assert.ok(nextPageZoom(1,-100)>1);
+  assert.ok(nextPageZoom(1,100)<1);
+  assert.equal(nextPageZoom(1,1,1),nextPageZoom(1,16));
+  assert.equal(nextPageZoom(2,-100),2);
+  assert.equal(nextPageZoom(.5,100),.5);
+  assert.equal(nextPageZoom(1,0),1);
+});

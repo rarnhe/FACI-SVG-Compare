@@ -67,6 +67,80 @@ test('Chromium renders every CAD outline and scales octave points around their c
       const {layers}=await import('/viewer/cad_viewer.js');
       return layers.length===2 && layers.every(l=>l.clickable.length===5);
     },null,{timeout:25000});
+    // Real wheel input plus capture-phase dispatch assertions. Browser
+    // chrome zoom is not controllable through Playwright's page API.
+    const state=()=>page.evaluate(async()=>{
+      const {layers,userCadZoom}=await import('/viewer/cad_viewer.js');
+      return {userCadZoom,dpr:window.devicePixelRatio,render:layers.map(l=>({ratio:l.renderer.getPixelRatio(),width:l.renderer.domElement.width,height:l.renderer.domElement.height,w:l.stage.clientWidth,h:l.stage.clientHeight})),page:Number(document.documentElement.style.zoom||1),zoom:layers.map(l=>l.camera.zoom),
+        left:document.getElementById('cad-pane').getBoundingClientRect().width,
+        right:document.getElementById('reference-pane').getBoundingClientRect().width};
+    });
+    const wheel=async(selector,options)=>page.locator(selector).evaluate((el,opts)=>{
+      const ev=new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-100,...opts});
+      el.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    },options);
+    const before=await state();
+    assert.equal(await wheel('#fab-stage canvas',{}),true);
+    const cadZoom=await state();
+    assert.equal(cadZoom.page,1);
+    assert.ok(cadZoom.zoom[0]>before.zoom[0]);
+    assert.equal(cadZoom.zoom[0],cadZoom.zoom[1]);
+    for(const selector of ['#fab-stage canvas','#subfab-stage canvas','#reference-pane']){
+      const old=await state();
+      assert.equal(await wheel(selector,{buttons:1}),true);
+      const after=await state();
+      assert.ok(after.page>old.page);
+      assert.ok(Math.abs(after.left+after.right+8*after.page-1400)<3,'page still fills viewport');
+    }
+    for(const selector of ['#fab-stage canvas','#subfab-stage canvas','#reference-pane']){
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      const old=await state();
+      assert.equal(await wheel(selector,{ctrlKey:true,buttons:1}),false);
+      const after=await state();
+      assert.equal(after.page,old.page);
+      assert.deepEqual(after.zoom,old.zoom);
+    }
+    // Restore CSS zoom for pre-existing pixel measurements. Use inverse
+    // wheel delta for the same three application zoom steps.
+    for(let i=0;i<3;i++) await wheel('#reference-pane',{buttons:1,deltaY:100});
+    assert.ok(Math.abs((await state()).page-1)<1e-8);
+    await page.waitForTimeout(100);
+    // Emulate the combined CSS viewport and physical pixel changes produced
+    // by browser zoom. This is not native browser chrome zoom.
+    const cdp=await page.context().newCDPSession(page);
+    const stable=await state();
+    for(const [dpr,width,height] of [[1.5,933,633],[0.75,1867,1267],[2,700,475],[1,1400,950]]) {
+      await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:dpr,mobile:false});
+      await page.waitForFunction(async expected=>{
+        const {layers}=await import('/viewer/cad_viewer.js');
+        return window.devicePixelRatio===expected && layers.every(l=>
+          l.renderer.getPixelRatio()===expected &&
+          Math.abs(l.renderer.domElement.width-l.stage.clientWidth*expected)<1 &&
+          Math.abs(l.renderer.domElement.height-l.stage.clientHeight*expected)<1);
+      },dpr);
+      const resized=await state();
+      assert.ok(Math.abs(resized.userCadZoom-stable.userCadZoom)<1e-9);
+      assert.equal(resized.zoom[0],resized.zoom[1]);
+      await wheel('#fab-stage canvas',{});
+      const enlarged=await state();
+      assert.ok(Math.abs(enlarged.userCadZoom/resized.userCadZoom-1.1)<1e-9);
+      assert.equal(enlarged.zoom[0],enlarged.zoom[1]);
+      assert.ok(Math.abs(enlarged.zoom[0]/resized.zoom[0]-1.1)<1e-9);
+      await wheel('#subfab-stage canvas',{deltaY:100});
+      assert.ok(Math.abs((await state()).userCadZoom-stable.userCadZoom)<1e-8);
+    }
+    // Large wheel deltas after browser zoom must not collapse the scene.
+    const prior=await state();
+    await wheel('#fab-stage canvas',{deltaY:12000});
+    const reduced=await state();
+    assert.ok(Math.abs(reduced.userCadZoom/prior.userCadZoom-1/1.1)<1e-9);
+    await wheel('#subfab-stage canvas',{deltaY:-12000});
+    assert.ok(Math.abs((await state()).userCadZoom-prior.userCadZoom)<1e-9);
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
+    await page.waitForFunction(()=>window.devicePixelRatio===1);
+    await page.waitForTimeout(100);
+    assert.ok(Math.abs((await state()).zoom[0]-stable.zoom[0])<1e-8);
     const rendered=await page.evaluate(async()=>{
       const {layers}=await import('/viewer/cad_viewer.js');
       const THREE=await import('three');
@@ -340,8 +414,10 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       const menu=stage.locator('.cad-context-menu');
       await clickShape(i,name);
       await menu.locator('button').first().waitFor({state:'visible'});
-      assert.deepEqual(await menu.locator('button span:first-child').allTextContents(),dates,name);
-      await menu.getByRole('menuitem',{name:new RegExp(date)}).click();
+      const formatDate=t=>t.slice(0,4)+'/'+t.slice(4,6)+'/'+t.slice(6,8)+' '+t.slice(8,10)+':'+t.slice(10,12)+':'+t.slice(12,14);
+      assert.deepEqual(await menu.locator('button span:first-child').allTextContents(),dates.map(formatDate),name);
+      assert.deepEqual(await menu.locator('button[data-timestamp]').evaluateAll(els=>els.map(e=>e.dataset.timestamp)),dates);
+      await menu.getByRole('menuitem',{name:new RegExp(formatDate(date))}).click();
       await stage.locator('.cad-submenu').getByRole('menuitem',{name:axis,exact:true}).click();
       await page.waitForFunction(({label,count})=>
         document.querySelectorAll('#psd-overlays img').length===count &&
@@ -349,14 +425,69 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         document.getElementById('reference-log').textContent.includes(label),{label,count});
       await menu.waitFor({state:'hidden'});
     }
-    await choose(0,'Inside',['20260704101627','20260706101627'],'20260704101627','X','BODYv2_Sheet1_R_Cube_+X',1);
-    await choose(0,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet1_R_Cube_+Z',2);
-    await choose(0,'Outside',['20260705101627'],'20260705101627','Y','BODYv2_Sheet1_Outside_+Y',3);
-    await choose(1,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet2_R_Cube_+Z',4);
+    await choose(0,'Inside',['20260704101627','20260706101627'],'20260704101627','X','BODYv2_Sheet1_R_Cube_+X_2026/07/04_10:16:27',1);
+    await choose(0,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet1_R_Cube_+Z_2026/07/06_10:16:27',2);
+    await choose(0,'Outside',['20260705101627'],'20260705101627','Y','BODYv2_Sheet1_Outside_+Y_2026/07/05_10:16:27',3);
+    await choose(1,'Partial',['20260704101627','20260706101627'],'20260706101627','Z','BODYv2_Sheet2_R_Cube_+Z_2026/07/06_10:16:27',4);
     for(const [label,date,axis] of [['R_Cube','20260704101627','X'],['R_Cube','20260706101627','Z'],['BODYv2','20260705101627','Y']])
       for(const suffix of ['PSD','1-3-Octave'])
         assert.ok(fetched.includes('/viewer/assets/BODYv2/'+label+'_'+date+'_+'+axis+'_'+suffix+'.svg'));
     assert.equal(fetched.length,6,'only six distinct immutable SVG sources');
+    const legend=page.locator('.reference-log-line').first();
+    const menu=page.locator('#legend-context-menu');
+    assert.deepEqual(await page.locator('.reference-log-line').evaluateAll(els=>els.map(el=>getComputedStyle(el).color)),
+      ['rgb(228, 26, 28)','rgb(255, 127, 0)','rgb(214, 168, 0)','rgb(77, 175, 74)']);
+    const markup=()=>page.locator('#psd-overlays img').first().evaluate(async el=>await (await fetch(el.src)).text());
+    const initial=await markup();
+    assert.ok(initial.includes('#E41A1C'));
+    assert.match(initial,/stroke-width:\s*2/);
+    assert.match(initial,/stroke-dasharray:\s*none/);
+    await legend.click({button:'right'});
+    await menu.getByRole('menuitem',{name:'颜色 ›'}).click();
+    assert.equal(await menu.locator('[aria-checked="true"]').textContent(),'红色');
+    assert.equal(await menu.getByRole('menuitemradio').last().textContent(),'初始颜色');
+    const fit=await menu.locator('.legend-menu-secondary').evaluate(el=>{
+      const a=el.getBoundingClientRect(),b=document.getElementById('reference-pane').getBoundingClientRect();
+      return a.left>=b.left-1&&a.top>=b.top-1&&a.right<=b.right+1&&a.bottom<=b.bottom+1;
+    });
+    assert.equal(fit,true);
+    await menu.getByRole('menuitemradio',{name:'初始颜色',exact:true}).click();
+    await menu.waitFor({state:'hidden'});
+    assert.equal(await legend.evaluate(el=>getComputedStyle(el).color),'rgb(255, 255, 255)');
+    assert.ok((await markup()).includes('#123456'));
+    await legend.click({button:'right'});
+    await menu.getByRole('menuitem',{name:'线型 ›'}).click();
+    assert.equal(await menu.locator('[aria-checked="true"]').textContent(),'实线');
+    await menu.getByRole('menuitemradio',{name:'初始线型',exact:true}).click();
+    await menu.waitFor({state:'hidden'});
+    assert.doesNotMatch(await markup(),/stroke-dasharray:\s*none/);
+    await legend.click({button:'right'});
+    await menu.getByRole('menuitem',{name:'线宽 ›'}).click();
+    assert.equal(await menu.locator('[aria-checked="true"]').textContent(),'2');
+    await menu.getByRole('menuitemradio',{name:'3',exact:true}).click();
+    await menu.waitFor({state:'hidden'});
+    assert.match(await markup(),/stroke-width:\s*3/);
+    await legend.click({button:'right'});
+    await menu.getByRole('menuitem',{name:'线宽 ›'}).click();
+    await menu.getByRole('menuitemradio',{name:'初始线宽',exact:true}).click();
+    await menu.waitFor({state:'hidden'});
+    const restored=await markup();
+    assert.ok(restored.includes('stroke="#123456"'));
+    assert.doesNotMatch(restored,/stroke-width:\s*3/);
+    await legend.click({button:'right'});
+    const downloads=[];
+    const onDownload=d=>downloads.push(d);
+    page.on('download',onDownload);
+    await menu.getByRole('menuitem',{name:'下载',exact:true}).click();
+    for(let i=0;i<100&&downloads.length<2;i++) await new Promise(r=>setTimeout(r,100));
+    page.off('download',onDownload);
+    assert.deepEqual(downloads.map(d=>d.suggestedFilename()),[
+      'R_Cube_20260704101627_+X_PSD.csv','R_Cube_20260704101528_+X_Time.csv']);
+    for(const d of downloads) assert.equal(await d.failure(),null);
+    await legend.click({button:'right'});
+    await menu.getByRole('menuitem',{name:'关闭',exact:true}).click();
+    assert.equal(await page.locator('#psd-overlays img').count(),3);
+    assert.equal(await page.locator('#octave-overlays img').count(),3);
     assert.deepEqual(errors,[]);
   }finally{
     await browser?.close();

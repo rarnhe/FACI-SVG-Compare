@@ -5,8 +5,8 @@ import { rectangleHeight, rectangleSpecs, ellipseElevation, worldRectFromEmu, re
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
-  requiredSvgRatio, canAddOverlay, SVG_COLORS, nextLegendColor,
-  restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey,
+  requiredSvgRatio, canAddOverlay, fitLegendSubmenu, nextLegendColor, nextPageZoom,
+  restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey, formatSvgTimestamp,
   cadOutlineSpec, cadOutlineSegments,
   rectangleHasAltText, planarOutlineVertices,
   CUBOID_FACE_OPACITY, CUBOID_SELECTED_OPACITY,
@@ -21,7 +21,24 @@ let workbookName = '';
 let syncing = false;
 let hasGeometry = false;
 let sceneBounds = {minX:0,maxX:500,minY:0,maxY:400};
-let lastCadSize = null;
+let baseFitScale = 1;
+export let userCadZoom = 1;
+const MIN_USER_ZOOM = 0.01, MAX_USER_ZOOM = 100;
+let resizePending = false;
+let lastCadMetrics = '';
+function cadMetricsKey() {
+  return [effectivePixelRatio(),window.devicePixelRatio,pageZoom,...layers.flatMap(l=>[l.stage.clientWidth,l.stage.clientHeight,l.stage.getBoundingClientRect().width,l.stage.getBoundingClientRect().height])].join(':');
+}
+const textTextures = [];
+let lastRenderRatio = 0;
+function effectivePixelRatio() {
+  return Math.min(2,Math.max(0.1,(window.devicePixelRatio||1)*pageZoom));
+}
+function scheduleCadResize() {
+  if(resizePending) return;
+  resizePending=true;
+  requestAnimationFrame(()=>{resizePending=false;resizeCadLayers();});
+}
 let rightSplitRatio = INITIAL_REFERENCE_SPLIT;
 const referenceImages = new Map();
 const svgHistory = document.getElementById('reference-log');
@@ -30,18 +47,54 @@ const overlaySelections = new Map();
 const overlayLoads = new Set();
 let colorCursor=0;
 let displayedSvgWidth = 0;
+let pageZoom=1;
+
+// Capture before OrbitControls' target listener. Ctrl-wheel must reach
+// the browser default action, not the CAD dolly. Plain left-button wheel
+// is an application-wide CSS zoom (no web API can set native browser zoom).
+window.addEventListener('wheel',event=>{
+  const leftHeld=(event.buttons & 1)!==0;
+  if(event.ctrlKey || event.metaKey) {
+    if(event.target.closest?.('.cad-layer canvas')) event.stopImmediatePropagation();
+    return; // never prevent browser default
+  }
+  if(!event.deltaY) return;
+  if(!leftHeld) {
+    const layer=layers.find(l=>l.renderer.domElement===event.target);
+    if(!layer) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    // Never let OrbitControls reinterpret a browser-zoom wheel sequence.
+    // Flush current layout before applying a bounded, relative CAD step.
+    resizeCadLayers();
+    const pixels=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?100:1);
+    if(!Number.isFinite(pixels)) return;
+    const step=Math.max(-100,Math.min(100,pixels));
+    userCadZoom=Math.max(MIN_USER_ZOOM,Math.min(MAX_USER_ZOOM,userCadZoom*Math.exp(-step*Math.log(1.1)/100)));
+    applySharedZoom();
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  // Do not interpret the subsequent release as a shape selection.
+  for(const layer of layers) pointerStart.delete(layer.renderer.domElement);
+  pageZoom=nextPageZoom(pageZoom,event.deltaY,event.deltaMode);
+  document.documentElement.style.zoom=String(pageZoom);
+  scheduleCadResize();
+},{capture:true,passive:false});
 
 function createLayer(stageId) {
   const stage = document.getElementById(stageId);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xffffff);
   const renderer = new THREE.WebGLRenderer({antialias:true});
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(effectivePixelRatio());
   const camera = new THREE.OrthographicCamera(-200,200,150,-150,0.1,200000);
   camera.position.set(0,0,3000);
   camera.up.set(0,1,0);
   const controls = new OrbitControls(camera,renderer.domElement);
   controls.enableDamping = false;
+  // Wheel zoom is owned by our capture handler; middle-button dolly remains native.
   controls.screenSpacePanning = true;
   controls.enableRotate = true;
   controls.mouseButtons = {
@@ -70,13 +123,21 @@ function createLayer(stageId) {
 
 function synchronizeFrom(source) {
   if(syncing) return;
+  const expected=baseFitScale*userCadZoom;
+  if(Math.abs(source.camera.zoom-expected)>Math.abs(expected)*1e-12) {
+    userCadZoom=Math.max(MIN_USER_ZOOM,Math.min(MAX_USER_ZOOM,source.camera.zoom/baseFitScale));
+  }
+  const zoom=baseFitScale*userCadZoom;
   syncing=true;
   try {
     for(const layer of layers) {
-      if(layer===source) continue;
+      if(layer===source) {
+        if(layer.camera.zoom!==zoom) {layer.camera.zoom=zoom;layer.camera.updateProjectionMatrix();layer.controls.update();}
+        continue;
+      }
       layer.camera.position.copy(source.camera.position);
       layer.camera.quaternion.copy(source.camera.quaternion);
-      layer.camera.zoom=source.camera.zoom;
+      layer.camera.zoom=zoom;
       layer.camera.updateProjectionMatrix();
       layer.controls.target.copy(source.controls.target);
       layer.controls.update();
@@ -99,7 +160,7 @@ function colorValue(value,fallback) {
 const outlineCylinder=new THREE.CylinderGeometry(1,1,1,10,1,false);
 const outlineUp=new THREE.Vector3(0,1,0);
 function updateOutlineMesh(mesh,zoom) {
-  const radius=mesh.userData.outlineWidth/(2*Math.max(0.01,zoom));
+  const radius=mesh.userData.outlineWidth/(2*Math.max(Number.EPSILON,zoom));
   const transform=new THREE.Object3D();
   for(let i=0;i<mesh.userData.outlineSegments.length;i++) {
     const segment=mesh.userData.outlineSegments[i];
@@ -164,8 +225,8 @@ function drawTextboxText(group,item,worldRect) {
   };
   // Bounded CanvasTexture avoids blurry text and unbounded WebGL textures
   // from exceptionally large DrawingML objects.
-  const resolution=Math.max(0.2,Math.min(2.5,
-    Math.min(4096/w,4096/h),window.devicePixelRatio||1.5));
+  const resolutionFor=ratio=>Math.min(2.5,4096/w,4096/h,ratio);
+  function makeTexture(resolution) {
   const canvas=document.createElement('canvas');
   canvas.width=Math.max(1,Math.ceil(w*resolution));
   canvas.height=Math.max(1,Math.ceil(h*resolution));
@@ -194,6 +255,11 @@ function drawTextboxText(group,item,worldRect) {
   context.restore();
   const texture=new THREE.CanvasTexture(canvas);
   texture.colorSpace=THREE.SRGBColorSpace;
+  return texture;
+  }
+  let resolution=resolutionFor(effectivePixelRatio());
+  const texture=makeTexture(resolution);
+  if(!texture) return;
   const textMesh=new THREE.Mesh(
     new THREE.PlaneGeometry(worldRect.width,worldRect.height),
     new THREE.MeshBasicMaterial({
@@ -206,6 +272,16 @@ function drawTextboxText(group,item,worldRect) {
   textMesh.position.z=0.9;
   textMesh.userData.isTextboxText=true;
   group.add(textMesh);
+  textTextures.push(ratio=>{
+    const next=resolutionFor(ratio);
+    if(Math.abs(next-resolution)<0.1) return;
+    const replacement=makeTexture(next);
+    if(!replacement) return;
+    textMesh.material.map.dispose();
+    textMesh.material.map=replacement;
+    textMesh.material.needsUpdate=true;
+    resolution=next;
+  });
 }
 
 function kindForElevation(item, rect, rectangles,layer) {
@@ -400,9 +476,9 @@ function showAxisSubmenu(layer,button,date,catalog) {
         return;
       }
       try {
-        const label=svgLegendName(catalog,axis);
+        const label=svgLegendName(catalog,axis,date);
         const key=svgSelectionKey(catalog,date,axis);
-        await switchReferencePair(pair,key,label);
+        await switchReferencePair(pair,key,label,catalog.csv_files?.[date]?.[axis]??[]);
         closeContextMenus();
       } catch(error) {
         console.error('Unable to switch SVG pair:',error);
@@ -421,10 +497,10 @@ function showAxisSubmenu(layer,button,date,catalog) {
   // to the right, with left-side fallback when close to a viewport edge.
   const menuWidth=layer.menu.element.offsetWidth;
   const popupWidth=Math.max(94,pane.offsetWidth);
-  const right=bounds.right-stageBounds.left+2;
+  const right=(bounds.right-stageBounds.left)/pageZoom+2;
   pane.style.left=(right+popupWidth<=layer.stage.clientWidth
-    ? right : Math.max(4,bounds.left-stageBounds.left-popupWidth-2))+'px';
-  pane.style.top=Math.max(4,Math.min(bounds.top-stageBounds.top,
+    ? right : Math.max(4,(bounds.left-stageBounds.left)/pageZoom-popupWidth-2))+'px';
+  pane.style.top=Math.max(4,Math.min((bounds.top-stageBounds.top)/pageZoom,
     layer.stage.clientHeight-pane.offsetHeight-4))+'px';
 }
 
@@ -434,8 +510,8 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
   const id=layer.menu.requestId;
   const menu=layer.menu.element;
   const bounds=layer.stage.getBoundingClientRect();
-  menu.style.left=(clientX-bounds.left)+'px';
-  menu.style.top=(clientY-bounds.top)+'px';
+  menu.style.left=((clientX-bounds.left)/pageZoom)+'px';
+  menu.style.top=((clientY-bounds.top)/pageZoom)+'px';
   menu.replaceChildren();
   menu.hidden=false;
   const placeholder=document.createElement('div');
@@ -464,7 +540,8 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
         button.setAttribute('aria-haspopup','true');
         button.setAttribute('aria-expanded','false');
         const caption=document.createElement('span');
-        caption.textContent=date;
+        caption.textContent=formatSvgTimestamp(date);
+        button.dataset.timestamp=date;
         const arrow=document.createElement('span');
         arrow.className='cad-menu-arrow';
         arrow.textContent='›';
@@ -564,26 +641,50 @@ function fitScale(width,height) {
   return Math.min(width/(dw*1.1),height/(dh*1.1));
 }
 
+function applySharedZoom() {
+  syncing=true;
+  try {
+    const zoom=baseFitScale*userCadZoom;
+    for(const layer of layers) {
+      layer.camera.zoom=zoom;
+      layer.camera.updateProjectionMatrix();
+      layer.controls.update();
+    }
+  } finally {syncing=false;}
+}
+
 function resizeCadLayers() {
   const stage=layers[0].stage;
   const w=Math.max(1,stage.clientWidth),h=Math.max(1,stage.clientHeight);
-  const nextScale=fitScale(w,h);
-  const previousScale=lastCadSize ? fitScale(lastCadSize.w,lastCadSize.h) : nextScale;
-  const factor=hasGeometry && previousScale>0 ? nextScale/previousScale : 1;
+  // Both layers share a world-space scale; layout never changes user zoom.
+  if(hasGeometry && stage.clientWidth>0 && stage.clientHeight>0) baseFitScale=fitScale(w,h);
+  const ratio=effectivePixelRatio();
+  lastCadMetrics=cadMetricsKey();
   syncing=true;
   try {
     for(const layer of layers) {
       const width=Math.max(1,layer.stage.clientWidth);
       const height=Math.max(1,layer.stage.clientHeight);
-      layer.renderer.setSize(width,height,false);
+      if(layer.renderer.getPixelRatio()!==ratio) layer.renderer.setPixelRatio(ratio);
+      const canvas=layer.renderer.domElement;
+      if(canvas.width!==Math.floor(width*ratio)||canvas.height!==Math.floor(height*ratio)) layer.renderer.setSize(width,height,false);
+      else {
+        const size=layer.renderer.getSize(new THREE.Vector2());
+        if(size.x!==width||size.y!==height) layer.renderer.setSize(width,height,false);
+      }
       layer.camera.left=-width/2;layer.camera.right=width/2;
       layer.camera.top=height/2;layer.camera.bottom=-height/2;
-      layer.camera.zoom=Math.max(0.01,Math.min(100,layer.camera.zoom*factor));
+      layer.controls.minZoom=baseFitScale*MIN_USER_ZOOM;
+      layer.controls.maxZoom=baseFitScale*MAX_USER_ZOOM;
+      layer.camera.zoom=baseFitScale*userCadZoom;
       layer.camera.updateProjectionMatrix();
       layer.controls.update();
     }
+    if(lastRenderRatio!==ratio) {
+      for(const refresh of textTextures) refresh(ratio);
+      lastRenderRatio=ratio;
+    }
   } finally {syncing=false;}
-  lastCadSize={w,h};
 }
 
 function initialFit() {
@@ -592,22 +693,22 @@ function initialFit() {
   const minY=sceneBounds.minY,maxY=sceneBounds.maxY;
   const target=new THREE.Vector3((minX+maxX)/2,-(minY+maxY)/2,0);
   const distance=Math.max(1000,Math.max(maxX-minX,maxY-minY)*4);
-  const zoom=Math.min(100,Math.max(0.01,
-    fitScale(layers[0].stage.clientWidth,layers[0].stage.clientHeight)));
+  userCadZoom=1;
+  baseFitScale=fitScale(Math.max(1,layers[0].stage.clientWidth),Math.max(1,layers[0].stage.clientHeight));
+  const zoom=baseFitScale;
   syncing=true;
   try {
     for(const layer of layers) {
       layer.camera.position.set(target.x,target.y,distance);
+      layer.controls.minZoom=baseFitScale*MIN_USER_ZOOM;
+      layer.controls.maxZoom=baseFitScale*MAX_USER_ZOOM;
       layer.camera.zoom=zoom;
       layer.camera.updateProjectionMatrix();
       layer.controls.target.copy(target);
       layer.controls.update();
     }
   } finally {syncing=false;}
-  lastCadSize={
-    w:Math.max(1,layers[0].stage.clientWidth),
-    h:Math.max(1,layers[0].stage.clientHeight),
-  };
+  scheduleCadResize();
 }
 
 function resetTopView() {
@@ -742,19 +843,19 @@ async function makeColoredPair(sourcePair,style) {
   }
 }
 
-async function switchReferencePair(pair,key,label) {
+async function switchReferencePair(pair,key,label,csvFiles=[]) {
   // Internally dedupe by actual date as well as named shape and axis.
   if(!canAddOverlay(overlaySelections,overlayLoads,key)) return false;
   overlayLoads.add(key);
   try {
     const color=nextLegendColor(colorCursor++);
-    const style=mergeSvgStyle({color});
+    const style=mergeSvgStyle({color,lineStyle:'none',lineWidth:2});
     const previews=await makeColoredPair(pair,style);
     if(overlaySelections.has(key)) {
       releaseColoredPair(previews);
       return false;
     }
-    const entry={sourcePair:{psd:pair.psd,octave:pair.octave},color,style,saving:false};
+    const entry={sourcePair:{psd:pair.psd,octave:pair.octave},color,style,saving:false,csvFiles,downloading:false};
     for(const key of ['psd','octave']) {
       const preview=previews[key],element=document.createElement('img');
       element.alt='';
@@ -839,8 +940,8 @@ async function changeLegendStyle(key,patch) {
       entry[key].blobUrl=next[key].blobUrl;
     }
     entry.style=style;
-    entry.color=style.color;
-    entry.legend.style.color=style.color;
+    entry.color=style.color??'#FFFFFF';
+    entry.legend.style.color=entry.color;
     fitSvgHeightToPane();
     legendMenu.hidden=true;
     releaseColoredPair(previous);
@@ -850,6 +951,42 @@ async function changeLegendStyle(key,patch) {
     window.alert('SVG 样式调整失败：'+error.message);
   } finally {
     entry.saving=false;
+  }
+}
+
+async function downloadLegendCsv(entry) {
+  if(entry.downloading) return;
+  if(!entry.csvFiles.length) {
+    window.alert('未提供符合当前测点、时间和方向的测试文件');
+    return;
+  }
+  entry.downloading=true;
+  const failures=[];
+  try {
+    for(const file of entry.csvFiles) {
+      let url;
+      try {
+        const response=await fetch(file.url);
+        if(!response.ok) throw new Error('HTTP '+response.status);
+        url=URL.createObjectURL(await response.blob());
+        const link=document.createElement('a');
+        link.href=url;
+        link.download=file.name;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        // Allow the browser to consume the object URL before revoking it.
+        const heldUrl=url;
+        setTimeout(()=>URL.revokeObjectURL(heldUrl),30000);
+        url=null;
+      } catch(error) {
+        if(url) URL.revokeObjectURL(url);
+        failures.push(file.name+': '+error.message);
+      }
+    }
+    if(failures.length) window.alert('部分 CSV 下载失败：'+failures.join('\n'));
+  } finally {
+    entry.downloading=false;
   }
 }
 
@@ -879,33 +1016,49 @@ function showLegendMenu(key,x,y) {
         item.setAttribute('role','menuitemradio');
         item.setAttribute('aria-checked',String(entry.style[property]===choice.value));
         item.textContent=choice.label;
-        if(property==='color') item.style.color=choice.value;
+        if(property==='color' && choice.value!==null) item.style.color=choice.value;
         item.addEventListener('click',()=>{void changeLegendStyle(key,{[property]:choice.value});});
         secondary.append(item);
       }
       secondary.hidden=false;
-      const primaryWidth=primary.offsetWidth, popupWidth=secondary.offsetWidth;
-      secondary.style.left=(parseFloat(legendMenu.style.left||'0')
-        +primaryWidth+popupWidth<=pane.clientWidth ? primaryWidth : -popupWidth)+'px';
-      secondary.style.top=Math.max(0,Math.min(
-        button.offsetTop,pane.clientHeight-secondary.offsetHeight-
-        parseFloat(legendMenu.style.top||'0')))+'px';
+      secondary.style.maxWidth=pane.clientWidth+'px';
+      secondary.style.maxHeight=pane.clientHeight+'px';
+      secondary.style.minWidth=Math.min(118,pane.clientWidth)+'px';
+      const menuRect=legendMenu.getBoundingClientRect();
+      const buttonRect=button.getBoundingClientRect();
+      const paneRect=pane.getBoundingClientRect();
+      const pos=fitLegendSubmenu(pane.clientWidth,pane.clientHeight,
+        {x:(menuRect.left-paneRect.left)/pageZoom,y:(menuRect.top-paneRect.top)/pageZoom,width:menuRect.width/pageZoom},
+        {y:(buttonRect.top-paneRect.top)/pageZoom},
+        {width:secondary.offsetWidth,height:secondary.offsetHeight});
+      // Absolute child coordinates are relative to the parent's padding box.
+      secondary.style.left=(pos.x-(menuRect.left-paneRect.left)/pageZoom-legendMenu.clientLeft)+'px';
+      secondary.style.top=(pos.y-(menuRect.top-paneRect.top)/pageZoom-legendMenu.clientTop)+'px';
     });
     primary.append(button);
   }
-  submenu('颜色','color',SVG_COLOR_CHOICES);
-  submenu('线型','lineStyle',SVG_LINE_TYPES);
-  submenu('线宽','lineWidth',SVG_LINE_WIDTHS.map(value=>({label:String(value),value})));
+  submenu('颜色','color',[...SVG_COLOR_CHOICES,{label:'初始颜色',value:null}]);
+  submenu('线型','lineStyle',[...SVG_LINE_TYPES,{label:'初始线型',value:null}]);
+  submenu('线宽','lineWidth',[...SVG_LINE_WIDTHS.map(value=>({label:String(value),value})),{label:'初始线宽',value:null}]);
+  const download=document.createElement('button');
+  download.type='button';
+  download.setAttribute('role','menuitem');
+  download.textContent='下载';
+  download.addEventListener('click',()=>{
+    legendMenu.hidden=true;
+    void downloadLegendCsv(entry);
+  });
+  primary.append(download);
   const close=document.createElement('button');
   close.type='button';
   close.setAttribute('role','menuitem');
-  close.textContent='退出';
+  close.textContent='关闭';
   close.addEventListener('click',()=>removeReferenceOverlay(key));
   primary.append(close);
   legendMenu.hidden=false;
-  legendMenu.style.left=Math.max(0,Math.min(x-bounds.left,
+  legendMenu.style.left=Math.max(0,Math.min((x-bounds.left)/pageZoom,
     pane.clientWidth-legendMenu.offsetWidth))+'px';
-  legendMenu.style.top=Math.max(0,Math.min(y-bounds.top,
+  legendMenu.style.top=Math.max(0,Math.min((y-bounds.top)/pageZoom,
     pane.clientHeight-legendMenu.offsetHeight))+'px';
 }
 document.addEventListener('pointerdown',event=>{
@@ -932,18 +1085,18 @@ function installFloatingLogDrag() {
     if(event.button!==0) return;
     const panelRect=pane.getBoundingClientRect();
     const box=svgHistory.getBoundingClientRect();
-    svgHistory.style.left=(box.left-panelRect.left)+'px';
-    svgHistory.style.top=(box.top-panelRect.top)+'px';
+    svgHistory.style.left=((box.left-panelRect.left)/pageZoom)+'px';
+    svgHistory.style.top=((box.top-panelRect.top)/pageZoom)+'px';
     svgHistory.style.right='auto';
     move={pointer:event.pointerId,x:event.clientX,y:event.clientY,
-          left:box.left-panelRect.left,top:box.top-panelRect.top};
+          left:(box.left-panelRect.left)/pageZoom,top:(box.top-panelRect.top)/pageZoom};
     svgHistory.setPointerCapture(event.pointerId);
     event.preventDefault();
   });
   svgHistory.addEventListener('pointermove',event=>{
     if(!move || event.pointerId!==move.pointer) return;
-    const left=move.left+event.clientX-move.x;
-    const top=move.top+event.clientY-move.y;
+    const left=move.left+(event.clientX-move.x)/pageZoom;
+    const top=move.top+(event.clientY-move.y)/pageZoom;
     svgHistory.style.left=Math.max(0,Math.min(left,pane.clientWidth-svgHistory.offsetWidth))+'px';
     svgHistory.style.top=Math.max(0,Math.min(top,pane.clientHeight-svgHistory.offsetHeight))+'px';
   });
@@ -991,9 +1144,9 @@ function installSplitter(id,direction,callback) {
 installSplitter('main-splitter','vertical',event=>{
   const layout=document.getElementById('layout');
   const bounds=layout.getBoundingClientRect();
-  const left=clampMainDivider(event.clientX-bounds.left,bounds.width,8,displayedSvgWidth);
+  const left=clampMainDivider((event.clientX-bounds.left)/pageZoom,bounds.width/pageZoom,8,displayedSvgWidth);
   layout.style.gridTemplateColumns='minmax(0,'+left+'px) 8px minmax(0,1fr)';
-  resizeCadLayers();
+  scheduleCadResize();
   fitSvgHeightToPane();
 });
 
@@ -1009,15 +1162,22 @@ const fab=createLayer('fab-stage');
 const subfab=createLayer('subfab-stage');
 applySvgSplitRatio();
 document.getElementById('reset-view').addEventListener('click',resetTopView);
-new ResizeObserver(()=>resizeCadLayers()).observe(document.getElementById('cad-layers'));
+const cadObserver=new ResizeObserver(scheduleCadResize);
+cadObserver.observe(document.getElementById('cad-layers'));
 new ResizeObserver(()=>{
   fitSvgHeightToPane();
   clampFloatingLog();
 }).observe(document.getElementById('reference-frames'));
 for(const layer of layers) {
-  new ResizeObserver(()=>resizeCadLayers()).observe(layer.stage);
+  cadObserver.observe(layer.stage);
 }
 resizeCadLayers();
+window.addEventListener('resize',scheduleCadResize);
+function watchDpr() {
+  const query=matchMedia('(resolution: '+(window.devicePixelRatio||1)+'dppx)');
+  query.addEventListener('change',()=>{scheduleCadResize();watchDpr();},{once:true});
+}
+watchDpr();
 
 async function initialize() {
   try {
@@ -1068,6 +1228,8 @@ async function initialize() {
 initialize();
 function animate() {
   requestAnimationFrame(animate);
+  // DPR-only transitions and delayed native browser layout are also covered.
+  if(cadMetricsKey()!==lastCadMetrics) resizeCadLayers();
   for(const layer of layers) {
     updateLayerOutlines(layer);
     layer.renderer.render(layer.scene,layer.camera);

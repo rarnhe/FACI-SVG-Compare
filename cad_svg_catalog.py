@@ -7,6 +7,7 @@ text, and all SVG filenames are enumerated at request time.
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime
 import re
 from urllib.parse import quote
 
@@ -16,6 +17,55 @@ else:
     from cad_validation import Rectangle, circle_relation, intersecting_rectangles
 
 TIMESTAMP = re.compile(r"_(\d{14})_")
+CSV_TIMESTAMP = re.compile(r"(?<![0-9])[0-9]{14}(?![0-9])")
+
+
+def csv_time_rank(filename: str, date: str) -> float | None:
+    """Exact time first; otherwise strictly earlier by less than 60 seconds."""
+    try:
+        selected = datetime.strptime(date, "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    matches = []
+    for token in CSV_TIMESTAMP.findall(filename):
+        try:
+            candidate = datetime.strptime(token, "%Y%m%d%H%M%S")
+        except ValueError:
+            continue
+        delta = (selected - candidate).total_seconds()
+        if 0 <= delta < 60:
+            matches.append(delta)
+    return min(matches, default=None)
+
+
+# Match a standalone PSD marker, never a substring of the equipment name.
+PSD_TOKEN = re.compile(r"(?<![A-Za-z0-9])PSD(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def csv_companion_key(filename: str, *, psd: bool = False) -> str | None:
+    """Ignore only independent 14-digit timestamps; retain all other text."""
+    key = CSV_TIMESTAMP.sub("", filename)
+    if psd:
+        key, count = PSD_TOKEN.subn("Time", key)
+        if count != 1:
+            return None
+    return key.casefold()
+
+
+def select_csv_files(ranked: list[tuple[float, Path]], axis: str) -> list[Path]:
+    """Keep all exact matches and at most one verified earlier Time companion."""
+    eligible = [(delta, p) for delta, p in ranked
+                if axis in [m.group(1).upper() for m in AXIS.finditer(p.name)]]
+    exact = [p for delta, p in eligible if delta == 0]
+    expected = {key for p in exact
+                if (key := csv_companion_key(p.name, psd=True)) is not None}
+    # ranked is already ordered by delta, then filename. No exact PSD
+    # reference means no earlier companion can be safely selected.
+    earlier = next((p for delta, p in eligible if delta > 0
+                    and csv_companion_key(p.name) in expected), None)
+    return exact + ([earlier] if earlier is not None else [])
+
+
 AXIS = re.compile(r"(?:^|[_-])\+([XYZ])(?=[_.-])", re.IGNORECASE)
 PSD_SUFFIX = re.compile(r"_PSD\.svg$", re.IGNORECASE)
 OCTAVE_SUFFIX = re.compile(r"_1-3-Octave\.svg$", re.IGNORECASE)
@@ -96,6 +146,7 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
         "target_kind": "rectangle" if rectangle is not None else "ellipse",
         "dates": [],
         "pairs": {},
+        "csv_files": {},
     }
     if root is None or not search_identifier:
         return result
@@ -104,6 +155,11 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
         (p for p in root.iterdir() if p.is_file() and not p.is_symlink()
          and p.suffix.lower() == ".svg"),
         key=lambda p: p.name.casefold()
+    )
+    csv_entries = sorted(
+        (p for p in root.iterdir() if p.is_file() and not p.is_symlink()
+         and p.suffix.lower() == ".csv" and name_matches(p.name, search_identifier)),
+        key=lambda p: (p.name.casefold(), p.name),
     )
     # A timestamp is valid only when the same SVG filename matches
     # the rectangle (inside/partial case) or the textbox (outside case).
@@ -132,4 +188,13 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
             if all(matching.values()):
                 axes[axis] = matching
         result["pairs"][date] = axes
+        ranked = [(rank, p) for p in csv_entries
+                  if (rank := csv_time_rank(p.name, date)) is not None]
+        ranked.sort(key=lambda entry: (entry[0], entry[1].name.casefold(), entry[1].name))
+        result["csv_files"][date] = {
+            axis: [{"name": p.name, "url": "/viewer/assets/" + quote(folder_name, safe="")
+                    + "/" + quote(p.name, safe="")}
+                   for p in select_csv_files(ranked, axis)]
+            for axis in axes
+        }
     return result
