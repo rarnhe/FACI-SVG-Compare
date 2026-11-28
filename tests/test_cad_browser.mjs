@@ -80,7 +80,49 @@ test('Chromium renders every CAD outline and scales octave points around their c
       el.dispatchEvent(ev);
       return ev.defaultPrevented;
     },options);
-    const before=await state();
+    // Capture only fully settled layout/camera state in a single browser
+    // evaluation. Require consecutive animation frames with matching metrics
+    // and camera state rather than relying on a fixed sleep or a second RPC.
+    const settledState=async(expectedDpr=1,expectedWidth=1400,expectedHeight=950)=>{
+      const deadline=Date.now()+15000;
+      let last=null;
+      do {
+        last=await page.evaluate(async({dpr,width,height})=>{
+        const viewer=await import('/viewer/cad_viewer.js');
+        const {layers}=viewer;
+        const snapshot=()=>{
+          const page=Number(document.documentElement.style.zoom||1);
+          const render=layers.map(l=>({ratio:l.renderer.getPixelRatio(),
+            width:l.renderer.domElement.width,height:l.renderer.domElement.height,
+            w:l.stage.clientWidth,h:l.stage.clientHeight,
+            cameraW:l.camera.right-l.camera.left,cameraH:l.camera.top-l.camera.bottom}));
+          return {userCadZoom:viewer.userCadZoom,dpr:window.devicePixelRatio,page,zoom:layers.map(l=>l.camera.zoom),
+            render,left:document.getElementById('cad-pane').getBoundingClientRect().width,
+            right:document.getElementById('reference-pane').getBoundingClientRect().width,
+            viewport:[innerWidth,innerHeight]};
+        };
+        const ready=s=>s.dpr===dpr&&s.viewport[0]===width&&s.viewport[1]===height&&
+          s.render.length===2&&s.render.every(m=>
+            // CSSOM serializes zoom to six significant digits (e.g.
+            // 1.56831), while the renderer uses the full internal value
+            // (1.5683121854901685). Allow only that serialization error;
+            // the DPR=1 / CSS zoom=1 baseline still uses a tight tolerance.
+            Math.abs(m.ratio-Math.min(2,Math.max(0.1,dpr*s.page)))<=
+              (s.page===1?1e-9:5.1e-6*dpr)&&
+            Math.abs(m.width-m.w*m.ratio)<1&&Math.abs(m.height-m.h*m.ratio)<1&&
+            m.cameraW===m.w&&m.cameraH===m.h)&&s.zoom[0]===s.zoom[1];
+        const a=snapshot();
+        if(!ready(a)) return {stable:false,snapshot:a};
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        const b=snapshot();
+        return {stable:ready(b)&&JSON.stringify(a)===JSON.stringify(b),snapshot:b};
+        },{dpr:expectedDpr,width:expectedWidth,height:expectedHeight});
+        if(last.stable) return last.snapshot;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      } while(Date.now()<deadline);
+      assert.fail('CAD layout did not settle: '+JSON.stringify(last));
+    };
+    const before=await settledState();
     assert.equal(await wheel('#fab-stage canvas',{}),true);
     const cadZoom=await state();
     assert.equal(cadZoom.page,1);
@@ -94,10 +136,9 @@ test('Chromium renders every CAD outline and scales octave points around their c
       assert.ok(Math.abs(after.left+after.right+8*after.page-1400)<3,'page still fills viewport');
     }
     for(const selector of ['#fab-stage canvas','#subfab-stage canvas','#reference-pane']){
-      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-      const old=await state();
+      const old=await settledState();
       assert.equal(await wheel(selector,{ctrlKey:true,buttons:1}),false);
-      const after=await state();
+      const after=await settledState();
       assert.equal(after.page,old.page);
       assert.deepEqual(after.zoom,old.zoom);
     }
@@ -105,42 +146,51 @@ test('Chromium renders every CAD outline and scales octave points around their c
     // wheel delta for the same three application zoom steps.
     for(let i=0;i<3;i++) await wheel('#reference-pane',{buttons:1,deltaY:100});
     assert.ok(Math.abs((await state()).page-1)<1e-8);
-    await page.waitForTimeout(100);
     // Emulate the combined CSS viewport and physical pixel changes produced
     // by browser zoom. This is not native browser chrome zoom.
     const cdp=await page.context().newCDPSession(page);
-    const stable=await state();
+    const stable=await settledState();
     for(const [dpr,width,height] of [[1.5,933,633],[0.75,1867,1267],[2,700,475],[1,1400,950]]) {
       await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:dpr,mobile:false});
-      await page.waitForFunction(async expected=>{
-        const {layers}=await import('/viewer/cad_viewer.js');
-        return window.devicePixelRatio===expected && layers.every(l=>
-          l.renderer.getPixelRatio()===expected &&
-          Math.abs(l.renderer.domElement.width-l.stage.clientWidth*expected)<1 &&
-          Math.abs(l.renderer.domElement.height-l.stage.clientHeight*expected)<1);
-      },dpr);
-      const resized=await state();
+      const resized=await settledState(dpr,width,height);
       assert.ok(Math.abs(resized.userCadZoom-stable.userCadZoom)<1e-9);
       assert.equal(resized.zoom[0],resized.zoom[1]);
       await wheel('#fab-stage canvas',{});
-      const enlarged=await state();
+      const enlarged=await settledState(dpr,width,height);
       assert.ok(Math.abs(enlarged.userCadZoom/resized.userCadZoom-1.1)<1e-9);
       assert.equal(enlarged.zoom[0],enlarged.zoom[1]);
       assert.ok(Math.abs(enlarged.zoom[0]/resized.zoom[0]-1.1)<1e-9);
       await wheel('#subfab-stage canvas',{deltaY:100});
-      assert.ok(Math.abs((await state()).userCadZoom-stable.userCadZoom)<1e-8);
+      assert.ok(Math.abs((await settledState(dpr,width,height)).userCadZoom-stable.userCadZoom)<1e-8);
     }
     // Large wheel deltas after browser zoom must not collapse the scene.
-    const prior=await state();
+    const prior=await settledState();
     await wheel('#fab-stage canvas',{deltaY:12000});
     const reduced=await state();
     assert.ok(Math.abs(reduced.userCadZoom/prior.userCadZoom-1/1.1)<1e-9);
     await wheel('#subfab-stage canvas',{deltaY:-12000});
     assert.ok(Math.abs((await state()).userCadZoom-prior.userCadZoom)<1e-9);
     await cdp.send('Emulation.clearDeviceMetricsOverride');
-    await page.waitForFunction(()=>window.devicePixelRatio===1);
-    await page.waitForTimeout(100);
-    assert.ok(Math.abs((await state()).zoom[0]-stable.zoom[0])<1e-8);
+    // Restore the original explicit viewport too: clearing CDP overrides
+    // can expose the browser window's default viewport instead of 1400x950.
+    await page.setViewportSize({width:1400,height:950});
+    const restored=await settledState();
+    // Compare snapshots only after the original layout is truly restored.
+    // CSS zoom may leave fractional layout rounding across platforms; check
+    // the actual fit scale independently instead of assuming identical pixels.
+    assert.ok(Math.abs(restored.userCadZoom-stable.userCadZoom)<1e-8,
+      JSON.stringify({stable,restored}));
+    assert.equal(restored.zoom[0],restored.zoom[1]);
+    for(let i=0;i<2;i++){
+      assert.ok(Math.abs(restored.render[i].w-stable.render[i].w)<=1 &&
+        Math.abs(restored.render[i].h-stable.render[i].h)<=1,JSON.stringify({stable,restored}));
+    }
+    // Synthetic manifest has two 420x240 images; fit is shared from Fab.
+    const fit=s=>Math.min(s.render[0].w/(420*1.1),s.render[0].h/(240*1.1));
+    assert.ok(Math.abs(stable.zoom[0]-fit(stable)*stable.userCadZoom)<1e-8,JSON.stringify(stable));
+    assert.ok(Math.abs(restored.zoom[0]-fit(restored)*stable.userCadZoom)<1e-8,JSON.stringify(restored));
+    assert.ok(Math.abs(restored.zoom[0]-stable.zoom[0])<=stable.userCadZoom/(240*1.1)+1e-8,
+      JSON.stringify({stable,restored}));
     const rendered=await page.evaluate(async()=>{
       const {layers}=await import('/viewer/cad_viewer.js');
       const THREE=await import('three');
@@ -418,11 +468,28 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       assert.deepEqual(await menu.locator('button span:first-child').allTextContents(),dates.map(formatDate),name);
       assert.deepEqual(await menu.locator('button[data-timestamp]').evaluateAll(els=>els.map(e=>e.dataset.timestamp)),dates);
       await menu.getByRole('menuitem',{name:new RegExp(formatDate(date))}).click();
-      await stage.locator('.cad-submenu').getByRole('menuitem',{name:axis,exact:true}).click();
+      const axisItem=stage.locator('.cad-submenu').getByRole('menuitemcheckbox',{name:axis,exact:true});
+      assert.equal(await axisItem.getAttribute('aria-checked'),'false');
+      await axisItem.click();
       await page.waitForFunction(({label,count})=>
         document.querySelectorAll('#psd-overlays img').length===count &&
         document.querySelectorAll('#octave-overlays img').length===count &&
         document.getElementById('reference-log').textContent.includes(label),{label,count});
+      await page.waitForFunction(el=>el.getAttribute('aria-checked')==='true',await axisItem.elementHandle());
+      const expectedNote=name==='Inside'?'第一条说明':name==='Partial'?'局部测点':'';
+      const panels=await stage.evaluate(el=>{
+        const p=el.querySelector('.cad-submenu'),d=el.querySelector('.cad-axis-description');
+        const a=p.getBoundingClientRect(),b=d.getBoundingClientRect(),r=el.getBoundingClientRect();
+        const m=el.querySelector('.cad-context-menu').getBoundingClientRect();
+        return {hidden:d.hidden,same:d.hidden||Math.abs(a.height-b.height)<1,
+          adjacent:d.hidden||b.left>=a.right-1,
+          inside:a.left>=r.left-1&&a.right<=r.right+1&&a.top>=r.top-1&&a.bottom<=r.bottom+1&&
+            (d.hidden||b.right<=r.right+1),
+          side: a.left>=m.right-1||a.right<=m.left+1,
+          white:getComputedStyle(d).backgroundColor,text:d.textContent};
+      });
+      assert.deepEqual(panels,{hidden:!expectedNote,same:true,adjacent:true,inside:true,side:true,white:'rgb(255, 255, 255)',text:expectedNote});
+      await page.keyboard.press('Escape');
       await menu.waitFor({state:'hidden'});
     }
     await choose(0,'Inside',['20260704101627','20260706101627'],'20260704101627','X','BODYv2_Sheet1_R_Cube_+X_2026/07/04_10:16:27',1);
@@ -488,6 +555,73 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     await menu.getByRole('menuitem',{name:'关闭',exact:true}).click();
     assert.equal(await page.locator('#psd-overlays img').count(),3);
     assert.equal(await page.locator('#octave-overlays img').count(),3);
+    // Closing via Legend and the CAD menu share the same selection key.
+    const stage=page.locator('#fab-stage');
+    await clickShape(0,'Inside');
+    const dateButtons=stage.locator('.cad-context-menu button');
+    // Put the primary menu in a roomy position to test exact row alignment,
+    // independently of the edge-clamping checks in choose().
+    await stage.locator('.cad-context-menu').evaluate(el=>{
+      el.style.left='12px';el.style.top='12px';
+    });
+    const aligned=()=>stage.evaluate(el=>{
+      const selected=el.querySelector('.cad-context-menu [aria-expanded="true"]');
+      const first=el.querySelector('.cad-submenu button');
+      const a=selected.getBoundingClientRect(),b=first.getBoundingClientRect();
+      const primary=el.querySelector('.cad-context-menu').getBoundingClientRect();
+      const pane=el.querySelector('.cad-submenu').getBoundingClientRect();
+      return {delta:Math.abs(a.top+a.height/2-b.top-b.height/2),right:pane.left>=primary.right-1,top:pane.top};
+    });
+    await dateButtons.nth(1).click();
+    const secondAlignment=await aligned();
+    assert.ok(secondAlignment.delta<=1 && secondAlignment.right,JSON.stringify(secondAlignment));
+    assert.equal(await stage.locator('.cad-axis-description').textContent(),'第二条说明，设备运行期间持续观察振动变化并记录各方向测量数据，确认设备状态及现场测试条件，随后复核测点编号、设备负载、运行工况、环境温度和测量仪器设置，并记录复测时间与现场人员的观察结果。');
+    const longPanel=await stage.locator('.cad-axis-description').evaluate(el=>{
+      const probe=el.cloneNode(true);
+      Object.assign(probe.style,{width:'150px',visibility:'hidden',pointerEvents:'none'});
+      el.parentElement.append(probe);
+      const needsExpansion=probe.scrollHeight>probe.clientHeight||probe.scrollWidth>probe.clientWidth;
+      probe.remove();
+      return {w:el.offsetWidth,h:el.offsetHeight,scroll:el.scrollHeight,client:el.clientHeight,needsExpansion};
+    });
+    await dateButtons.first().click();
+    const firstAlignment=await aligned();
+    assert.ok(firstAlignment.delta<=1 && firstAlignment.right,JSON.stringify(firstAlignment));
+    assert.ok(secondAlignment.top>firstAlignment.top,'submenu must follow the selected date row');
+    assert.equal(await stage.locator('.cad-axis-description').textContent(),'第一条说明');
+    const shortPanel=await stage.locator('.cad-axis-description').evaluate(el=>({w:el.offsetWidth,h:el.offsetHeight}));
+    assert.equal(shortPanel.w,150,'short description minimum width');
+    assert.ok(longPanel.needsExpansion,'fixture must overflow at 150px on this browser');
+    assert.ok(longPanel.w>shortPanel.w,JSON.stringify({longPanel,shortPanel}));
+    assert.equal(longPanel.h,shortPanel.h);
+    assert.equal(shortPanel.h,await stage.locator('.cad-submenu').evaluate(el=>el.offsetHeight));
+    assert.ok(longPanel.scroll<=longPanel.client,JSON.stringify(longPanel));
+    assert.equal(await stage.locator('.cad-submenu').evaluate(el=>el.offsetWidth),32);
+    const compact=await stage.locator('.cad-context-menu').evaluate(el=>({
+      gap:parseFloat(getComputedStyle(el.querySelector('button')).gap),
+      arrow:el.querySelector('.cad-menu-arrow').textContent
+    }));
+    assert.deepEqual(compact,{gap:3,arrow:'>'});
+    const rowMetrics=await stage.evaluate(el=>{
+      const rows=[...el.querySelectorAll('.cad-context-menu button,.cad-submenu button')];
+      return rows.map(row=>({font:getComputedStyle(row).fontSize,line:getComputedStyle(row).lineHeight,
+        height:row.getBoundingClientRect().height,family:getComputedStyle(row).fontFamily}));
+    });
+    assert.ok(rowMetrics.length>=5);
+    for(const metrics of rowMetrics) assert.deepEqual(metrics,rowMetrics[0]);
+    assert.equal(rowMetrics[0].font,'13px');
+    assert.equal(rowMetrics[0].height,28);
+    const toggle=stage.locator('.cad-submenu').getByRole('menuitemcheckbox',{name:'X',exact:true});
+    assert.equal(await toggle.getAttribute('aria-checked'),'false');
+    await toggle.click();
+    await page.waitForFunction(()=>document.querySelectorAll('#psd-overlays img').length===4);
+    assert.equal(await toggle.getAttribute('aria-checked'),'true');
+    await toggle.click();
+    assert.equal(await toggle.getAttribute('aria-checked'),'false');
+    assert.equal(await page.locator('#psd-overlays img').count(),3);
+    assert.equal(await page.locator('#octave-overlays img').count(),3);
+    await page.keyboard.press('Escape');
+    assert.equal(await stage.locator('.cad-axis-description').isVisible(),false);
     assert.deepEqual(errors,[]);
   }finally{
     await browser?.close();

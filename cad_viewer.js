@@ -441,8 +441,13 @@ function createContextMenu(layer) {
   submenu.hidden=true;
   submenu.setAttribute('role','menu');
   submenu.addEventListener('pointerdown',e=>e.stopPropagation());
-  layer.stage.append(menu,submenu);
-  return {element:menu,submenu,requestId:0};
+  const description=document.createElement('div');
+  description.className='cad-axis-description';
+  description.hidden=true;
+  description.textContent='';
+  description.addEventListener('pointerdown',e=>e.stopPropagation());
+  layer.stage.append(menu,submenu,description);
+  return {element:menu,submenu,description,requestId:0,axisAnchor:null};
 }
 
 function keepMenuInStage(layer) {
@@ -458,50 +463,122 @@ function closeContextMenus() {
     layer.menu.requestId++;
     layer.menu.element.hidden=true;
     layer.menu.submenu.hidden=true;
+    layer.menu.description.hidden=true;
+    layer.menu.axisAnchor=null;
+  }
+}
+
+// Both menus and the explanatory panel use stage-local CSS pixels.
+function positionAxisPanels(layer) {
+  const {submenu:pane,description,axisAnchor:button,element:menu}=layer.menu;
+  if(!button || pane.hidden) return;
+  const stage=layer.stage, margin=4, gap=2;
+  const W=stage.clientWidth,H=stage.clientHeight;
+  const rect=stage.getBoundingClientRect(), mr=menu.getBoundingClientRect();
+  const sx=rect.width/(W||1)||1,sy=rect.height/(H||1)||1;
+  const clamp=(v,max)=>Math.max(margin,Math.min(v,Math.max(margin,max-margin)));
+  const mx=(mr.left-rect.left)/sx,my=(mr.top-rect.top)/sy;
+  const mw=mr.width/sx,mh=mr.height/sy;
+  pane.style.maxHeight=Math.max(0,H-2*margin)+'px';
+  pane.style.maxWidth=Math.max(0,W-2*margin)+'px';
+  const pw=pane.offsetWidth,ph=pane.offsetHeight;
+  const right=mx+mw+gap,left=mx-gap;
+  // Horizontal anchor is the outer primary menu; vertically align the
+  // centers of the selected date row and the first (X) axis row.
+  // Prefer right; shrink optional explanation to fit before flipping.
+  const rightSpace=W-margin-right,leftSpace=left-margin;
+  // Find the smallest width that fits the text at the fixed menu height.
+  // Measure real browser line wrapping, including CJK and mixed Latin text.
+  let wanted=0;
+  if(!description.hidden) {
+    description.style.height=ph+'px';
+    const maxWidth=Math.max(1,W-2*margin-pw-gap);
+    // 150 CSS px is the preferred minimum, except when the stage itself
+    // cannot accommodate it. Only expand when the note actually overflows.
+    let lo=Math.min(150,maxWidth),hi=maxWidth;
+    while(lo<hi) {
+      const mid=Math.floor((lo+hi)/2);
+      description.style.width=mid+'px';
+      if(description.scrollHeight<=description.clientHeight && description.scrollWidth<=description.clientWidth) hi=mid;
+      else lo=mid+1;
+    }
+    wanted=hi;
+  }
+  const required=pw+(wanted?gap+wanted:0);
+  let side=rightSpace>=required?'right':leftSpace>=required?'left':
+    Math.max(rightSpace,leftSpace)>=pw?(rightSpace>=leftSpace?'right':'left'):'fallback';
+  // If neither side can fit a long note, relocate the whole group below or
+  // above the primary menu when that makes the full stage width available.
+  if(wanted && Math.max(rightSpace,leftSpace)<required &&
+      ((my+mh+gap+ph<=H-margin || my-gap-ph>=margin) ||
+       Math.max(rightSpace,leftSpace)<pw+gap+Math.min(150,wanted))) side='fallback';
+  const available=side==='right'?rightSpace:side==='left'?leftSpace:W-2*margin;
+  const dw=wanted?Math.max(0,Math.min(wanted,available-pw-gap)):0;
+  description.style.width=dw+'px';
+  description.style.height=ph+'px';
+  const total=pw+(wanted?gap+description.offsetWidth:0);
+  let x=side==='right'?right:side==='left'?left-total:clamp(right,W-total);
+  const selected=button.getBoundingClientRect();
+  const first=pane.querySelector('button').getBoundingClientRect();
+  const paneRect=pane.getBoundingClientRect();
+  const desiredY=(selected.top+selected.height/2-rect.top)/sy
+    -(first.top+first.height/2-paneRect.top)/sy;
+  let y=clamp(desiredY,H-ph);
+  if(side==='fallback') {
+    if(my+mh+gap+ph<=H-margin) y=my+mh+gap;
+    else if(my-gap-ph>=margin) y=my-gap-ph;
+  }
+  pane.style.left=x+'px';pane.style.top=y+'px';
+  description.style.left=(x+pw+gap)+'px';description.style.top=y+'px';
+}
+
+function refreshAxisChecks() {
+  for(const layer of layers) {
+    for(const item of layer.menu.submenu.querySelectorAll('button[data-overlay-key]')) {
+      const key=item.dataset.overlayKey;
+      item.setAttribute('aria-checked',String(overlaySelections.has(key)));
+      item.disabled=item.dataset.available!=='true'||overlayLoads.has(key);
+    }
   }
 }
 
 function showAxisSubmenu(layer,button,date,catalog) {
   const pane=layer.menu.submenu;
   pane.replaceChildren();
+  layer.menu.axisAnchor=button;
   for(const axis of ['X','Y','Z']) {
     const item=document.createElement('button');
     item.type='button';
-    item.setAttribute('role','menuitem');
+    item.setAttribute('role','menuitemcheckbox');
+    item.setAttribute('aria-label',axis);
     item.textContent=axis;
+    const pair=catalog.pairs?.[date]?.[axis];
+    const key=svgSelectionKey(catalog,date,axis);
+    item.dataset.overlayKey=key;
+    item.dataset.available=String(Boolean(pair));
     item.addEventListener('click',async()=>{
-      const pair=catalog.pairs?.[date]?.[axis];
-      if(!pair) {
-        item.title='没有匹配当前矩形或测点、时间及方向的成对 SVG 文件';
-        return;
-      }
+      if(!pair||overlayLoads.has(key)) return;
       try {
-        const label=svgLegendName(catalog,axis,date);
-        const key=svgSelectionKey(catalog,date,axis);
-        await switchReferencePair(pair,key,label,catalog.csv_files?.[date]?.[axis]??[]);
-        closeContextMenus();
+        if(overlaySelections.has(key)) removeReferenceOverlay(key);
+        else {
+          const pending=switchReferencePair(pair,key,svgLegendName(catalog,axis,date),catalog.csv_files?.[date]?.[axis]??[]);
+          refreshAxisChecks();
+          await pending;
+        }
       } catch(error) {
         console.error('Unable to switch SVG pair:',error);
         item.title='SVG 图片载入失败，原图保持不变';
-      }
+      } finally {refreshAxisChecks();}
     });
-    if(!catalog.pairs?.[date]?.[axis]) {
-      item.title='当前没有匹配的 PSD 与 1-3-Octave 两张 SVG';
-    }
+    if(!pair) item.title='当前没有匹配的 PSD 与 1-3-Octave 两张 SVG';
     pane.append(item);
   }
   pane.hidden=false;
-  const stageBounds=layer.stage.getBoundingClientRect();
-  const bounds=button.getBoundingClientRect();
-  // Submenu is an independent sibling, not nested below the date. It opens
-  // to the right, with left-side fallback when close to a viewport edge.
-  const menuWidth=layer.menu.element.offsetWidth;
-  const popupWidth=Math.max(94,pane.offsetWidth);
-  const right=(bounds.right-stageBounds.left)/pageZoom+2;
-  pane.style.left=(right+popupWidth<=layer.stage.clientWidth
-    ? right : Math.max(4,(bounds.left-stageBounds.left)/pageZoom-popupWidth-2))+'px';
-  pane.style.top=Math.max(4,Math.min((bounds.top-stageBounds.top)/pageZoom,
-    layer.stage.clientHeight-pane.offsetHeight-4))+'px';
+  const note=layer.menu.selectedObject?.time_descriptions?.[date]||'';
+  layer.menu.description.textContent=note;
+  layer.menu.description.hidden=!note;
+  refreshAxisChecks();
+  positionAxisPanels(layer);
 }
 
 async function openContextMenu(layer,clientX,clientY,selectedObject) {
@@ -544,7 +621,7 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
         button.dataset.timestamp=date;
         const arrow=document.createElement('span');
         arrow.className='cad-menu-arrow';
-        arrow.textContent='›';
+        arrow.textContent='>';
         button.append(caption,arrow);
         button.addEventListener('click',()=>{
           for(const btn of menu.querySelectorAll('button')) {
@@ -629,7 +706,7 @@ function installPicking(layer) {
 }
 
 document.addEventListener('pointerdown',event=>{
-  if(!event.target.closest?.('.cad-context-menu,.cad-submenu')) closeContextMenus();
+  if(!event.target.closest?.('.cad-context-menu,.cad-submenu,.cad-axis-description')) closeContextMenus();
 });
 document.addEventListener('keydown',event=>{
   if(event.key==='Escape') closeContextMenus();
@@ -874,6 +951,7 @@ async function switchReferencePair(pair,key,label,csvFiles=[]) {
     return true;
   } finally {
     overlayLoads.delete(key);
+    refreshAxisChecks();
   }
 }
 
@@ -913,6 +991,7 @@ function removeReferenceOverlay(key) {
   entry.octave.element.remove();
   entry.legend.remove();
   overlaySelections.delete(key);
+  refreshAxisChecks();
   releaseColoredPair(entry);
   legendMenu.hidden=true;
   if(!overlaySelections.size) svgHistory.style.display='none';
@@ -1170,6 +1249,9 @@ new ResizeObserver(()=>{
 }).observe(document.getElementById('reference-frames'));
 for(const layer of layers) {
   cadObserver.observe(layer.stage);
+  new ResizeObserver(()=>{
+    if(!layer.menu.element.hidden) {keepMenuInStage(layer);positionAxisPanels(layer);}
+  }).observe(layer.stage);
 }
 resizeCadLayers();
 window.addEventListener('resize',scheduleCadResize);
