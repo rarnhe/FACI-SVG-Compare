@@ -5,7 +5,7 @@ import { rectangleHeight, rectangleSpecs, ellipseElevation, worldRectFromEmu, re
 import {
   INITIAL_REFERENCE_SPLIT, selectOnButton, selectionParts, shapeAncestors, shapeLabel,
   pictureLayerScales, fitSvgPane, clampMainDivider, clampReferenceSplit,
-  requiredSvgRatio, canAddOverlay, fitLegendSubmenu, nextLegendColor,
+  requiredSvgRatio, canAddOverlay, fitLegendSubmenu, nextLegendColor, nextPageZoom,
   restyleSvgMarkup, mergeSvgStyle, SVG_COLOR_CHOICES, SVG_LINE_WIDTHS, SVG_LINE_TYPES, svgLegendName, svgSelectionKey, formatSvgTimestamp,
   cadOutlineSpec, cadOutlineSegments,
   rectangleHasAltText, planarOutlineVertices,
@@ -30,6 +30,25 @@ const overlaySelections = new Map();
 const overlayLoads = new Set();
 let colorCursor=0;
 let displayedSvgWidth = 0;
+let pageZoom=1;
+
+// Capture before OrbitControls' target listener. Ctrl-wheel must reach
+// the browser default action, not the CAD dolly. Plain left-button wheel
+// is an application-wide CSS zoom (no web API can set native browser zoom).
+window.addEventListener('wheel',event=>{
+  const leftHeld=(event.buttons & 1)!==0;
+  if(event.ctrlKey || event.metaKey) {
+    if(event.target.closest?.('.cad-layer canvas')) event.stopImmediatePropagation();
+    return; // never prevent browser default
+  }
+  if(!leftHeld || !event.deltaY) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  // Do not interpret the subsequent release as a shape selection.
+  for(const layer of layers) pointerStart.delete(layer.renderer.domElement);
+  pageZoom=nextPageZoom(pageZoom,event.deltaY,event.deltaMode);
+  document.documentElement.style.zoom=String(pageZoom);
+},{capture:true,passive:false});
 
 function createLayer(stageId) {
   const stage = document.getElementById(stageId);
@@ -421,10 +440,10 @@ function showAxisSubmenu(layer,button,date,catalog) {
   // to the right, with left-side fallback when close to a viewport edge.
   const menuWidth=layer.menu.element.offsetWidth;
   const popupWidth=Math.max(94,pane.offsetWidth);
-  const right=bounds.right-stageBounds.left+2;
+  const right=(bounds.right-stageBounds.left)/pageZoom+2;
   pane.style.left=(right+popupWidth<=layer.stage.clientWidth
-    ? right : Math.max(4,bounds.left-stageBounds.left-popupWidth-2))+'px';
-  pane.style.top=Math.max(4,Math.min(bounds.top-stageBounds.top,
+    ? right : Math.max(4,(bounds.left-stageBounds.left)/pageZoom-popupWidth-2))+'px';
+  pane.style.top=Math.max(4,Math.min((bounds.top-stageBounds.top)/pageZoom,
     layer.stage.clientHeight-pane.offsetHeight-4))+'px';
 }
 
@@ -434,8 +453,8 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
   const id=layer.menu.requestId;
   const menu=layer.menu.element;
   const bounds=layer.stage.getBoundingClientRect();
-  menu.style.left=(clientX-bounds.left)+'px';
-  menu.style.top=(clientY-bounds.top)+'px';
+  menu.style.left=((clientX-bounds.left)/pageZoom)+'px';
+  menu.style.top=((clientY-bounds.top)/pageZoom)+'px';
   menu.replaceChildren();
   menu.hidden=false;
   const placeholder=document.createElement('div');
@@ -928,12 +947,12 @@ function showLegendMenu(key,x,y) {
       const buttonRect=button.getBoundingClientRect();
       const paneRect=pane.getBoundingClientRect();
       const pos=fitLegendSubmenu(pane.clientWidth,pane.clientHeight,
-        {x:menuRect.left-paneRect.left,y:menuRect.top-paneRect.top,width:menuRect.width},
-        {y:buttonRect.top-paneRect.top},
+        {x:(menuRect.left-paneRect.left)/pageZoom,y:(menuRect.top-paneRect.top)/pageZoom,width:menuRect.width/pageZoom},
+        {y:(buttonRect.top-paneRect.top)/pageZoom},
         {width:secondary.offsetWidth,height:secondary.offsetHeight});
       // Absolute child coordinates are relative to the parent's padding box.
-      secondary.style.left=(pos.x-(menuRect.left-paneRect.left)-legendMenu.clientLeft)+'px';
-      secondary.style.top=(pos.y-(menuRect.top-paneRect.top)-legendMenu.clientTop)+'px';
+      secondary.style.left=(pos.x-(menuRect.left-paneRect.left)/pageZoom-legendMenu.clientLeft)+'px';
+      secondary.style.top=(pos.y-(menuRect.top-paneRect.top)/pageZoom-legendMenu.clientTop)+'px';
     });
     primary.append(button);
   }
@@ -956,9 +975,9 @@ function showLegendMenu(key,x,y) {
   close.addEventListener('click',()=>removeReferenceOverlay(key));
   primary.append(close);
   legendMenu.hidden=false;
-  legendMenu.style.left=Math.max(0,Math.min(x-bounds.left,
+  legendMenu.style.left=Math.max(0,Math.min((x-bounds.left)/pageZoom,
     pane.clientWidth-legendMenu.offsetWidth))+'px';
-  legendMenu.style.top=Math.max(0,Math.min(y-bounds.top,
+  legendMenu.style.top=Math.max(0,Math.min((y-bounds.top)/pageZoom,
     pane.clientHeight-legendMenu.offsetHeight))+'px';
 }
 document.addEventListener('pointerdown',event=>{
@@ -985,18 +1004,18 @@ function installFloatingLogDrag() {
     if(event.button!==0) return;
     const panelRect=pane.getBoundingClientRect();
     const box=svgHistory.getBoundingClientRect();
-    svgHistory.style.left=(box.left-panelRect.left)+'px';
-    svgHistory.style.top=(box.top-panelRect.top)+'px';
+    svgHistory.style.left=((box.left-panelRect.left)/pageZoom)+'px';
+    svgHistory.style.top=((box.top-panelRect.top)/pageZoom)+'px';
     svgHistory.style.right='auto';
     move={pointer:event.pointerId,x:event.clientX,y:event.clientY,
-          left:box.left-panelRect.left,top:box.top-panelRect.top};
+          left:(box.left-panelRect.left)/pageZoom,top:(box.top-panelRect.top)/pageZoom};
     svgHistory.setPointerCapture(event.pointerId);
     event.preventDefault();
   });
   svgHistory.addEventListener('pointermove',event=>{
     if(!move || event.pointerId!==move.pointer) return;
-    const left=move.left+event.clientX-move.x;
-    const top=move.top+event.clientY-move.y;
+    const left=move.left+(event.clientX-move.x)/pageZoom;
+    const top=move.top+(event.clientY-move.y)/pageZoom;
     svgHistory.style.left=Math.max(0,Math.min(left,pane.clientWidth-svgHistory.offsetWidth))+'px';
     svgHistory.style.top=Math.max(0,Math.min(top,pane.clientHeight-svgHistory.offsetHeight))+'px';
   });
@@ -1044,7 +1063,7 @@ function installSplitter(id,direction,callback) {
 installSplitter('main-splitter','vertical',event=>{
   const layout=document.getElementById('layout');
   const bounds=layout.getBoundingClientRect();
-  const left=clampMainDivider(event.clientX-bounds.left,bounds.width,8,displayedSvgWidth);
+  const left=clampMainDivider((event.clientX-bounds.left)/pageZoom,bounds.width/pageZoom,8,displayedSvgWidth);
   layout.style.gridTemplateColumns='minmax(0,'+left+'px) 8px minmax(0,1fr)';
   resizeCadLayers();
   fitSvgHeightToPane();

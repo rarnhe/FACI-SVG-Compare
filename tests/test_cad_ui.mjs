@@ -9,7 +9,7 @@ import {
   CAD_DRAW_ORDER,cadShapeRenderOrder,cadShapeZOffset,
   textboxFont,layoutTextboxText,
   recolorablePaint,recolorCssDeclarations,recolorSvgMarkup,
-  SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,fitLegendSubmenu,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
+  SVG_COLOR_CHOICES,SVG_LINE_WIDTHS,SVG_LINE_TYPES,fitLegendSubmenu,nextPageZoom,mergeSvgStyle,svgCurveNodes,restyleSvgMarkup,
   cadOutlineSpec,recolorOctaveGeometry,octavePointScale,octavePointNodes,octaveLineNodes,
   cadOutlineSegments,rectangleHasAltText,planarOutlineVertices,
 } from '../cad_ui.mjs';
@@ -584,4 +584,13 @@ test('format SVG timestamps without changing raw timestamp or timezone',()=>{
   assert.equal(formatSvgTimestamp('20261231235959'),'2026/12/31 23:59:59');
   assert.equal(formatSvgTimestamp('invalid'),'invalid');
   assert.equal(formatSvgTimestamp(''),'');
+});
+
+test('page wheel zoom direction, delta modes and limits',()=>{
+  assert.ok(nextPageZoom(1,-100)>1);
+  assert.ok(nextPageZoom(1,100)<1);
+  assert.equal(nextPageZoom(1,1,1),nextPageZoom(1,16));
+  assert.equal(nextPageZoom(2,-100),2);
+  assert.equal(nextPageZoom(.5,100),.5);
+  assert.equal(nextPageZoom(1,0),1);
 });

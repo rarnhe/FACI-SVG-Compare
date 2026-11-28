@@ -67,6 +67,44 @@ test('Chromium renders every CAD outline and scales octave points around their c
       const {layers}=await import('/viewer/cad_viewer.js');
       return layers.length===2 && layers.every(l=>l.clickable.length===5);
     },null,{timeout:25000});
+    // Real wheel input plus capture-phase dispatch assertions. Browser
+    // chrome zoom is not controllable through Playwright's page API.
+    const state=()=>page.evaluate(async()=>{
+      const {layers}=await import('/viewer/cad_viewer.js');
+      return {page:Number(document.documentElement.style.zoom||1),zoom:layers.map(l=>l.camera.zoom),
+        left:document.getElementById('cad-pane').getBoundingClientRect().width,
+        right:document.getElementById('reference-pane').getBoundingClientRect().width};
+    });
+    const wheel=async(selector,options)=>page.locator(selector).evaluate((el,opts)=>{
+      const ev=new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-100,...opts});
+      el.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    },options);
+    const before=await state();
+    assert.equal(await wheel('#fab-stage canvas',{}),true);
+    const cadZoom=await state();
+    assert.equal(cadZoom.page,1);
+    assert.ok(cadZoom.zoom[0]>before.zoom[0]);
+    assert.equal(cadZoom.zoom[0],cadZoom.zoom[1]);
+    for(const selector of ['#fab-stage canvas','#subfab-stage canvas','#reference-pane']){
+      const old=await state();
+      assert.equal(await wheel(selector,{buttons:1}),true);
+      const after=await state();
+      assert.ok(after.page>old.page);
+      assert.ok(Math.abs(after.left+after.right+8*after.page-1400)<3,'page still fills viewport');
+    }
+    for(const selector of ['#fab-stage canvas','#subfab-stage canvas','#reference-pane']){
+      const old=await state();
+      assert.equal(await wheel(selector,{ctrlKey:true,buttons:1}),false);
+      const after=await state();
+      assert.equal(after.page,old.page);
+      assert.deepEqual(after.zoom,old.zoom);
+    }
+    // Restore CSS zoom for pre-existing pixel measurements. Use inverse
+    // wheel delta for the same three application zoom steps.
+    for(let i=0;i<3;i++) await wheel('#reference-pane',{buttons:1,deltaY:100});
+    assert.ok(Math.abs((await state()).page-1)<1e-8);
+    await page.waitForTimeout(100);
     const rendered=await page.evaluate(async()=>{
       const {layers}=await import('/viewer/cad_viewer.js');
       const THREE=await import('three');

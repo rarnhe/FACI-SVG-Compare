@@ -671,3 +671,10 @@ export function fitLegendSubmenu(paneWidth,paneHeight,primary,button,popup) {
   const x=right+popup.width<=paneWidth?right:primary.x-popup.width;
   return {x:clamp(x,paneWidth-popup.width),y:clamp(button.y,paneHeight-popup.height)};
 }
+
+/** Page zoom is independent from the linked CAD camera zoom. */
+export function nextPageZoom(current,deltaY,deltaMode=0) {
+  const pixels=deltaY*(deltaMode===1?16:deltaMode===2?800:1);
+  if(!Number.isFinite(pixels)||pixels===0) return current;
+  return Math.max(0.5,Math.min(2, current*Math.exp(-Math.max(-400,Math.min(400,pixels))*0.0015)));
+}
