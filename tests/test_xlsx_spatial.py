@@ -376,24 +376,61 @@ class TestGeometry(unittest.TestCase):
         self.assertIn("span differs",actual["vertical_geometry"]["reason"])
         self.assertNotEqual(actual["vertical_geometry"]["calibration_factor"],1)
 
-    def test_column_metrics_never_used_for_vertical_correction(self):
-        with TemporaryDirectory() as tmp:
-            book=fixture(Path(tmp)/"no-column-metrics.xlsx",sheet_count=2,
-                worksheet_xml='<sheetFormatPr defaultRowHeight="15" defaultColWidth="not-a-number"/>'
-                              '<cols><col min="invalid" max="invalid" width="invalid"/></cols>'
-                              '<sheetData><row r="1" ht="30"/></sheetData>')
-            first=spatial.first_child
-            def no_columns(parent,tag):
-                # Existing zero-origin ambiguity guard may inspect marker col/colOff;
-                # only worksheet column widths are prohibited.
-                if tag == "cols":
-                    self.fail("Column geometry accessed: "+tag)
-                return first(parent,tag)
-            with patch.object(spatial,"first_child",no_columns):
-                sheets=spatial.parse_xlsx(book)
-            self.assertEqual(sheets[0]["objects"][0]["width_px"],135)
-            self.assertEqual(sheets[1]["objects"][0]["width_px"],100)
-            self.assertFalse(hasattr(spatial,"SheetMetrics"))
+    def test_invalid_column_metrics_leave_y_unchanged(self):
+        sheet='<sheetFormatPr defaultRowHeight="15" defaultColWidth="not-a-number"/><cols><col min="invalid" max="invalid" width="invalid"/></cols><sheetData><row r="1" ht="30"/></sheetData>'
+        before=self.parse()[0]["objects"]
+        after=self.parse(worksheet_xml=sheet)[0]["objects"]
+        self.assertEqual([o["bounds_emu"] for o in after],[o["bounds_emu"] for o in before])
+        self.assertEqual([o["vertical_geometry"] for o in after],[o["vertical_geometry"] for o in before])
+        self.assertTrue(all(o["horizontal_geometry"]["calibration_status"]=="retained" for o in after))
+
+    def test_horizontal_column_metrics_reference_and_hidden(self):
+        root=spatial.ET.fromstring('<worksheet><sheetFormatPr defaultColWidth="10"/><cols><col min="1" max="2" width="20"/><col min="3" max="4" hidden="1"/></cols></worksheet>')
+        m=spatial.HorizontalColumnMetrics(root)
+        self.assertEqual(m.prefix[:6],[v*9525 for v in (0,140,280,280,280,350)])
+        self.assertEqual(m.width_pixels("8.43"),59)
+        self.assertEqual(m.marker_x(spatial.ET.fromstring('<from><col>4</col><colOff>9525</colOff></from>')),281*9525)
+
+    def test_horizontal_crosscheck_all_target_kinds_and_conflicting_span(self):
+        # 56px columns, picture raw horizontal span 240px, saved width 300px.
+        # All good shapes have stale X; the conflict must retain its saved X.
+        sheet='<sheetFormatPr defaultRowHeight="15" defaultColWidth="8"/><sheetData/>'
+        def anchored(child,x,y,w,h,left,right):
+            child=with_saved_geometry(child,x,y,w,h)
+            def mark(tag,px,py):
+                c,dx=divmod(round(px*9525),56*9525)
+                r,dy=divmod(py,20)
+                return marker(tag,c,r,dx,dy*9525)
+            return '<xdr:twoCellAnchor>'+mark("from",left,y)+mark("to",right,y+h)+child+'</xdr:twoCellAnchor>'
+        pic=anchored(image("P"),80,40,300,200,40,280)
+        box=shape("文本框")
+        rect=shape("矩形")
+        ellipse=shape("椭圆")
+        raw=pic+anchored(box,103,60,20,30,56,72)+anchored(rect,183,80,40,20,120,152)+anchored(ellipse,283,100,12,12,200,209.6)+anchored(shape("矩形冲突"),299,120,40,20,200,250)
+        objs=self.parse(raw,worksheet_xml=sheet)[0]["objects"]
+        self.assertEqual([o["bounds_emu"]["x"] for o in objs],[v*9525 for v in (80,100,180,280,299)])
+        self.assertEqual([o["bounds_emu"]["y"] for o in objs],[v*9525 for v in (40,60,80,100,120)])
+        self.assertEqual([o["width_px"] for o in objs],[300,20,40,12,40])
+        self.assertEqual([o["horizontal_geometry"]["calibration_status"] for o in objs],["retained","applied","applied","applied","retained"])
+        self.assertEqual(objs[1]["horizontal_geometry"]["correction_emu"],-3*9525)
+        self.assertIn("disagree",objs[-1]["horizontal_geometry"]["reason"])
+        self.assertEqual(objs[2]["horizontal_geometry"]["calibration_factor"],1.25)
+
+    def test_horizontal_crosscheck_rotated_and_missing_anchors(self):
+        sheet='<sheetFormatPr defaultRowHeight="15" defaultColWidth="8"/><sheetData/>'
+        def anchored(child,x,y,w,h,a,z):
+            child=with_saved_geometry(child,x,y,w,h)
+            return ('<xdr:twoCellAnchor>'+marker("from",0,0,a*9525,0)+
+                    marker("to",0,1,z*9525,0)+child+'</xdr:twoCellAnchor>')
+        pic=anchored(image(),80,0,200,20,0,100)
+        # Rotated width=20; anchor span 10*2=20; unrotated left=80+40-20=100.
+        child=anchored(shape("矩形",rot=5400000),103,0,60,20,20,30)
+        objs=self.parse(pic+child+one_cell(shape("文本框"))+absolute(),worksheet_xml=sheet)[0]["objects"]
+        self.assertEqual(objs[1]["bounds_emu"]["x"],100*9525)
+        self.assertEqual(objs[1]["horizontal_geometry"]["anchor_interpretation"],"rotated_outer_bounds")
+        self.assertEqual(objs[1]["width_px"],60)
+        self.assertEqual(objs[2]["horizontal_geometry"]["calibration_status"],"retained")
+        self.assertEqual(objs[3]["bounds_emu"]["x"],10*9525)
 
     def test_vertical_translation_corrects_picture_and_each_shape_kind(self):
         # 15pt=20px, first row 30pt=40px, second row hidden.

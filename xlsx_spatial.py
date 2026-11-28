@@ -1,7 +1,7 @@
 """Extract Excel DrawingML objects as 2D positions relative to A1.
 
 X increases to the right, Y downwards. Read saved absolute DrawingML
-X and extents from saved transforms; Y from worksheet row anchors normalized to the picture height when possible. Never use column metrics. Geometry is kept in
+X and extents from saved transforms, with conditional horizontal anchor cross-check; Y from worksheet row anchors normalized to the picture height when possible. Geometry is kept in
 integer EMU and reported in reference pixels at 96 DPI (9525 EMU / pixel).
 """
 
@@ -321,6 +321,90 @@ class VerticalRowMetrics:
         return index * self.default + self.prefix[bisect_left(self.indices, index)] + off
 
 
+class HorizontalColumnMetrics:
+    """OOXML reference column widths; MDW=7 is an explicit estimate.
+
+    A picture supplies the scale, and individual object spans must agree
+    with their saved dimensions before any horizontal translation.
+    """
+    MDW = 7
+    LIMIT = 16384
+
+    @classmethod
+    def width_pixels(cls, width: str) -> int:
+        value = Decimal(width)
+        if not value.is_finite() or not 0 <= value <= 255:
+            raise ValueError("invalid column width")
+        return int((value * 256 + 128 // cls.MDW) * cls.MDW / 256)
+
+    def __init__(self, root: ET.Element):
+        self.prefix = None
+        self.default_source = "unavailable"
+        try:
+            fmt = first_child(root, "sheetFormatPr")
+            if fmt is not None and "defaultColWidth" in fmt.attrib:
+                default = self.width_pixels(fmt.attrib["defaultColWidth"])
+                self.default_source = "defaultColWidth"
+            else:
+                base = int(fmt.get("baseColWidth", "8")) if fmt is not None else 8
+                if not 0 <= base <= 255:
+                    raise ValueError("invalid baseColWidth")
+                default = base * self.MDW + 5
+                self.default_source = "baseColWidth_plus_padding_reference"
+            widths = [default] * self.LIMIT
+            cols = first_child(root, "cols")
+            if cols is not None:
+                for col in cols:
+                    if local_name(col.tag) != "col":
+                        continue
+                    lo, hi = int(col.attrib["min"]), int(col.attrib["max"])
+                    if not 1 <= lo <= hi <= self.LIMIT:
+                        raise ValueError("invalid column range")
+                    width = (0 if col.get("hidden") in {"1", "true"} else
+                             self.width_pixels(col.attrib["width"]) if "width" in col.attrib
+                             else default)
+                    widths[lo-1:hi] = [width] * (hi-lo+1)
+            prefix = [0]
+            for width in widths:
+                prefix.append(prefix[-1] + width * EMUS_PER_PIXEL)
+            self.prefix = prefix
+        except (KeyError, ValueError, InvalidOperation, OverflowError):
+            self.default_source = "invalid_column_metrics"
+
+    def marker_x(self, marker: ET.Element | None) -> int | None:
+        if marker is None or self.prefix is None:
+            return None
+        col, offset = first_child(marker, "col"), first_child(marker, "colOff")
+        if col is None or offset is None:
+            return None
+        try:
+            index, off = int(col.text), int(offset.text)
+        except (TypeError, ValueError):
+            return None
+        if not 0 <= index < self.LIMIT:
+            return None
+        return self.prefix[index] + off
+
+
+def horizontal_anchor_info(anchor: ET.Element, saved_x: int,
+                           columns: HorizontalColumnMetrics | None) -> dict:
+    info = {"source": "absoluteAnchor" if local_name(anchor.tag) == "absoluteAnchor" else "xfrm",
+            "saved_x_emu": saved_x, "resolved_x_emu": saved_x,
+            "edit_as": anchor.get("editAs")}
+    if columns is not None:
+        info["column_width_source"] = columns.default_source
+        info["reference_mdw_px"] = columns.MDW
+    if local_name(anchor.tag) == "absoluteAnchor" or columns is None:
+        return info
+    start = columns.marker_x(first_child(anchor, "from"))
+    end = columns.marker_x(first_child(anchor, "to"))
+    if start is not None:
+        info["anchor_x_emu"] = start
+    if end is not None:
+        info["anchor_end_x_emu"] = end
+    return info
+
+
 def anchor_y(anchor: ET.Element, width: int, height: int, angle: float,
              rows: VerticalRowMetrics | None) -> tuple[int, dict]:
     """Resolve vertical position independently of a:xfrm/a:off@y.
@@ -600,7 +684,8 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
                     theme_fonts: dict[str, dict[str, str]] | None = None,
                     drawing_rels: dict[str, tuple[str, str]] | None = None,
                     drawing_part: str = "", members: set[str] | None = None,
-                    sheet_name: str = "", row_metrics: VerticalRowMetrics | None = None) -> list[dict]:
+                    sheet_name: str = "", row_metrics: VerticalRowMetrics | None = None,
+                    column_metrics: HorizontalColumnMetrics | None = None) -> list[dict]:
     color_map = first_child(root, "clrMap")
     override = first_child(first_child(root, "clrMapOvr"), "overrideClrMapping")
     if color_map is not None or override is not None:
@@ -642,6 +727,7 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
                 "anchor": local_name(anchor.tag),
                 "geometry_source": geometry_source,
                 "vertical_geometry": vertical,
+                "horizontal_geometry": horizontal_anchor_info(anchor, x, column_metrics),
                 "bounds_emu": {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1},
                 "width_px": round((x2 - x1) / EMUS_PER_PIXEL, 3),
                 "height_px": round((y2 - y1) / EMUS_PER_PIXEL, 3),
@@ -768,6 +854,85 @@ def normalize_sheet_y(objects: list[dict]) -> None:
         )
 
 
+def crosscheck_sheet_x(objects: list[dict]) -> None:
+    """Use both horizontal endpoints to corroborate a translation, not size.
+
+    Picture, absolute anchors and non-target kinds retain saved X. For a
+    two-cell shape, both candidate unrotated left edges must agree within
+    one reference pixel. A rotated bounding box is accepted only when its
+    span uniquely fits the rotated width rather than the saved width.
+    Invalid/ambiguous evidence preserves saved X for that object.
+    """
+    images = [o for o in objects if o["type"] == "image"]
+    if len(images) != 1:
+        return
+    picture = images[0]
+    pic = picture["horizontal_geometry"]
+    start, end = pic.get("anchor_x_emu"), pic.get("anchor_end_x_emu")
+    origin, width = picture["bounds_emu"]["x"], picture["bounds_emu"]["width"]
+    ratio = (Fraction(width, end-start)
+             if picture["anchor"] == "twoCellAnchor" and start is not None
+             and end is not None and end > start
+             and picture["rotation_degrees"] % 360 == 0 else None)
+    for obj in objects:
+        b = obj["bounds_emu"]
+        h = obj["horizontal_geometry"]
+        raw = b["x"]
+        h.update(calibration_status="retained", correction_emu=0,
+                 tolerance_emu=EMUS_PER_PIXEL, relative_x_emu=raw-origin)
+        if ratio is not None:
+            h.update(calibration_factor=float(ratio), picture_anchor_start_emu=start,
+                     picture_anchor_end_emu=end, picture_width_emu=width)
+        if obj is picture:
+            h["reason"] = "picture reference origin retained"
+            continue
+        if obj.get("shape_kind") not in {"textbox", "rectangle", "ellipse"}:
+            h["reason"] = "non-target shape retained"
+            continue
+        if ratio is None:
+            h["reason"] = "picture lacks positive unrotated two-cell horizontal span"
+            continue
+        a, z = h.get("anchor_x_emu"), h.get("anchor_end_x_emu")
+        if obj["anchor"] != "twoCellAnchor" or a is None or z is None or z <= a:
+            h["reason"] = "independent left/right anchors unavailable"
+            continue
+        left, right = origin+(a-start)*ratio, origin+(z-start)*ratio
+        span = right-left
+        saved_width = b["width"]
+        angle = radians(obj["rotation_degrees"])
+        rotated_width = abs(saved_width*cos(angle))+abs(b["height"]*sin(angle))
+        normal_match = abs(span-saved_width) <= EMUS_PER_PIXEL
+        rotated_match = abs(float(span)-rotated_width) <= EMUS_PER_PIXEL
+        # For a rotated AABB, translate both edges to the unrotated box.
+        # If both interpretations fit but imply different positions, retain X.
+        if not normal_match and rotated_match:
+            outer = Fraction(round(rotated_width))
+            left += (outer-saved_width)/2
+            right -= (outer-saved_width)/2
+            h["anchor_interpretation"] = "rotated_outer_bounds"
+        elif normal_match and rotated_match and abs(rotated_width-saved_width) > 1:
+            h["reason"] = "ambiguous rotated versus unrotated anchor span"
+            continue
+        else:
+            h["anchor_interpretation"] = "unrotated_bounds"
+        right -= saved_width
+        candidate = (left+right)/2
+        h.update(left_candidate_x_emu=round(left), right_candidate_x_emu=round(right),
+                 center_candidate_x_emu=round(candidate), anchor_disagreement_emu=round(abs(left-right)),
+                 candidate_delta_emu=round(candidate)-raw)
+        if abs(left-right) > EMUS_PER_PIXEL:
+            h["reason"] = "left/right candidates disagree beyond one reference pixel"
+            continue
+        x = round(candidate)
+        b["x"] = x
+        y = b["y"]
+        obj["vertices_px"] = vertices_from_rect(
+            (x, y, x+b["width"], y+b["height"]), obj["rotation_degrees"])
+        h.update(source="crosschecked_column_anchor", calibration_status="applied",
+                 resolved_x_emu=x, correction_emu=x-raw, relative_x_emu=x-origin,
+                 reason="left/right candidates agree within tolerance")
+
+
 def parse_xlsx(path: Path | str) -> list[dict]:
     path = Path(path)
     try:
@@ -788,11 +953,12 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                 if rel is None or "worksheet" not in rel[0]:
                     raise SpatialXlsxError(f"Missing worksheet relationship for {name}")
                 sheet_part = resolve_part("xl/workbook.xml", rel[1])
-                # Only explicit row geometry is used for Y; never read
-                # column width or font metrics.
+                # Independent X auxiliary metrics never modify Y.
                 if sheet_part not in z.namelist():
                     raise SpatialXlsxError(f"Missing worksheet part for {name}: {sheet_part}")
-                row_metrics = VerticalRowMetrics(ET.fromstring(z.read(sheet_part)))
+                sheet_root = ET.fromstring(z.read(sheet_part))
+                row_metrics = VerticalRowMetrics(sheet_root)
+                column_metrics = HorizontalColumnMetrics(sheet_root)
                 objects = []
                 for rel_type, target in relationships(z, sheet_part).values():
                     if not rel_type.endswith("/drawing"):
@@ -804,9 +970,10 @@ def parse_xlsx(path: Path | str) -> list[dict]:
                         theme_fonts=fonts,
                         drawing_rels=relationships(z, drawing_part),
                         drawing_part=drawing_part, members=set(z.namelist()),
-                        sheet_name=name, row_metrics=row_metrics,
+                        sheet_name=name, row_metrics=row_metrics, column_metrics=column_metrics,
                     ))
                 normalize_sheet_y(objects)
+                crosscheck_sheet_x(objects)
                 sheets.append({"sheet": name, "objects": objects})
             return sheets
     except (BadZipFile, KeyError, ET.ParseError) as error:
@@ -874,6 +1041,24 @@ def format_spatial_report(workbook: Path | None, sheets: list[dict]) -> str:
                 f"宽={obj['width_px']:.3f}px 高={obj['height_px']:.3f}px"
             )
             lines.append(f"    几何来源: {obj.get('geometry_source', 'unknown')}")
+            horizontal = obj.get("horizontal_geometry", {})
+            if horizontal:
+                lines.append(
+                    f"    X来源: {horizontal['source']} "
+                    f"saved={horizontal['saved_x_emu']} "
+                    f"from={horizontal.get('anchor_x_emu')} to={horizontal.get('anchor_end_x_emu')} "
+                    f"resolved={horizontal['resolved_x_emu']} EMU "
+                    f"MDW={horizontal.get('reference_mdw_px')} "
+                    f"column_width={horizontal.get('column_width_source')}")
+                if "calibration_factor" in horizontal:
+                    lines.append(f"    X校核: k={horizontal['calibration_factor']:.9f} "
+                                 f"left={horizontal.get('left_candidate_x_emu')} "
+                                 f"right={horizontal.get('right_candidate_x_emu')} "
+                                 f"center={horizontal.get('center_candidate_x_emu')} "
+                                 f"disagreement={horizontal.get('anchor_disagreement_emu')} "
+                                 f"correction={horizontal.get('correction_emu', 0)} EMU")
+                if "reason" in horizontal:
+                    lines.append(f"    X决策: {horizontal['calibration_status']} ({horizontal['reason']})")
             vertical = obj.get("vertical_geometry", {})
             if vertical:
                 resolved = vertical["resolved_y_emu"]

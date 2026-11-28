@@ -240,7 +240,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
             [-width/2,height/2],[width/2,height/2],
             [width/2,-height/2],[-width/2,-height/2],
           ].map(([x,y])=>mesh.localToWorld(new THREE.Vector3(x,y,0))):[];
-          return {name:item.name,source:item.geometry_source,verticalSource:item.vertical_geometry?.source,calibration:item.vertical_geometry?.calibration_factor,width,height,depth,radius,center:center.toArray(),
+          return {name:item.name,source:item.geometry_source,verticalSource:item.vertical_geometry?.source,calibration:item.vertical_geometry?.calibration_factor,horizontalSource:item.horizontal_geometry?.source,xCalibration:item.horizontal_geometry?.calibration_factor,xCorrection:item.horizontal_geometry?.correction_emu,width,height,depth,radius,center:center.toArray(),
             fill:'#'+mesh.material.color.getHexString(),opacity:mesh.material.opacity,
             corners:corners.map(p=>p.toArray()),
             screen:corners.map(p=>project(p,viewport.x,viewport.y)),
@@ -274,6 +274,9 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         assert.equal(actual.source,'xfrm','real XLSX transform must be selected');
         assert.equal(actual.verticalSource,'normalized_row_anchor','Y must use picture dual-anchor normalization');
         near(actual.calibration,i?0.8:1.25,'independent sheet Y calibration');
+        near(actual.xCalibration,i?1.25:0.8,'independent sheet X calibration');
+        assert.equal(actual.horizontalSource,actual.name==='Rotated'?'xfrm':'crosschecked_column_anchor');
+        near(actual.xCorrection,actual.name==='Rotated'?0:-3*9525,'conditional X correction');
         const width=b.width/emu,height=b.height/emu, cx=(b.x/emu+width/2)*s,cy=-(b.y/emu+height/2)*s;
         near(actual.center[0],cx,actual.name+' center X');
         near(actual.center[1],cy,actual.name+' center Y');

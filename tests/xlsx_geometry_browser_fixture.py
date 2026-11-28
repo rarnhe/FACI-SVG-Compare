@@ -30,22 +30,24 @@ def transform(x,y,w,h,rotation=0):
     # Independent vertical anchors must work even without a parseable off@y.
     # Picture lacks Y, shapes have stale or malformed Y values.
     y_attr='' if x==0 and y==0 else (' y="invalid"' if x==30 else f' y="{(y+49+x%17)*EMU}"')
-    return (f'<a:xfrm rot="{rotation*60000}"><a:off x="{(x+80)*EMU}"{y_attr}/>'
+    saved_x=x+80+(3 if x not in (0,100) else 0)
+    return (f'<a:xfrm rot="{rotation*60000}"><a:off x="{saved_x*EMU}"{y_attr}/>'
             f'<a:ext cx="{w*EMU}" cy="{h*EMU}"/></a:xfrm>')
 
 
 def anchored(x,y,w,h,child,anchor_scale=1):
-    # Column markers intentionally disagree. Row anchors are exact,
-    # including the first hidden row; only Y is reconciled.
-    left=x+80
+    # Independent horizontal anchor scale, with one deliberately
+    # conflicting rotated shape whose saved X must remain unchanged.
+    x_scale=1.25 if anchor_scale==0.8 else 0.8
+    left=80+x*x_scale
     top=40+y*anchor_scale
-    right=left+w
+    right=left+(w+(7 if x==100 else 0))*x_scale
     # Picture endpoints independently establish scale; other spans conflict.
     bottom=top+(h if x==0 and y==0 else h+7)*anchor_scale
     def mark(tag,px,py):
-        col,dx=divmod(px,55)
+        col,dx=divmod(round(px*EMU),56*EMU)
         row,dy=divmod(round(py*EMU),20*EMU)
-        return marker(tag,col,row+1,dx*EMU,dy)
+        return marker(tag,col+1,row+1,dx,dy)
     return (f'<xdr:twoCellAnchor editAs="oneCell">{mark("from",left,top)}'
             f'{mark("to",right,bottom)}{child}<xdr:clientData/></xdr:twoCellAnchor>')
 
@@ -83,8 +85,8 @@ def main():
         base=Path(tmp)
         raw=fixture(base/"raw.xlsx",anchors(420,240),sheet_count=2,
                     second_anchors=anchors(280,200),media=True,
-                    worksheet_xml='<sheetFormatPr defaultColWidth="50" defaultRowHeight="15"/>'
-                                  '<cols><col min="1" max="5" hidden="1"/></cols>'
+                    worksheet_xml='<sheetFormatPr defaultColWidth="8" defaultRowHeight="15"/>'
+                                  '<cols><col min="1" max="1" hidden="1"/></cols>'
                                   '<sheetData><row r="1" hidden="1"/></sheetData>')
         book=base/"geometry.xlsx"
         # Replace fixture dummy raster with independently sized real PNGs.

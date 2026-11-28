@@ -39,8 +39,10 @@ assets/
 
 ## CAD 坐标与联动
 
-- **P0 背景图片双锚点归一化**：移除 `drawing_rect()` 与 `vertical_rect()`。X、宽、高由 `saved_horizontal_geometry()` 直接读取顶层 DrawingML 保存的 EMU；不读取列宽或估算字体。Y 由 `anchor_y()` 独立确定，不读取 `a:off@y`（即使缺失或非法也不影响）。两种 cell anchor 均使用 `from/row` + `from/rowOff`，累计显式行高（1pt=12700 EMU），计入隐藏行、自定义行高与 zeroHeight。末端跨度冲突不再回退到保存 Y；若跨度唯一明确匹配旋转外框，则取中心还原未旋转顶边。绝对锚点直接使用 `pos@y`。每 Sheet 在解析完成后使用唯一未旋转 twoCellAnchor 图片的起止行锚点 A0/A1 与保存高度 H，计算 k=H/(A1-A0)，将形状起始行 Y 映射为 pictureY+(Ai-A0)*k（整数 EMU，精确有理数计算）。仅校准位置，宽高、旋转、Three.js 比例尺不变；旋转外框识别使用校准后的跨度。
+- **P0 背景图片双锚点归一化**：移除 `drawing_rect()` 与 `vertical_rect()`。X、宽、高先由 `saved_horizontal_geometry()` 读取顶层 DrawingML 保存的 EMU；X 再通过水平锚点辅助校核（见下），不改变 Y 算法。Y 由 `anchor_y()` 独立确定，不读取 `a:off@y`（即使缺失或非法也不影响）。两种 cell anchor 均使用 `from/row` + `from/rowOff`，累计显式行高（1pt=12700 EMU），计入隐藏行、自定义行高与 zeroHeight。末端跨度冲突不再回退到保存 Y；若跨度唯一明确匹配旋转外框，则取中心还原未旋转顶边。绝对锚点直接使用 `pos@y`。每 Sheet 在解析完成后使用唯一未旋转 twoCellAnchor 图片的起止行锚点 A0/A1 与保存高度 H，计算 k=H/(A1-A0)，将形状起始行 Y 映射为 pictureY+(Ai-A0)*k（整数 EMU，精确有理数计算）。仅校准位置，宽高、旋转、Three.js 比例尺不变；旋转外框识别使用校准后的跨度。
 - X、宽、高必须为有效整数 EMU，宽高为正，合法零 X 不因 Y 或单元格标记被拒绝。缺失或无法解析必要的起始行标记/行高时停止并报告 Sheet 名称、对象名称及 drawing 路径，不猜测 Y。终端 `Y来源` 与 manifest `vertical_geometry` 记录锚点及解析 Y、来源和可用诊断。背景图及 cell-anchor 形状采用同一校准系数；absoluteAnchor 形状没有行锚点，使用保存的图片 Y 建立相对位置。若图片无有效独立双锚点、已旋转，或存在绝对锚点却缺少保存图片 Y，则整个 Sheet 保留原算法并输出未启用原因，避免混合校准。诊断包含保存 Y、行锚点 Y、校准后 Y、系数、图片上下锚点及 srcRect 四边裁剪原始值（仅诊断，不修改纹理）。组合图形仍只读取顶层外框。
+
+- **水平锚点辅助校核**：每 Sheet 以唯一未旋转双单元格锚点底图的左右锚点跨度与保存宽度求 kx。列宽使用 OOXML 参考像素公式（MDW=7 假设，缺省 baseColWidth=8 字符并加 5px），计入自定义列宽、隐藏列；非 Excel 实测字体度量。对文本框、矩形、椭圆计算归一化左起点 XL、右起点 XR（右边减保存宽度），只有两者差值不超过 1 参考像素（9525 EMU）才采用中心候选 (XL+XR)/2；否则保留保存 X。旋转外框仅在跨度唯一匹配时还原，歧义保留。图片、绝对锚点、单锚点及其他类型保持原 X；不可解析的列指标不影响 Y。终端与 manifest `horizontal_geometry` 记录原始 X、候选值、校核差值、决策与原因。校核不能证明 Excel 实际布局，仍需实测。
 
 `xlsx_spatial.py` 仍返回以 A1 左上角为原点的 `bounds_emu` 和 `vertices_px`；`cad_service.py` 再将**每个 Sheet 的底图左上角移到局部 (0,0)**，所有形状同步减去该 Sheet 图片的坐标偏移。这样 Fab 和 Subfab 通过各自的图纸原点使用统一的相机位置、朝向和缩放，不受原始单元格排版起点影响。
 
