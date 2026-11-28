@@ -170,10 +170,13 @@ test('Chromium renders every CAD outline and scales octave points around their c
     assert.ok(Math.abs(reduced.userCadZoom/prior.userCadZoom-1/1.1)<1e-9);
     await wheel('#subfab-stage canvas',{deltaY:-12000});
     assert.ok(Math.abs((await state()).userCadZoom-prior.userCadZoom)<1e-9);
-    await cdp.send('Emulation.clearDeviceMetricsOverride');
-    // Restore the original explicit viewport too: clearing CDP overrides
-    // can expose the browser window's default viewport instead of 1400x950.
-    await page.setViewportSize({width:1400,height:950});
+    // Restore the original metrics using the same CDP session. Clearing
+    // the override can expose the native headless window (e.g. 780x493),
+    // and Playwright may skip reapplying an unchanged cached viewport.
+    // Keep the explicit original metrics until the browser is closed.
+    await cdp.send('Emulation.setDeviceMetricsOverride',{
+      width:1400,height:950,deviceScaleFactor:1,mobile:false
+    });
     const restored=await settledState();
     // Compare snapshots only after the original layout is truly restored.
     // CSS zoom may leave fractional layout rounding across platforms; check
