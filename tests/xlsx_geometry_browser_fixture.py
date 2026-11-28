@@ -139,6 +139,14 @@ def main():
                             if info.filename=="xl/drawings/drawing1.xml":
                                 data=data.replace(b'name="Outside"',b'name="OutsideUpdated"')
                             z.writestr(info,data)
+                elif action=="notes":
+                    with ZipFile(book) as z:
+                        entries=[(i,z.read(i)) for i in z.infolist()]
+                    with ZipFile(book,"w") as z:
+                        for info,data in entries:
+                            if info.filename=="xl/drawings/drawing1.xml":
+                                data=data.replace("第一条说明".encode("utf-8"),"外部更新的说明".encode("utf-8"))
+                            z.writestr(info,data)
                 elif action=="corrupt":
                     self.application.saved_book=book.read_bytes()
                     book.write_bytes(b"invalid xlsx")
@@ -151,6 +159,7 @@ def main():
             (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)",app.EllipseSvgCatalogHandler,{"state":state}),
             (r"/viewer/assets/(.*)",app.NoCacheIndexHandler,{"path":str(assets)}),
             (r"/viewer/cad-layout\.json",app.CadManifestHandler,{"state":state}),
+            (r"/viewer/workbook-status\.json",app.WorkbookStatusHandler,{"state":state}),
             (r"/viewer/cad-image/([0-9]+)/([0-9]+)",app.CadImageHandler,{"state":state}),
             (r"/viewer/(.*)",app.NoCacheIndexHandler,{"path":str(ROOT)}),
         ])

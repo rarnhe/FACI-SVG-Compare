@@ -353,6 +353,8 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       assert.fail('Workbook raster and shapes did not initialize');
     };
     await waitForWorkbookScene();
+    let workbookNavigations=0;
+    page.on('framenavigated',frame=>{if(frame===page.mainFrame()) workbookNavigations++;});
     const measured=await page.evaluate(async()=>{
       const {layers}=await import('/viewer/cad_viewer.js');
       const THREE=await import('three');
@@ -661,30 +663,44 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     assert.equal(await page.locator('#octave-overlays img').count(),3);
     await page.keyboard.press('Escape');
     assert.equal(await stage.locator('.cad-axis-description').isVisible(),false);
-    // Simulate a saved external Excel edit and refresh the actual page;
-    // no server restart and no stale shape index may be used.
+    // Internal XLSX synchronization must not reload the browser or erase
+    // its selected overlays. Wait through an actual completed status poll.
+    await page.waitForResponse(res=>res.url().endsWith('/viewer/workbook-status.json')&&res.ok(),{timeout:10000});
+    assert.equal(workbookNavigations,0,'internal timestamp writes must not reload the page');
+    assert.equal(await page.locator('#psd-overlays img').count(),3);
     const editUrl=fixture.base+'/test-workbook-edit';
     const oldManifest=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
-    assert.equal((await page.request.post(editUrl+'?action=rename')).status(),200);
-    await page.reload();
-    await waitForWorkbookScene();
+    const autoReload=async action=>{
+      const navigated=page.waitForEvent('framenavigated',{predicate:frame=>frame===page.mainFrame(),timeout:15000});
+      assert.equal((await page.request.post(editUrl+'?action='+action)).status(),200);
+      await navigated;
+      await page.waitForLoadState('domcontentloaded');
+      await waitForWorkbookScene();
+    };
+    await autoReload('rename');
     const updated=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
     assert.equal(updated.generation,oldManifest.generation+1);
-    assert.ok(updated.layers[0].objects.some(o=>o.name==='OutsideUpdated'));
+    assert.equal(updated.content_revision,oldManifest.content_revision+1);
     assert.ok(await page.evaluate(async()=> (await import('/viewer/cad_viewer.js')).layers[0].objects.some(o=>o.name==='OutsideUpdated')));
     const stale=await page.request.post(route,{headers:{Origin:fixture.base,'X-CAD-Sync':'1','X-CAD-Generation':String(oldManifest.generation)}});
     assert.equal(stale.status(),409);
+    // A description-only Excel edit must also refresh, without changing
+    // the geometry generation.
+    await autoReload('notes');
+    const noted=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
+    assert.equal(noted.generation,updated.generation);
+    assert.equal(noted.content_revision,updated.content_revision+1);
+    assert.ok(await page.evaluate(async()=> (await import('/viewer/cad_viewer.js')).layers[0].objects.some(o=>o.time_descriptions?.['20260704101627']==='外部更新的说明')));
+    const beforeCorrupt=workbookNavigations;
     assert.equal((await page.request.post(editUrl+'?action=corrupt')).status(),200);
-    await page.reload();
-    await waitForWorkbookScene();
-    assert.ok(await page.locator('#workbook-reload-warning').isVisible());
+    await page.locator('#workbook-reload-warning').waitFor({state:'visible',timeout:10000});
+    assert.equal(workbookNavigations,beforeCorrupt);
     const fallback=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
-    assert.equal(fallback.generation,updated.generation);
-    assert.deepEqual(fallback.layers,updated.layers);
+    assert.equal(fallback.content_revision,noted.content_revision);
+    assert.deepEqual(fallback.layers,noted.layers);
     assert.equal((await page.request.post(editUrl+'?action=restore')).status(),200);
-    await page.reload();
-    await waitForWorkbookScene();
-    assert.equal(await page.locator('#workbook-reload-warning').isVisible(),false);
+    await page.locator('#workbook-reload-warning').waitFor({state:'hidden',timeout:10000});
+    assert.equal(workbookNavigations,beforeCorrupt,'restoring identical content must not reload');
     assert.deepEqual(errors,[]);
   }finally{
     await browser?.close();

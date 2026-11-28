@@ -32,3 +32,25 @@ class TestWorkbookReload(unittest.TestCase):
             path.write_bytes(b"invalid after")
             self.assertIn("上次有效数据",app.reload_workbook_if_changed(state,path.parent))
             self.assertEqual(state,before)
+
+    def test_revision_distinguishes_internal_and_external_notes(self):
+        with TemporaryDirectory() as directory:
+            path=Path(directory)/"fixture.xlsx"
+            path.write_bytes(b"initial")
+            obj={"alt_text":{"description":"internal"},"time_descriptions":{}}
+            sheets=[{"sheet":"Fab","objects":[obj]}]
+            state={"workbook":path,"signature":app.workbook_signature(path),
+                   "sheets":sheets,"manifest":{},"images":{},"generation":0}
+            def snapshot(*args):
+                return {"workbook":path,"signature":app.workbook_signature(path),
+                        "sheets":args[1],"manifest":{},"images":{}}
+            with patch.object(app,"validate_two_layer_workbook"), patch.object(app,"validate_sheet_collisions"), patch.object(app,"build_workbook_snapshot",side_effect=snapshot), patch.object(app,"parse_xlsx") as parse:
+                path.write_bytes(b"internal write")
+                parse.return_value=sheets
+                self.assertIsNone(app.reload_workbook_if_changed(state,path.parent))
+                self.assertEqual(state["content_revision"],0)
+                path.write_bytes(b"external edit")
+                parse.return_value=[{"sheet":"Fab","objects":[{"alt_text":{"description":"external"},"time_descriptions":{}}]}]
+                self.assertIsNone(app.reload_workbook_if_changed(state,path.parent))
+                self.assertEqual(state["content_revision"],1)
+                self.assertEqual(state["generation"],0)

@@ -1270,17 +1270,50 @@ function watchDpr() {
 }
 watchDpr();
 
+const WORKBOOK_POLL_MS=1500;
+function showWorkbookWarning(message) {
+  const warning=document.getElementById('workbook-reload-warning');
+  if(warning) {
+    warning.textContent=message||'';
+    warning.hidden=!message;
+  }
+}
+function watchWorkbook(initialRevision) {
+  // One outstanding request at a time; no polling before scene initialization.
+  // The status endpoint compares signatures and reloads a validated snapshot
+  // only when the file changes. Internal writeback does not increment revision.
+  let stopped=false,timer=null;
+  const stop=()=>{stopped=true;clearTimeout(timer);};
+  window.addEventListener('pagehide',stop,{once:true});
+  const poll=async()=>{
+    if(stopped) return;
+    try {
+      const response=await fetch('./workbook-status.json',{cache:'no-store'});
+      if(!response.ok) throw new Error('Workbook status HTTP '+response.status);
+      const status=await response.json();
+      if(stopped) return;
+      showWorkbookWarning(status.reload_warning);
+      if(!status.reload_warning && status.content_revision!==initialRevision) {
+        stop();
+        window.location.reload();
+        return;
+      }
+    } catch(error) {
+      // Temporary connectivity failure does not destroy the current scene.
+      if(!stopped) showWorkbookWarning('暂时无法检查 XLSX 更新，将自动重试');
+    } finally {
+      if(!stopped) timer=setTimeout(poll,WORKBOOK_POLL_MS);
+    }
+  };
+  timer=setTimeout(poll,WORKBOOK_POLL_MS);
+}
 async function initialize() {
   try {
     const response=await fetch('./cad-layout.json',{cache:'no-store'});
     if(!response.ok) throw new Error('CAD layout HTTP '+response.status);
     const data=await response.json();
     workbookGeneration=data.generation??0;
-    const warning=document.getElementById('workbook-reload-warning');
-    if(warning) {
-      warning.textContent=data.reload_warning||'';
-      warning.hidden=!data.reload_warning;
-    }
+    showWorkbookWarning(data.reload_warning);
     workbookName=data.workbook || '';
     document.title=workbookName.replace(/\.xlsx$/i,'') || 'Fab / Subfab CAD';
 
@@ -1317,6 +1350,8 @@ async function initialize() {
     initialFit();
     referenceImage('psd',data.reference_svgs?.psd);
     referenceImage('octave',data.reference_svgs?.octave);
+    // Synthetic/static manifests without a status endpoint keep working.
+    if(Number.isInteger(data.content_revision)) watchWorkbook(data.content_revision);
   } catch(error) {
     console.error('CAD layout failed:',error);
   }

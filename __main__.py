@@ -121,8 +121,16 @@ def reload_workbook_if_changed(state, asset_dir):
                  if k not in {"alt_text", "time_descriptions"}} for o in s["objects"]])
                 for s in sheets]
     changed = geometry(state["sheets"]) != geometry(snapshot["sheets"])
+    # Content revision includes externally changed notes and raster bytes,
+    # while generation protects the geometry/object indices. Internal note
+    # writes already update the cached manifest; comparing the next snapshot
+    # against that cache prevents an automatic reload on our own writes.
+    content_changed = (snapshot["sheets"] != state["sheets"] or
+                       snapshot["manifest"] != state["manifest"] or
+                       snapshot["images"] != state.get("images", {}))
     state.update(snapshot)
     state["generation"] = state.get("generation", 0) + int(changed)
+    state["content_revision"] = state.get("content_revision", 0) + int(content_changed)
     return None
 
 
@@ -137,9 +145,23 @@ class CadManifestHandler(RequestHandler):
         warning = reload_workbook_if_changed(self.state, STATIC_DIR / "assets")
         payload = dict(self.state["manifest"])
         payload["generation"] = self.state.get("generation", 0)
+        payload["content_revision"] = self.state.get("content_revision", 0)
         if warning:
             payload["reload_warning"] = warning
         self.write(payload)
+
+
+class WorkbookStatusHandler(RequestHandler):
+    """Small read-only polling response; no manifest transfer on cache hit."""
+
+    def initialize(self, state):
+        self.state = state
+
+    def get(self):
+        self.set_header("Cache-Control", "no-store")
+        warning = reload_workbook_if_changed(self.state, STATIC_DIR / "assets")
+        self.write({"content_revision": self.state.get("content_revision", 0),
+                    "reload_warning": warning})
 
 
 class EllipseSvgCatalogHandler(RequestHandler):
@@ -170,6 +192,9 @@ class EllipseSvgCatalogHandler(RequestHandler):
             return
         try:
             i, j = int(layer), int(object_index)
+            reload_warning = reload_workbook_if_changed(self.state, STATIC_DIR / "assets")
+            if reload_warning:
+                raise ValueError(reload_warning)
             requested_generation = self.request.headers.get("X-CAD-Generation")
             if requested_generation is not None and requested_generation != str(self.state.get("generation", 0)):
                 raise ValueError("工作簿数据已更新，请刷新网页后重试")
@@ -429,6 +454,7 @@ def main():
                 (r"/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/sw\.js", NoServiceWorkerHandler),
                 (r"/viewer/cad-layout\.json", CadManifestHandler, {"state": cad_state}),
+                (r"/viewer/workbook-status\.json", WorkbookStatusHandler, {"state": cad_state}),
                 (r"/viewer/cad-image/([0-9]+)/([0-9]+)", CadImageHandler, {"state": cad_state}),
                 (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)", EllipseSvgCatalogHandler,
                  {"state": cad_state}),
