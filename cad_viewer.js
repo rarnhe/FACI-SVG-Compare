@@ -582,6 +582,7 @@ function showAxisSubmenu(layer,button,date,catalog) {
   positionAxisPanels(layer);
 }
 
+let workbookGeneration=0;
 async function openContextMenu(layer,clientX,clientY,selectedObject) {
   closeContextMenus();
   layer.menu.selectedObject=selectedObject;
@@ -601,7 +602,7 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
   try {
     const index=layer.objects.indexOf(selectedObject);
     const response=await fetch('./cad-svg-catalog/'+layer.layerIndex+'/'+index,
-                               {method:'POST',headers:{'X-CAD-Sync':'1'},cache:'no-store'});
+                               {method:'POST',headers:{'X-CAD-Sync':'1','X-CAD-Generation':String(workbookGeneration)},cache:'no-store'});
     if(!response.ok) {
       const detail=await response.json().catch(()=>({}));
       throw new Error(detail.error||'SVG catalog HTTP '+response.status);
@@ -1274,6 +1275,12 @@ async function initialize() {
     const response=await fetch('./cad-layout.json',{cache:'no-store'});
     if(!response.ok) throw new Error('CAD layout HTTP '+response.status);
     const data=await response.json();
+    workbookGeneration=data.generation??0;
+    const warning=document.getElementById('workbook-reload-warning');
+    if(warning) {
+      warning.textContent=data.reload_warning||'';
+      warning.hidden=!data.reload_warning;
+    }
     workbookName=data.workbook || '';
     document.title=workbookName.replace(/\.xlsx$/i,'') || 'Fab / Subfab CAD';
 

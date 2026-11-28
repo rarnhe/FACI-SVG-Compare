@@ -11,6 +11,9 @@
 html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
 #layout{display:grid;grid-template-columns:minmax(0,58fr) 8px minmax(0,42fr);width:100%;height:100%}
 #cad-pane{position:relative;min-width:0;min-height:0;overflow:hidden;background:#fff}
+#workbook-reload-warning{position:absolute;top:4px;left:4px;right:4px;z-index:20;
+  padding:6px 8px;background:#fff4d6;color:#654500;font-size:12px;pointer-events:none}
+#workbook-reload-warning[hidden]{display:none}
 #cad-layers{width:100%;height:100%;display:grid;grid-template-rows:minmax(0,1fr) 8px minmax(0,1fr)}
 #cad-fixed-divider{width:100%;height:8px;background:#c4d1da;pointer-events:none;user-select:none}
 .cad-layer{position:relative;min-width:0;min-height:0;overflow:hidden;background:#fff}
@@ -112,6 +115,7 @@ body.dragging-divider.vertical{cursor:row-resize}
 <body>
 <div id="layout">
   <section id="cad-pane" aria-label="Fab 与 Subfab 联动 CAD">
+    <div id="workbook-reload-warning" role="status" hidden></div>
     <button type="button" id="reset-view" title="恢复平面俯视（保持当前缩放与平移）" aria-label="恢复平面俯视">↺</button>
     <div id="cad-layers">
       <div class="cad-layer" id="fab-stage" aria-label="Fab CAD">

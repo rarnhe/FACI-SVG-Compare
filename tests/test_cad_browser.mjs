@@ -339,10 +339,20 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
       await page.route(url,route=>route.fulfill({status:200,contentType:'image/png',body:bytes}));
     }
     await page.goto(fixture.base+'/viewer/index.html');
-    await page.waitForFunction(async()=>{
-      const {layers}=await import('/viewer/cad_viewer.js');
-      return layers.length===2 && layers.every(l=>l.clickable.length===6 && l.hoverable.length===7);
-    },null,{timeout:25000});
+    const waitForWorkbookScene=async()=>{
+      const deadline=Date.now()+25000;
+      do {
+        const ready=await page.evaluate(async()=>{
+          const {layers}=await import('/viewer/cad_viewer.js');
+          return layers.length===2 && layers.every(l=>l.clickable.length===6 && l.hoverable.length===7 &&
+            l.scene.children.some(g=>g.renderOrder===0 && g.children.some(m=>m.material?.map?.image?.width)));
+        });
+        if(ready) return;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      } while(Date.now()<deadline);
+      assert.fail('Workbook raster and shapes did not initialize');
+    };
+    await waitForWorkbookScene();
     const measured=await page.evaluate(async()=>{
       const {layers}=await import('/viewer/cad_viewer.js');
       const THREE=await import('three');
@@ -651,6 +661,30 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     assert.equal(await page.locator('#octave-overlays img').count(),3);
     await page.keyboard.press('Escape');
     assert.equal(await stage.locator('.cad-axis-description').isVisible(),false);
+    // Simulate a saved external Excel edit and refresh the actual page;
+    // no server restart and no stale shape index may be used.
+    const editUrl=fixture.base+'/test-workbook-edit';
+    const oldManifest=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
+    assert.equal((await page.request.post(editUrl+'?action=rename')).status(),200);
+    await page.reload();
+    await waitForWorkbookScene();
+    const updated=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
+    assert.equal(updated.generation,oldManifest.generation+1);
+    assert.ok(updated.layers[0].objects.some(o=>o.name==='OutsideUpdated'));
+    assert.ok(await page.evaluate(async()=> (await import('/viewer/cad_viewer.js')).layers[0].objects.some(o=>o.name==='OutsideUpdated')));
+    const stale=await page.request.post(route,{headers:{Origin:fixture.base,'X-CAD-Sync':'1','X-CAD-Generation':String(oldManifest.generation)}});
+    assert.equal(stale.status(),409);
+    assert.equal((await page.request.post(editUrl+'?action=corrupt')).status(),200);
+    await page.reload();
+    await waitForWorkbookScene();
+    assert.ok(await page.locator('#workbook-reload-warning').isVisible());
+    const fallback=await (await page.request.get(fixture.base+'/viewer/cad-layout.json')).json();
+    assert.equal(fallback.generation,updated.generation);
+    assert.deepEqual(fallback.layers,updated.layers);
+    assert.equal((await page.request.post(editUrl+'?action=restore')).status(),200);
+    await page.reload();
+    await waitForWorkbookScene();
+    assert.equal(await page.locator('#workbook-reload-warning').isVisible(),false);
     assert.deepEqual(errors,[]);
   }finally{
     await browser?.close();

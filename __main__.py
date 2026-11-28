@@ -30,16 +30,18 @@ if __package__:
     from .xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
         parse_xlsx, workbook_signature, write_ellipse_dates, ellipse_time_descriptions,
-        MISSING_TEST_DESCRIPTION,
+        MISSING_TEST_DESCRIPTION, validate_two_layer_workbook,
     )
+    from .cad_validation import validate_sheet_collisions
     from .cad_service import build_cad_manifest, extract_embedded_image
     from .cad_svg_catalog import build_ellipse_svg_catalog
 else:
     from xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
         parse_xlsx, workbook_signature, write_ellipse_dates, ellipse_time_descriptions,
-        MISSING_TEST_DESCRIPTION,
+        MISSING_TEST_DESCRIPTION, validate_two_layer_workbook,
     )
+    from cad_validation import validate_sheet_collisions
     from cad_service import build_cad_manifest, extract_embedded_image
     from cad_svg_catalog import build_ellipse_svg_catalog
 
@@ -80,6 +82,50 @@ class NoCacheIndexHandler(StaticFileHandler):
         self.set_header("X-App-Revision", BUILD_REVISION)
 
 
+def build_workbook_snapshot(workbook, sheets, asset_dir, signature):
+    """Create a coherent cache generation, including image bytes for fallback."""
+    manifest = build_cad_manifest(workbook, sheets, asset_dir)
+    images = {}
+    for i, sheet in enumerate(sheets):
+        for j, obj in enumerate(sheet["objects"]):
+            if obj.get("type") == "image" and obj.get("image_part"):
+                images[i, j] = extract_embedded_image(workbook, sheets, i, j)
+    if workbook is not None and workbook_signature(workbook) != signature:
+        raise OSError("Workbook changed while building snapshot")
+    return {"workbook": workbook, "sheets": sheets, "manifest": manifest,
+            "signature": signature, "images": images}
+
+
+def reload_workbook_if_changed(state, asset_dir):
+    """Refresh only on a changed signature; publish only a complete snapshot.
+
+    Retain the last successful generation on parse/validation/read failure.
+    The existing server and its port stay alive.
+    """
+    path = state["workbook"]
+    if path is None:
+        return None
+    try:
+        signature = workbook_signature(path)
+        if signature == state.get("signature"):
+            return None
+        sheets = parse_xlsx(path)
+        validate_two_layer_workbook(sheets)
+        for sheet in sheets:
+            validate_sheet_collisions(sheet, error_type=SpatialXlsxError)
+        snapshot = build_workbook_snapshot(path, sheets, asset_dir, signature)
+    except (OSError, ValueError, SpatialXlsxError, KeyError) as error:
+        return f"工作簿暂无法重新加载，已保留上次有效数据：{error}"
+    def geometry(sheets):
+        return [(s["sheet"], [{k: v for k, v in o.items()
+                 if k not in {"alt_text", "time_descriptions"}} for o in s["objects"]])
+                for s in sheets]
+    changed = geometry(state["sheets"]) != geometry(snapshot["sheets"])
+    state.update(snapshot)
+    state["generation"] = state.get("generation", 0) + int(changed)
+    return None
+
+
 class CadManifestHandler(RequestHandler):
     """Serve a read-only JSON manifest for two linked XLSX sheets."""
 
@@ -88,7 +134,12 @@ class CadManifestHandler(RequestHandler):
 
     def get(self):
         self.set_header("Cache-Control", "no-store")
-        self.write(self.state["manifest"])
+        warning = reload_workbook_if_changed(self.state, STATIC_DIR / "assets")
+        payload = dict(self.state["manifest"])
+        payload["generation"] = self.state.get("generation", 0)
+        if warning:
+            payload["reload_warning"] = warning
+        self.write(payload)
 
 
 class EllipseSvgCatalogHandler(RequestHandler):
@@ -119,6 +170,9 @@ class EllipseSvgCatalogHandler(RequestHandler):
             return
         try:
             i, j = int(layer), int(object_index)
+            requested_generation = self.request.headers.get("X-CAD-Generation")
+            if requested_generation is not None and requested_generation != str(self.state.get("generation", 0)):
+                raise ValueError("工作簿数据已更新，请刷新网页后重试")
             cached = self.state["sheets"]
             payload = build_ellipse_svg_catalog(STATIC_DIR / "assets", cached, i, j)
             path = self.state["workbook"]
@@ -136,7 +190,7 @@ class EllipseSvgCatalogHandler(RequestHandler):
                      for o in b["objects"]]
                     for a, b in zip(fresh, cached)
                 ):
-                    raise ValueError("Workbook geometry changed; restart viewer")
+                    raise ValueError("工作簿几何数据已改变，请刷新网页后重试")
                 current = fresh[i]["objects"][j]
                 # A locked workbook must not disable browsing or pretend a
                 # write succeeded. Re-read and retry on every explicit click.
@@ -154,6 +208,10 @@ class EllipseSvgCatalogHandler(RequestHandler):
                     public = self.state["manifest"]["layers"][i]["objects"][j]
                     public["alt_text"] = after
                     public["time_descriptions"] = notes
+                    # Do not mark a concurrent external edit as cached. Only
+                    # our own successful atomic write changes the signature.
+                    # Leave signature unchanged: the next refresh verifies
+                    # the whole workbook and image snapshot, if needed.
             payload.setdefault("sync_status", "not_applicable")
             payload["time_descriptions"] = {
                 date: notes.get(date) or MISSING_TEST_DESCRIPTION for date in payload["dates"]
@@ -174,10 +232,13 @@ class CadImageHandler(RequestHandler):
 
     def get(self, layer, image_index):
         try:
-            data, content_type = extract_embedded_image(
-                self.state["workbook"], self.state["sheets"],
-                int(layer), int(image_index),
-            )
+            key = (int(layer), int(image_index))
+            if "images" in self.state:
+                data, content_type = self.state["images"][key]
+            else:
+                data, content_type = extract_embedded_image(
+                    self.state["workbook"], self.state["sheets"], *key,
+                )
         except (ValueError, KeyError, FileNotFoundError, OSError):
             self.send_error(404)
             return
@@ -340,11 +401,18 @@ def main():
     except (SpatialXlsxError, OSError) as error:
         raise SystemExit(f"[XLSX ERROR] {error}") from None
 
-    cad_state = {
-        "workbook": workbook,
-        "sheets": spatial_sheets,
-        "manifest": build_cad_manifest(workbook, spatial_sheets, STATIC_DIR / "assets"),
-    }
+    try:
+        signature = workbook_signature(workbook) if workbook else None
+        # Parse again against the recorded signature to guard startup races.
+        if workbook:
+            spatial_sheets = parse_xlsx(workbook)
+            validate_two_layer_workbook(spatial_sheets)
+            for sheet in spatial_sheets:
+                validate_sheet_collisions(sheet, error_type=SpatialXlsxError)
+        cad_state = build_workbook_snapshot(workbook, spatial_sheets, STATIC_DIR / "assets", signature)
+        cad_state["generation"] = 0
+    except (SpatialXlsxError, OSError, ValueError, KeyError) as error:
+        raise SystemExit(f"[XLSX ERROR] {error}") from None
 
     # A workbook-specific tab caption, set by the HTML document after it loads
     # the manifest. No other data source is used as an arbitrary HTML title.

@@ -317,7 +317,7 @@ class TestStaticFrontend(unittest.TestCase):
         self.assertNotIn("svg_styling.py",server)
         self.assertNotIn("cad-svg-style",server+viewer)
         self.assertNotIn("persistSvgStyle",viewer)
-        self.assertIn("method:'POST',headers:{'X-CAD-Sync':'1'}",viewer)
+        self.assertIn("method:'POST',headers:{'X-CAD-Sync':'1','X-CAD-Generation':",viewer)
         self.assertIn("write_ellipse_dates",server)
         self.assertFalse((STATIC_DIR/"svg_styling.py").exists())
         self.assertIn("EllipseSvgCatalogHandler",server)

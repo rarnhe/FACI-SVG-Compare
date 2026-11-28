@@ -115,8 +115,8 @@ def main():
                      "R_Cube10_20260704101627_+X_wrong.csv","R_Cube_20260704101627_+Y_wrong.csv"):
             (folder/name).write_text("frequency,value\n1,2\n",encoding="utf-8")
         app.STATIC_DIR=base
-        state={"workbook":book,"sheets":sheets,
-               "manifest":service.build_cad_manifest(book,sheets,assets)}
+        state=app.build_workbook_snapshot(book,sheets,assets,spatial.workbook_signature(book))
+        state["generation"]=0
         # Test-only endpoint to simulate Excel's owner file without opening
         # a GUI application. Not registered by the production server.
         from tornado.web import RequestHandler
@@ -128,7 +128,25 @@ def main():
                 else:
                     lock.unlink(missing_ok=True)
                 self.write({"locked":lock.exists()})
+        class TestWorkbookEdit(RequestHandler):
+            def post(self):
+                action=self.get_argument("action")
+                if action=="rename":
+                    with ZipFile(book) as z:
+                        entries=[(i,z.read(i)) for i in z.infolist()]
+                    with ZipFile(book,"w") as z:
+                        for info,data in entries:
+                            if info.filename=="xl/drawings/drawing1.xml":
+                                data=data.replace(b'name="Outside"',b'name="OutsideUpdated"')
+                            z.writestr(info,data)
+                elif action=="corrupt":
+                    self.application.saved_book=book.read_bytes()
+                    book.write_bytes(b"invalid xlsx")
+                elif action=="restore":
+                    book.write_bytes(self.application.saved_book)
+                self.write({"action":action})
         application=Application([
+            (r"/test-workbook-edit",TestWorkbookEdit),
             (r"/test-workbook-lock",TestWorkbookLock),
             (r"/viewer/cad-svg-catalog/([0-9]+)/([0-9]+)",app.EllipseSvgCatalogHandler,{"state":state}),
             (r"/viewer/assets/(.*)",app.NoCacheIndexHandler,{"path":str(assets)}),
