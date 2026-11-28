@@ -74,7 +74,7 @@ def anchors(w,h):
         shape("Cube","rectangle",30,110,70,50,6,alt="z=0.5x",anchor_scale=a),
         shape("Inside","ellipse",55,125,12,12,7,alt="20260704101627-第一条说明_x000D_20260706101627-第二-条说明，设备运行期间持续观察振动变化并记录各方向测量数据，确认设备状态及现场测试条件，随后复核测点编号、设备负载、运行工况、环境温度和测量仪器设置，并记录复测时间与现场人员的观察结果。",anchor_scale=a),
         shape("Partial","ellipse",94,125,12,12,8,alt="20260706101627-局部测点",anchor_scale=a),
-        shape("Outside","ellipse",220,125,12,12,9,anchor_scale=a),
+        shape("Outside","ellipse",220,125,12,12,9,alt="保留普通文字_x000D_20250101000000-过期",anchor_scale=a),
     ])
 
 

@@ -476,7 +476,7 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
         document.querySelectorAll('#octave-overlays img').length===count &&
         document.getElementById('reference-log').textContent.includes(label),{label,count});
       await page.waitForFunction(el=>el.getAttribute('aria-checked')==='true',await axisItem.elementHandle());
-      const expectedNote=name==='Inside'?'第一条说明':name==='Partial'?'局部测点':'';
+      const expectedNote=name==='Inside'?'第一条说明':name==='Partial'?'局部测点':'请注明详细测试场景';
       const panels=await stage.evaluate(el=>{
         const p=el.querySelector('.cad-submenu'),d=el.querySelector('.cad-axis-description');
         const a=p.getBoundingClientRect(),b=d.getBoundingClientRect(),r=el.getBoundingClientRect();

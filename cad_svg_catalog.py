@@ -145,6 +145,7 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
         "search_identifier": search_identifier,
         "target_kind": "rectangle" if rectangle is not None else "ellipse",
         "dates": [],
+        "search_complete": False,
         "pairs": {},
         "csv_files": {},
     }
@@ -161,6 +162,7 @@ def build_ellipse_svg_catalog(asset_dir: Path, sheets: list[dict],
          and p.suffix.lower() == ".csv" and name_matches(p.name, search_identifier)),
         key=lambda p: (p.name.casefold(), p.name),
     )
+    result["search_complete"] = True
     # A timestamp is valid only when the same SVG filename matches
     # the rectangle (inside/partial case) or the textbox (outside case).
     matching_entries = [

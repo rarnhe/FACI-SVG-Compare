@@ -29,12 +29,16 @@ from tornado.web import RequestHandler, StaticFileHandler
 if __package__:
     from .xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
+        parse_xlsx, workbook_signature, write_ellipse_dates, ellipse_time_descriptions,
+        MISSING_TEST_DESCRIPTION,
     )
     from .cad_service import build_cad_manifest, extract_embedded_image
     from .cad_svg_catalog import build_ellipse_svg_catalog
 else:
     from xlsx_spatial import (
         SpatialXlsxError, load_assets_spatial_report, format_spatial_report,
+        parse_xlsx, workbook_signature, write_ellipse_dates, ellipse_time_descriptions,
+        MISSING_TEST_DESCRIPTION,
     )
     from cad_service import build_cad_manifest, extract_embedded_image
     from cad_svg_catalog import build_ellipse_svg_catalog
@@ -101,6 +105,51 @@ class EllipseSvgCatalogHandler(RequestHandler):
             )
         except (ValueError, OSError):
             self.send_error(404)
+            return
+        self.set_header("Cache-Control", "no-store")
+        self.write(payload)
+
+    def post(self, layer, object_index):
+        # An explicit same-origin POST from the CAD menu is required. GET
+        # stays read-only; arbitrary browser sites cannot trigger writeback.
+        if (self.request.headers.get("Origin") != f"{self.request.protocol}://{self.request.host}"
+                or self.request.headers.get("X-CAD-Sync") != "1"):
+            self.send_error(403)
+            return
+        try:
+            i, j = int(layer), int(object_index)
+            cached = self.state["sheets"]
+            payload = build_ellipse_svg_catalog(STATIC_DIR / "assets", cached, i, j)
+            path = self.state["workbook"]
+            ellipse = cached[i]["objects"][j]
+            notes = ellipse.get("time_descriptions", {})
+            if payload["search_complete"] and path is not None:
+                signature = workbook_signature(path)
+                fresh = parse_xlsx(path)
+                # Do not trust old indices after external geometry edits.
+                if len(fresh) != len(cached) or any(
+                    a["sheet"] != b["sheet"] or
+                    [{k: v for k, v in o.items() if k not in {"alt_text", "time_descriptions"}}
+                     for o in a["objects"]] !=
+                    [{k: v for k, v in o.items() if k not in {"alt_text", "time_descriptions"}}
+                     for o in b["objects"]]
+                    for a, b in zip(fresh, cached)
+                ):
+                    raise ValueError("Workbook geometry changed; restart viewer")
+                current = fresh[i]["objects"][j]
+                after = write_ellipse_dates(path, current, payload["dates"], signature)
+                notes = ellipse_time_descriptions(after)
+                ellipse["alt_text"] = after
+                ellipse["time_descriptions"] = notes
+                public = self.state["manifest"]["layers"][i]["objects"][j]
+                public["alt_text"] = after
+                public["time_descriptions"] = notes
+            payload["time_descriptions"] = {
+                date: notes.get(date) or MISSING_TEST_DESCRIPTION for date in payload["dates"]
+            }
+        except (ValueError, OSError, SpatialXlsxError, KeyError, IndexError) as error:
+            self.set_status(409)
+            self.write({"error": str(error)})
             return
         self.set_header("Cache-Control", "no-store")
         self.write(payload)

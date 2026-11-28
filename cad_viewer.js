@@ -574,7 +574,7 @@ function showAxisSubmenu(layer,button,date,catalog) {
     pane.append(item);
   }
   pane.hidden=false;
-  const note=layer.menu.selectedObject?.time_descriptions?.[date]||'';
+  const note=catalog.time_descriptions?.[date]||'请注明详细测试场景';
   layer.menu.description.textContent=note;
   layer.menu.description.hidden=!note;
   refreshAxisChecks();
@@ -599,8 +599,11 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
   try {
     const index=layer.objects.indexOf(selectedObject);
     const response=await fetch('./cad-svg-catalog/'+layer.layerIndex+'/'+index,
-                               {cache:'no-store'});
-    if(!response.ok) throw new Error('SVG catalog HTTP '+response.status);
+                               {method:'POST',headers:{'X-CAD-Sync':'1'},cache:'no-store'});
+    if(!response.ok) {
+      const detail=await response.json().catch(()=>({}));
+      throw new Error(detail.error||'SVG catalog HTTP '+response.status);
+    }
     const catalog=await response.json();
     if(layer.menu.requestId!==id) return;
     menu.replaceChildren();
@@ -637,7 +640,7 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
   } catch(error) {
     if(layer.menu.requestId!==id) return;
     console.error('SVG catalog lookup failed:',error);
-    placeholder.textContent='SVG 日期查询失败';
+    placeholder.textContent='SVG 日期同步失败：'+error.message;
   }
 }
 

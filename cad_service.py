@@ -1,6 +1,6 @@
-"""Read-only data for the linked Fab/Subfab CAD viewer.
+"""Geometry and embedded media for the linked Fab/Subfab CAD viewer.
 
-No XLSX is ever modified. Media is extracted on request from the workbook,
+Media is extracted on request from the workbook,
 rather than embedding large base64 images into a Bokeh/JSON document.
 """
 from __future__ import annotations
@@ -54,7 +54,7 @@ def build_cad_manifest(workbook: Path | None, sheets: list[dict],
             layer["image_origin_emu"] = {"x": ox, "y": oy}
             for object_index, item in enumerate(source["objects"]):
                 obj = {key: deepcopy(value) for key, value in item.items()
-                       if key != "image_part"}
+                       if key not in {"image_part", "_drawing_source"}}
                 # Use EACH sheet's picture top-left as (0, 0) for the shared
                 # Fab/Subfab camera. Keep original coordinates in parser output.
                 obj["bounds_emu"]["x"] -= ox

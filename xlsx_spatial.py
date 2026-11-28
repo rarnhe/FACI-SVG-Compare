@@ -14,6 +14,11 @@ from fractions import Fraction
 from math import cos, radians, sin
 from pathlib import Path
 import posixpath
+import os
+import stat
+import tempfile
+from xml.parsers import expat
+from xml.sax.saxutils import escape
 import re
 import xml.etree.ElementTree as ET
 from zipfile import BadZipFile, ZipFile
@@ -484,6 +489,144 @@ def ellipse_time_descriptions(alt_text: dict[str, str]) -> dict[str, str]:
     return result
 
 
+DATE_LINE = re.compile(r"(?<![0-9])[0-9]{14}(?![0-9])")
+MISSING_TEST_DESCRIPTION = "请注明详细测试场景"
+
+
+def reconcile_ellipse_dates(alt_text: dict[str, str], dates: list[str]) -> dict[str, str]:
+    """Keep matching dated lines, remove obsolete dated lines, append missing
+    dates to description. Non-date lines and existing annotations survive."""
+    if any(not re.fullmatch(r"[0-9]{14}", date) for date in dates):
+        raise ValueError("Invalid catalog timestamp")
+    active = set(dates)
+    present = set()
+    result = {}
+    for field in ("description", "title"):
+        original = alt_text.get(field, "")
+        kept = []
+        for line in original.split("\n"):
+            match = DATE_LINE.search(line)
+            if match is not None:
+                if match.group() not in active:
+                    continue
+                present.add(match.group())
+            kept.append(line)
+        result[field] = "\n".join(kept)
+    missing = sorted(active - present)
+    if missing:
+        old = result["description"]
+        result["description"] = (old + "\n" if old else "") + "\n".join(date + "-" for date in missing)
+    return result
+
+
+def workbook_signature(path: Path) -> tuple:
+    info = path.stat()
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def check_workbook_writable(path: Path) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise OSError("Workbook is not a regular local file")
+    if (path.parent / ("~$" + path.name)).exists():
+        raise OSError("Close the workbook in Excel before synchronizing")
+
+
+def patch_ellipse_alt_xml(data: bytes, source: dict, name: str, before: dict, after: dict) -> bytes:
+    """Patch only the selected cNvPr start tag, leaving every other XML byte
+    and namespace prefix untouched. Fail closed on ambiguous identity."""
+    root = ET.fromstring(data)
+    matches = []
+    for anchor in root:
+        for node in anchor:
+            if local_name(node.tag) != "sp" or shape_kind(node) != "ellipse":
+                continue
+            meta = find_descendant(node, "cNvPr")
+            if meta is not None and meta.get("id") == source["id"] and meta.get("name") == name:
+                matches.append(node)
+    if len(matches) != 1 or shape_alternative_text(matches[0]) != before:
+        raise ValueError("Ellipse identity or alternative text changed")
+    parser = expat.ParserCreate(namespace_separator="|")
+    offsets = []
+    def on_start(tag, attrs):
+        if tag.rsplit("|", 1)[-1] == "cNvPr" and attrs.get("id") == source["id"] and attrs.get("name") == name:
+            offsets.append(parser.CurrentByteIndex)
+    parser.StartElementHandler = on_start
+    parser.Parse(data, True)
+    if len(offsets) != 1:
+        raise ValueError("Ambiguous DrawingML shape id")
+    start = offsets[0]
+    # Attribute values may contain > inside quotes.
+    match = re.match(rb"<(?:[^'\">]|'[^']*'|\"[^\"]*\")*>", data[start:])
+    if not match:
+        raise ValueError("Cannot safely locate DrawingML start tag")
+    tag = match.group()
+    for field, attr in (("description", b"descr"), ("title", b"title")):
+        if before.get(field, "") == after[field]:
+            continue
+        value = escape(after[field], {'"': '&quot;', "'": '&apos;'}).replace("\n", "_x000D_").encode("utf-8")
+        attr_pattern = re.compile(rb"(\s" + attr + rb"\s*=\s*)(['\"])(.*?)\2", re.DOTALL)
+        replacement = lambda m: m.group(1) + b'"' + value + b'"'
+        tag, count = attr_pattern.subn(replacement, tag)
+        if count == 0:
+            end = 2 if tag.endswith(b"/>") else 1
+            tag = tag[:-end] + b" " + attr + b'="' + value + b'"' + tag[-end:]
+        elif count != 1:
+            raise ValueError("Duplicate DrawingML attribute")
+    patched = data[:start] + tag + data[start + len(match.group()):]
+    # Verify exactly the requested change can be decoded before saving.
+    parsed = ET.fromstring(patched)
+    nodes = [node for node in parsed.iter() if local_name(node.tag) == "cNvPr"
+             and node.get("id") == source["id"] and node.get("name") == name]
+    if len(nodes) != 1:
+        raise ValueError("Patched ellipse identity is ambiguous")
+    decoded = {}
+    for field, attr in (("description", "descr"), ("title", "title")):
+        decoded[field] = re.sub(r"_x000[DaA]_", "\n", nodes[0].get(attr, ""), flags=re.IGNORECASE).strip()
+    if decoded != {key: value.strip() for key, value in after.items()}:
+        raise ValueError("Patched alternative text could not be verified")
+    return patched
+
+
+def write_ellipse_dates(path: Path, ellipse: dict, dates: list[str], signature: tuple) -> dict[str, str]:
+    """Atomic, targeted XLSX rewrite. Never overwrite a changed or locked file."""
+    before = ellipse["alt_text"]
+    after = reconcile_ellipse_dates(before, dates)
+    if before == after:
+        return before
+    check_workbook_writable(path)
+    if workbook_signature(path) != signature:
+        raise OSError("Workbook changed during synchronization")
+    source = ellipse.get("_drawing_source", {})
+    part = source.get("part", "")
+    if not source.get("id") or not part.startswith("xl/drawings/") or not part.endswith(".xml"):
+        raise ValueError("Missing trusted DrawingML identity")
+    fd, tmp_name = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        with ZipFile(path) as original, ZipFile(tmp, "w") as updated:
+            if any(n.startswith("_xmlsignatures/") for n in original.namelist()):
+                raise ValueError("Digitally signed workbook cannot be rewritten")
+            if len(original.namelist()) != len(set(original.namelist())):
+                raise ValueError("Duplicate XLSX package entries")
+            updated.comment = original.comment
+            for info in original.infolist():
+                data = original.read(info)
+                if info.filename == part:
+                    data = patch_ellipse_alt_xml(data, source, ellipse["name"], before, after)
+                updated.writestr(info, data)
+        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+        with tmp.open("rb") as handle:
+            os.fsync(handle.fileno())
+        check_workbook_writable(path)
+        if workbook_signature(path) != signature:
+            raise OSError("Workbook changed during synchronization")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return after
+
+
 def shape_text(node: ET.Element) -> str:
     """Read visible shape text, preserving separate DrawingML paragraphs."""
     tx_body = first_child(node, "txBody")
@@ -693,6 +836,7 @@ def drawing_objects(root: ET.Element, palette: dict[str, str],
                 obj["alt_text"] = shape_alternative_text(element)
                 if obj["shape_kind"] == "ellipse":
                     obj["time_descriptions"] = ellipse_time_descriptions(obj["alt_text"])
+                    obj["_drawing_source"] = {"part": drawing_part, "id": nv.get("id") if nv is not None else None}
                 if obj["shape_kind"] == "textbox":
                     obj["text_layout"] = textbox_text_layout(
                         element, palette, theme_fonts or {
