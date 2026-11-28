@@ -487,10 +487,28 @@ function positionAxisPanels(layer) {
   // centers of the selected date row and the first (X) axis row.
   // Prefer right; shrink optional explanation to fit before flipping.
   const rightSpace=W-margin-right,leftSpace=left-margin;
-  const wanted=description.hidden?0:150;
-  let side=rightSpace>=pw+(wanted?gap+wanted:0)?'right':
-    leftSpace>=pw+(wanted?gap+wanted:0)?'left':
-    rightSpace>=pw?'right':leftSpace>=pw?'left':'fallback';
+  // Find the smallest width that fits the text at the fixed menu height.
+  // Measure real browser line wrapping, including CJK and mixed Latin text.
+  let wanted=0;
+  if(!description.hidden) {
+    description.style.height=ph+'px';
+    const maxWidth=Math.max(1,W-2*margin-pw-gap);
+    let lo=Math.min(56,maxWidth),hi=maxWidth;
+    while(hi-lo>1) {
+      const mid=Math.floor((lo+hi)/2);
+      description.style.width=mid+'px';
+      if(description.scrollHeight<=description.clientHeight && description.scrollWidth<=description.clientWidth) hi=mid;
+      else lo=mid+1;
+    }
+    wanted=hi;
+  }
+  const required=pw+(wanted?gap+wanted:0);
+  let side=rightSpace>=required?'right':leftSpace>=required?'left':
+    Math.max(rightSpace,leftSpace)>=pw?(rightSpace>=leftSpace?'right':'left'):'fallback';
+  // If neither side can fit a long note, relocate the whole group below or
+  // above the primary menu when that makes the full stage width available.
+  if(wanted && Math.max(rightSpace,leftSpace)<required &&
+      (my+mh+gap+ph<=H-margin || my-gap-ph>=margin)) side='fallback';
   const available=side==='right'?rightSpace:side==='left'?leftSpace:W-2*margin;
   const dw=wanted?Math.max(0,Math.min(wanted,available-pw-gap)):0;
   description.style.width=dw+'px';
@@ -600,7 +618,7 @@ async function openContextMenu(layer,clientX,clientY,selectedObject) {
         button.dataset.timestamp=date;
         const arrow=document.createElement('span');
         arrow.className='cad-menu-arrow';
-        arrow.textContent='›';
+        arrow.textContent='>';
         button.append(caption,arrow);
         button.addEventListener('click',()=>{
           for(const btn of menu.querySelectorAll('button')) {

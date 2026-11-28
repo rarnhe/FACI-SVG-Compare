@@ -141,8 +141,17 @@ test('Chromium renders every CAD outline and scales octave points around their c
     await wheel('#subfab-stage canvas',{deltaY:-12000});
     assert.ok(Math.abs((await state()).userCadZoom-prior.userCadZoom)<1e-9);
     await cdp.send('Emulation.clearDeviceMetricsOverride');
-    await page.waitForFunction(()=>window.devicePixelRatio===1);
-    await page.waitForTimeout(100);
+    // Restore the original explicit viewport too: clearing CDP overrides
+    // can expose the browser window's default viewport instead of 1400x950.
+    await page.setViewportSize({width:1400,height:950});
+    await page.waitForFunction(async expected=>{
+      const {layers,userCadZoom}=await import('/viewer/cad_viewer.js');
+      return window.devicePixelRatio===1 && innerWidth===1400 && innerHeight===950 &&
+        Math.abs(userCadZoom-expected.userCadZoom)<1e-8 &&
+        layers.every((l,i)=>l.stage.clientWidth===expected.render[i].w &&
+          l.stage.clientHeight===expected.render[i].h &&
+          Math.abs(l.camera.zoom-expected.zoom[i])<1e-8);
+    },stable);
     assert.ok(Math.abs((await state()).zoom[0]-stable.zoom[0])<1e-8);
     const rendered=await page.evaluate(async()=>{
       const {layers}=await import('/viewer/cad_viewer.js');
@@ -528,12 +537,24 @@ test('Chromium preserves XLSX anchor aspect, rotated corners, text and square pr
     await dateButtons.nth(1).click();
     const secondAlignment=await aligned();
     assert.ok(secondAlignment.delta<=1 && secondAlignment.right,JSON.stringify(secondAlignment));
-    assert.equal(await stage.locator('.cad-axis-description').textContent(),'第二条说明');
+    assert.equal(await stage.locator('.cad-axis-description').textContent(),'第二条说明，设备运行期间持续观察振动变化并记录各方向测量数据，确认设备状态及现场测试条件');
+    const longPanel=await stage.locator('.cad-axis-description').evaluate(el=>({w:el.offsetWidth,h:el.offsetHeight,scroll:el.scrollHeight,client:el.clientHeight}));
     await dateButtons.first().click();
     const firstAlignment=await aligned();
     assert.ok(firstAlignment.delta<=1 && firstAlignment.right,JSON.stringify(firstAlignment));
     assert.ok(secondAlignment.top>firstAlignment.top,'submenu must follow the selected date row');
     assert.equal(await stage.locator('.cad-axis-description').textContent(),'第一条说明');
+    const shortPanel=await stage.locator('.cad-axis-description').evaluate(el=>({w:el.offsetWidth,h:el.offsetHeight}));
+    assert.ok(longPanel.w>shortPanel.w,JSON.stringify({longPanel,shortPanel}));
+    assert.equal(longPanel.h,shortPanel.h);
+    assert.equal(shortPanel.h,await stage.locator('.cad-submenu').evaluate(el=>el.offsetHeight));
+    assert.ok(longPanel.scroll<=longPanel.client,JSON.stringify(longPanel));
+    assert.equal(await stage.locator('.cad-submenu').evaluate(el=>el.offsetWidth),32);
+    const compact=await stage.locator('.cad-context-menu').evaluate(el=>({
+      gap:parseFloat(getComputedStyle(el.querySelector('button')).gap),
+      arrow:el.querySelector('.cad-menu-arrow').textContent
+    }));
+    assert.deepEqual(compact,{gap:3,arrow:'>'});
     const toggle=stage.locator('.cad-submenu').getByRole('menuitemcheckbox',{name:'X',exact:true});
     assert.equal(await toggle.getAttribute('aria-checked'),'false');
     await toggle.click();
