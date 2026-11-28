@@ -523,6 +523,7 @@ function showAxisSubmenu(layer,button,date,catalog) {
     const item=document.createElement('button');
     item.type='button';
     item.setAttribute('role','menuitemcheckbox');
+    item.setAttribute('aria-label',axis);
     item.textContent=axis;
     const pair=catalog.pairs?.[date]?.[axis];
     const key=svgSelectionKey(catalog,date,axis);
